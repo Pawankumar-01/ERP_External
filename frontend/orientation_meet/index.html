@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Orientation Session — SGP Integrative Medicine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- JOIN ─────────────────────────────────────────────────────────────────── -->
+  <div id="join-screen" class="screen active">
+    <div class="join-bg">
+      <div class="leaf leaf-1"></div>
+      <div class="leaf leaf-2"></div>
+      <div class="leaf leaf-3"></div>
+    </div>
+    <div class="join-card">
+      <div class="brand">
+        <div class="brand-emblem">✦</div>
+        <h1>Integrative Medicine</h1>
+        <p class="brand-sub">Orientation Session</p>
+      </div>
+      <div class="form-section">
+        <label>Your Full Name</label>
+        <input type="text" id="input-name" placeholder="e.g. Arjun Sharma" autocomplete="name" />
+      </div>
+      <div class="form-section">
+        <label>Patient ID</label>
+        <input type="text" id="input-lead-id" placeholder="e.g. SGP-LEAD-2026-0001" />
+      </div>
+      <div class="form-section">
+        <label>Session ID</label>
+        <input type="text" id="input-session-id" placeholder="Auto-filled from your link" />
+      </div>
+      <div id="join-error" class="error-msg hidden"></div>
+      <button id="btn-join" class="btn-primary" onclick="joinSession()">
+        <span class="btn-icon">▶</span> Enter Orientation
+      </button>
+      <p class="join-note">Please ensure your camera and microphone are enabled.</p>
+    </div>
+  </div>
+
+  <!-- MEETING ──────────────────────────────────────────────────────────────── -->
+  <div id="meeting-screen" class="screen">
+    <header class="meet-header">
+      <div class="meet-brand">
+        <span class="brand-dot">✦</span>
+        <span>SGP — Orientation</span>
+      </div>
+      <div class="meet-meta">
+        <div id="timer-display" class="timer">00:00</div>
+        <div id="participant-count" class="pill">1 participant</div>
+        <div id="session-status" class="pill pill-live">● LIVE</div>
+      </div>
+    </header>
+
+    <main class="meet-stage">
+      <!-- Host spotlight -->
+      <section class="spotlight-section">
+        <div id="host-tile" class="video-tile tile-host">
+          <div class="tile-placeholder">
+            <div class="avatar-ring"><span class="avatar-icon">🩺</span></div>
+            <p class="tile-label">Waiting for presenter…</p>
+          </div>
+          <video id="host-video" autoplay playsinline style="display:none"></video>
+          <div class="tile-overlay">
+            <span id="host-name-badge" class="name-badge">Presenter</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Sidebar: other participants + self -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <span>In session</span>
+          <span id="sidebar-count" class="small-pill">0</span>
+        </div>
+        <div id="participants-grid" class="participants-grid"></div>
+        <div class="self-view-wrapper">
+          <p class="self-label">You</p>
+          <div class="video-tile tile-self">
+            <video id="local-video" autoplay playsinline muted></video>
+            <div class="tile-overlay">
+              <span id="local-name-badge" class="name-badge">Me</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="controls-bar">
+      <button id="btn-mic" class="ctrl-btn ctrl-active" onclick="toggleMic()">
+        <span class="ctrl-icon" id="mic-icon">🎙</span>
+        <span class="ctrl-label">Mute</span>
+      </button>
+      <button id="btn-cam" class="ctrl-btn ctrl-active" onclick="toggleCam()">
+        <span class="ctrl-icon" id="cam-icon">📷</span>
+        <span class="ctrl-label">Camera</span>
+      </button>
+      <div class="ctrl-spacer"></div>
+      <button class="ctrl-btn ctrl-leave" onclick="leaveSession()">
+        <span class="ctrl-icon">✕</span>
+        <span class="ctrl-label">Leave</span>
+      </button>
+      <p class="ctrl-note">Session is controlled by the presenter</p>
+    </footer>
+  </div>
+
+  <!-- QUIZ ─────────────────────────────────────────────────────────────────── -->
+  <div id="quiz-screen" class="screen">
+    <div class="flow-card">
+      <div class="flow-header">
+        <div class="brand-emblem">✦</div>
+        <h2>Orientation Assessment</h2>
+        <p class="flow-sub">Thank you for attending. Please answer the questions below based on what you learned today.</p>
+      </div>
+      <div id="quiz-questions" class="quiz-body"></div>
+      <div id="quiz-error" class="error-msg hidden"></div>
+      <div class="flow-footer">
+        <button id="btn-submit-quiz" class="btn-primary" onclick="submitQuiz()">
+          Submit Answers
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESULTS ──────────────────────────────────────────────────────────────── -->
+  <div id="results-screen" class="screen">
+    <div class="flow-card">
+      <div class="flow-header">
+        <div class="brand-emblem complete-glow">✦</div>
+        <h2>Assessment Complete</h2>
+        <p id="results-summary" class="results-score"></p>
+      </div>
+      <div id="results-answers" class="results-body"></div>
+      <div class="complete-badge-wrap">
+        <div class="complete-badge"><span class="badge-check">✓</span> Appointment Eligible</div>
+        <p class="complete-sub">Our team will contact you shortly to schedule your doctor consultation.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPLETE (fallback if no quiz) ────────────────────────────────────────── -->
+  <div id="complete-screen" class="screen">
+    <div class="flow-card">
+      <div class="flow-header">
+        <div class="brand-emblem complete-glow">✦</div>
+        <h2>Orientation Complete</h2>
+        <p id="complete-message">Thank you for attending the orientation session.</p>
+      </div>
+      <div class="complete-badge-wrap">
+        <div class="complete-badge"><span class="badge-check">✓</span> Appointment Eligible</div>
+        <p class="complete-sub">Our team will contact you shortly to schedule your doctor consultation.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

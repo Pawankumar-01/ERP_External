@@ -1,0 +1,24 @@
+# Hospital Automation Engine — Python Dependencies
+# Pin versions for reproducible production builds
+
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+pydantic-settings==2.2.1
+email-validator==2.1.1
+
+# Database
+sqlalchemy==2.0.30
+asyncpg==0.29.0
+alembic==1.13.1
+
+# LiveKit
+livekit==0.11.1
+livekit-api==0.6.0
+
+# HTTP client (for ERP bridge)
+aiohttp==3.9.5
+
+# Utilities
+python-dotenv==1.0.1
+python-multipart==0.0.9
