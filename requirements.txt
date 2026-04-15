@@ -19,6 +19,16 @@ livekit-api==0.6.0
 # HTTP client (for ERP bridge)
 aiohttp==3.9.5
 
+# Security & Rate Limiting
+slowapi==0.1.9
+limits==2.8.1
+
+# Performance & Caching
+redis==5.0.1
+aioredis==2.0.1
+cachetools==5.3.2
+
 # Utilities
 python-dotenv==1.0.1
-python-multipart==0.0.9
+python-multipart==0.0.9faster-whisper
+httpx

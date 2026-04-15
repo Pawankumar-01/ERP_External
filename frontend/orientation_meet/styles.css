@@ -402,8 +402,21 @@ html, body {
 .ctrl-btn:active { transform: translateY(0); }
 .ctrl-active { border-color: rgba(74,154,94,0.4); }
 .ctrl-muted  { border-color: rgba(192,86,74,0.4); background: rgba(192,86,74,0.1); }
-.ctrl-icon { font-size: 20px; line-height: 1; }
-.ctrl-label { font-size: 10px; font-weight: 500; letter-spacing: 0.06em; color: var(--text-dim); }
+.ctrl-icon {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--surface2);
+  padding: 4px 7px;
+  border-radius: 4px;
+  min-width: 32px;
+  text-align: center;
+}
+.ctrl-label { font-size: 10px; font-weight: 400; letter-spacing: 0.04em; color: var(--text-muted); margin-top: 1px; }
+.ctrl-active .ctrl-icon { background: rgba(74,154,94,0.2); color: var(--green-light); }
+.ctrl-muted .ctrl-icon  { background: rgba(192,86,74,0.2); color: #e07a70; }
 .ctrl-leave {
   background: rgba(192,86,74,0.15);
   border-color: rgba(192,86,74,0.4);
@@ -411,6 +424,152 @@ html, body {
 }
 .ctrl-leave:hover { background: rgba(192,86,74,0.3); }
 .ctrl-leave .ctrl-label { color: #e07a70; }
+
+/* Accessibility Improvements */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Focus indicators */
+.ctrl-btn:focus,
+.btn-primary:focus,
+input:focus {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  :root {
+    --text: #000000;
+    --bg: #ffffff;
+    --surface: #f5f5f5;
+    --green: #006600;
+  }
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+  .host-stage {
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .host-self-section {
+    order: 2;
+    flex: 0 0 auto;
+  }
+  
+  .host-self-card {
+    height: 180px;
+    border-radius: var(--radius);
+  }
+  
+  .patients-section {
+    order: 1;
+    flex: 1;
+    min-height: 200px;
+  }
+  
+  .patients-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  
+  .host-controls {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px;
+  }
+  
+  .ctrl-btn {
+    min-width: 50px;
+    padding: 8px 4px;
+    font-size: 10px;
+  }
+  
+  .ctrl-label {
+    display: none;
+  }
+  
+  .ctrl-spacer {
+    display: none;
+  }
+  
+  .meet-header {
+    padding: 8px 12px;
+  }
+  
+  .meet-brand {
+    font-size: 14px;
+  }
+  
+  .timer, .pill {
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+}
+
+@media (max-width: 480px) {
+  .join-card {
+    margin: 16px;
+    padding: 24px;
+  }
+  
+  .brand h1 {
+    font-size: 24px;
+  }
+  
+  .form-section input {
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+  
+  .host-self-card {
+    height: 140px;
+  }
+  
+  .patients-section {
+    min-height: 150px;
+  }
+  
+  .controls-bar {
+    padding: 6px;
+  }
+  
+  .ctrl-btn {
+    min-width: 44px; /* Minimum touch target size */
+    height: 44px;
+  }
+}
+
+/* Touch-friendly controls */
+@media (pointer: coarse) {
+  .ctrl-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  .btn-primary {
+    min-height: 44px;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 /* ─── COMPLETE SCREEN ──────────────────────────────────────────────────────── */
 #complete-screen {

@@ -49,6 +49,15 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db)):
     return session
 
 
+@router.get("/sessions/{session_id}/participants")
+async def get_participants(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Get all participants for a session with their attendance status."""
+    session = await orientation_service.get_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.participants
+
+
 @router.post("/sessions/{session_id}/participants", response_model=ParticipantResponse, status_code=201)
 async def add_participant(
     session_id: str,
@@ -75,7 +84,7 @@ async def get_participant_token(
     """
     try:
         result = await orientation_service.generate_token(
-            db, session_id, req.lead_id, req.lead_name
+            db, session_id, req.lead_id, req.lead_name, mobile=req.mobile
         )
         return result
     except ValueError as e:

@@ -139,26 +139,78 @@ class OrientationService:
         return participant
 
     async def generate_token(
-        self, db: AsyncSession, session_id: str, lead_id: str, lead_name: str
+        self, db: AsyncSession, session_id: str, lead_id: str, lead_name: str,
+        mobile: str = None,
     ) -> dict:
-        """Generate a LiveKit JWT for a patient participant."""
+        """
+        Generate a LiveKit JWT for a patient participant.
+
+        Security checks (in order):
+          1. Session exists
+          2. lead_id exists in ERPNext as a real SGP Lead
+          3. If mobile provided → must match ERPNext mobile_number (identity proof)
+          4. Lead status must allow orientation (not already CONVERTED etc.)
+          5. Auto-register as participant if not already registered
+        """
+        from app.erp_bridge.service import erp_bridge_service
+
         session = await self.get_session(db, session_id)
         if not session:
-            raise ValueError(f"Session {session_id} not found")
+            raise ValueError("Session not found. Please check your link.")
 
-        identity = f"{lead_id}:{lead_name.replace(' ', '_')}"
+        # 1. Validate lead exists in ERPNext
+        erp_lead = await erp_bridge_service.get_lead(lead_id)
+        if not erp_lead:
+            raise ValueError(
+                "Patient ID not found. Please contact the clinic to verify your registration."
+            )
+
+        # 2. Verify mobile number if provided (primary identity proof)
+        if mobile:
+            erp_mobile = (erp_lead.get("mobile_number") or "").strip()
+            submitted_mobile = mobile.strip().replace(" ", "").replace("-", "")
+            erp_mobile_clean = erp_mobile.replace(" ", "").replace("-", "")
+            # Check last 10 digits to handle country code variations
+            if erp_mobile_clean[-10:] != submitted_mobile[-10:]:
+                raise ValueError(
+                    "Mobile number does not match our records. "
+                    "Please contact the clinic for assistance."
+                )
+
+        # 3. Check lead status allows orientation
+        lead_status = erp_lead.get("status", "")
+        blocked_statuses = ["CONVERTED", "DORMANT"]
+        if lead_status in blocked_statuses:
+            raise ValueError(
+                f"Your account status ({lead_status}) does not allow joining an orientation. "
+                "Please contact the clinic."
+            )
+
+        # 4. Use ERPNext lead_name as authoritative display name
+        verified_name = erp_lead.get("lead_name") or lead_name
+
+        # 5. Auto-register as participant if not already registered
+        existing = await self._get_participant(db, session.id, lead_id)
+        if not existing:
+            from app.orientation.models import AddParticipantRequest
+            req = AddParticipantRequest(lead_id=lead_id, lead_name=verified_name)
+            await self.add_participant(db, session_id, req)
+            await db.commit()
+
+        identity = f"{lead_id}:{verified_name.replace(' ', '_')}"
         token = livekit_client.generate_token(
             room_name=session.livekit_room_name,
             identity=identity,
-            display_name=lead_name,
+            display_name=verified_name,
             is_host=False,
         )
         return {
-            "token":      token,
+            "token":       token,
             "livekit_url": settings.LIVEKIT_URL,
-            "room_name":  session.livekit_room_name,
-            "identity":   identity,
-            "session_id": session_id,
+            "room_name":   session.livekit_room_name,
+            "identity":    identity,
+            "session_id":  session_id,
+            "lead_name":   verified_name,
         }
 
     async def generate_host_token(
@@ -194,8 +246,7 @@ class OrientationService:
             raise ValueError(f"Session {session_id} not found")
         if session.status != SessionStatus.SCHEDULED:
             raise ValueError(f"Session is already {session.status}")
-        if session.status == SessionStatus.ENDED:
-            return None 
+
         session.status     = SessionStatus.LIVE
         session.started_at = datetime.now(timezone.utc)
         await db.flush()
@@ -220,36 +271,60 @@ class OrientationService:
     async def end_session(
         self, db: AsyncSession, session_id: str
     ) -> OrientationSession:
+        """
+        End session, compute final attendance for all participants,
+        and trigger completion flow for anyone who crossed the threshold.
+        """
         session = await self.get_session(db, session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
+        if session.status != SessionStatus.LIVE:
+            raise ValueError(f"Session is not live (current: {session.status})")
 
         now = datetime.now(timezone.utc)
-
-        # Set started_at if not already set (first join time as fallback)
-        if not session.started_at:
-            # Use earliest join_time from participants as session start
-            join_times = [p.join_time for p in session.participants if p.join_time]
-            session.started_at = min(join_times) if join_times else now
-
         session.status   = SessionStatus.ENDED
         session.ended_at = now
-        session.duration_seconds = int((now - session.started_at).total_seconds())
 
+        if session.started_at:
+            session.duration_seconds = int(
+                (now - session.started_at).total_seconds()
+            )
         await db.flush()
+
         await self._finalize_attendance(db, session)
-        # ... rest stays the same
-    
+
+        # Mirror to ERP (non-blocking)
+        try:
+            from app.erp_bridge.service import erp_bridge_service
+            await erp_bridge_service.update_orientation_session_status(session_id, "ENDED")
+        except Exception as e:
+            logger.warning(f"ERP session end mirror failed (non-critical): {e}")
+
+        await event_logger.log(
+            entity_type="orientation_session",
+            entity_id=session_id,
+            event_type=EventType.ORIENTATION_SESSION_ENDED,
+            payload={
+                "ended_at":        now.isoformat(),
+                "duration_seconds": session.duration_seconds,
+            },
+            triggered_by="api",
+        )
+        logger.info(
+            f"Session {session_id} ended. Duration: {session.duration_seconds}s"
+        )
+        return session
+
     async def end_session_by_room(self, db: AsyncSession, room_name: str) -> None:
-        """Called by LiveKit room_finished webhook."""
+        """Called by LiveKit room_finished webhook to finalize attendance."""
         session = await self._get_session_by_room(db, room_name)
         if not session:
-            logger.warning(f"room_finished: no session for room {room_name}")
+            logger.warning(f"room_finished: no session found for room {room_name}")
             return
         try:
             await self.end_session(db, session.id)
         except Exception as e:
-            logger.error(f"end_session_by_room failed for {room_name}: {e}")
+            logger.warning(f"end_session_by_room: {e} (may already be ended)")
 
     # ── Attendance Processing (called by LiveKit webhooks) ────────────────────
 
@@ -392,12 +467,15 @@ class OrientationService:
 
         Flow:
           1. Create SGP Orientation Attendance in ERPNext.
-          2. Update SGP Lead status to ORIENTATION_COMPLETED in ERPNext.
-          3. Emit orientation_completed event.
+          2. Update SGP Lead status → ORIENTATION_ATTENDED in ERPNext.
+          3. Auto-promote Lead → Patient in ERPNext (get_or_create_patient).
+          4. Emit orientation_completed event.
 
         NOTE:
           - lead_service.mark_orientation_attended() does NOT take a db session.
             It talks to ERPNext directly via ERP Bridge.
+          - get_or_create_patient() is idempotent — calling it again from the
+            assessment submission or appointment scheduling is always safe.
           - All ERP calls are wrapped in try/except — a failing ERP call must
             never prevent local attendance data from being saved.
         """
@@ -411,21 +489,49 @@ class OrientationService:
                 session_id=session.id,
                 attendance_status="Present",
                 watch_time=participant.watch_seconds,
+                joined_at=participant.join_time,
+                left_at=participant.leave_time,
             )
         except Exception as e:
             logger.error(
                 f"ERP attendance creation failed for lead {participant.lead_id}: {e}"
             )
 
-        # 2. Update lead status in ERPNext
+        # 2. Update lead status + orientation fields in ERPNext
         try:
-            await lead_service.mark_orientation_attended(participant.lead_id)
+            # Pass session ERP name for orientation_session field linkage
+            await lead_service.mark_orientation_attended(
+                participant.lead_id,
+                session_erp_name=session.id,  # ERPNext uses room_name stored as session_id
+            )
         except Exception as e:
             logger.error(
                 f"ERPNext lead status update failed for {participant.lead_id}: {e}"
             )
 
-        # 3. Emit domain event
+        # 3. Auto-promote lead → Patient in ERPNext
+        #    Patient is created here so it appears in ERPNext immediately after
+        #    orientation, without waiting for the appointment manager to schedule.
+        #    get_or_create_patient() is idempotent — safe to re-call later.
+        try:
+            patient_id = await erp_bridge_service.get_or_create_patient(participant.lead_id)
+            if patient_id:
+                logger.info(
+                    f"✅ Patient '{patient_id}' created/verified in ERPNext "
+                    f"for lead {participant.lead_id}"
+                )
+            else:
+                logger.warning(
+                    f"Patient auto-creation returned None for lead {participant.lead_id} "
+                    "(ERP placeholder mode or lead not found — will retry at scheduling)"
+                )
+        except Exception as e:
+            logger.error(
+                f"Patient auto-creation failed for lead {participant.lead_id} "
+                f"(non-critical — appointment flow will retry): {e}"
+            )
+
+        # 4. Emit domain event
         await event_logger.log(
             entity_type="orientation_participant",
             entity_id=participant.id,

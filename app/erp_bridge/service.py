@@ -306,18 +306,37 @@ class ERPBridgeService:
         session_id: str,
         attendance_status: str,
         watch_time: int,
+        joined_at=None,
+        left_at=None,
     ) -> bool:
         """
         POST /api/resource/SGP Orientation Attendance
-        Creates the attendance record in ERPNext after 70% threshold is met.
+        Field mapping (FastAPI → ERPNext DocType):
+            lead_id      → lead        (Link: SGP Lead)
+            session_id   → orientation_session (Link: SGP Orientation Session)
+            watch_time   → total_watch_minutes (converted from seconds)
+            completed    → orientation_completed (Check)
+            eligible     → appointment_eligible (Check)
+        Note: orientation_session Link requires the ERPNext doc name (e.g. 40ue4r6gsa),
+        not the PostgreSQL UUID. Until ERP mirror stores the ERPNext name,
+        this field is omitted to avoid LinkValidationError.
         """
+        from app.config.settings import settings
+        watch_minutes = int(watch_time / 60)
+        # min_required_minutes: 70% of a standard 60-min session = 42 mins
+        # This is stored on the attendance record for audit purposes
+        min_required = int(settings.ORIENTATION_COMPLETION_THRESHOLD * 60)
         payload = {
-            "doctype":            DOCTYPE_ORIENTATION_ATTEND,
-            "lead_id":            lead_id,
-            "orientation_session": session_id,
-            "attendance_status":  attendance_status,
-            "watch_time_seconds": watch_time,
+            "lead":                  lead_id,
+            "orientation_completed": 1,
+            "appointment_eligible":  1,
+            "watch_minutes":         watch_minutes,
+            "min_required_minutes":  min_required,
         }
+        if joined_at:
+            payload["joined_at"] = joined_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(joined_at, "strftime") else str(joined_at)
+        if left_at:
+            payload["left_at"] = left_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(left_at, "strftime") else str(left_at)
         result = await self._request(
             "POST", f"/api/resource/{DOCTYPE_ORIENTATION_ATTEND}", data=payload
         )
@@ -334,14 +353,86 @@ class ERPBridgeService:
 
     # ── Patient operations ────────────────────────────────────────────────────
 
+    async def get_or_create_patient(self, lead_id: str) -> Optional[str]:
+        """
+        Idempotent: find the ERPNext Patient linked to this lead, or create one.
+        Returns the ERPNext Patient document name (e.g. 'PAT-0001'), or None on failure.
+
+        Field used for the lead → patient link: custom_sgp_lead
+        This must exist as a custom field on the ERPNext Patient DocType.
+
+        Safe to call from orientation completion AND appointment scheduling —
+        calling it twice will always return the same patient name.
+        """
+        # ① Search for existing Patient already linked to this lead
+        existing = await self._request(
+            "GET",
+            f"/api/resource/{DOCTYPE_PATIENT}",
+            params={
+                "filters": f'[["custom_sgp_lead","=","{lead_id}"]]',
+                "fields":  '["name","patient_name"]',
+                "limit":   "1",
+            },
+        )
+        if existing and isinstance(existing, list) and len(existing) > 0:
+            patient_name = existing[0].get("name")
+            logger.info(f"[ERP] Existing patient '{patient_name}' found for lead {lead_id}")
+            return patient_name
+
+        # ② Fetch lead data so we can populate the Patient record
+        lead = await self.get_lead(lead_id)
+        if not lead:
+            logger.error(f"[ERP] Cannot create Patient — lead {lead_id} not found")
+            return None
+
+        lead_name   = lead.get("lead_name") or lead.get("name", "")
+        mobile      = lead.get("mobile_number") or lead.get("mobile_no", "")
+        email       = lead.get("email_id") or ""
+
+        # Split full name into first_name + last_name
+        # ERPNext Patient DocType requires first_name (mandatory)
+        # patient_name is auto-calculated from first + last name in ERPNext
+        name_parts = lead_name.strip().split(" ", 1)
+        first_name = name_parts[0]
+        last_name  = name_parts[1] if len(name_parts) > 1 else ""
+
+        # ③ Create new Patient record
+        # sex is mandatory in ERPNext Patient DocType.
+        # We default to "Prefer not to say" since gender is not collected
+        # at lead registration time — staff can update it in ERPNext.
+        new_patient = await self._request(
+            "POST",
+            f"/api/resource/{DOCTYPE_PATIENT}",
+            data={
+                "first_name":      first_name,
+                "last_name":       last_name,
+                "sex":             "Prefer not to say",
+                "mobile":          mobile,
+                "email":           email,
+                "custom_sgp_lead": lead_id,    # link back to SGP Lead
+                "status":          "Active",
+            },
+        )
+
+        if not new_patient or new_patient.get("_placeholder"):
+            logger.warning(
+                f"[ERP] Patient creation returned placeholder/None for lead {lead_id} "
+                "(ERP may not be configured)"
+            )
+            return new_patient.get("name") if new_patient else None
+
+        patient_name = new_patient.get("name")
+        logger.info(f"[ERP] Patient '{patient_name}' created from lead {lead_id}")
+        return patient_name
+
     async def create_patient(self, lead_id: str, patient_data: Dict) -> Optional[Dict]:
         """
-        POST /api/resource/Patient
-        Converts a qualified lead into an ERPNext Patient record.
+        POST /api/resource/Patient — low-level create with arbitrary patient_data.
+        Prefer get_or_create_patient() for the standard lead → patient promotion flow.
         """
         payload = {
-            "doctype":  DOCTYPE_PATIENT,
-            "sgp_lead": lead_id,
+            "doctype":         DOCTYPE_PATIENT,
+            "custom_sgp_lead": lead_id,
             **patient_data,
         }
         return await self._request("POST", f"/api/resource/{DOCTYPE_PATIENT}", data=payload)

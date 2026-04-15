@@ -159,10 +159,30 @@ async def submit_assessment(
     # Mark lead as ORIENTATION_ATTENDED in ERPNext regardless of score
     try:
         from app.leads.service import lead_service
-        await lead_service.mark_orientation_attended(payload.lead_id)
+        await lead_service.mark_orientation_attended(
+            payload.lead_id,
+            session_erp_name=payload.session_id,
+        )
         logger.info(f"Lead {payload.lead_id} marked ORIENTATION_ATTENDED after assessment")
     except Exception as e:
         logger.error(f"Failed to mark lead {payload.lead_id} as attended: {e}")
+
+    # Auto-promote lead → Patient in ERPNext.
+    # get_or_create_patient() is idempotent — if orientation webhook already
+    # created the Patient (70% rule path), this will just return the existing one.
+    try:
+        from app.erp_bridge.service import erp_bridge_service
+        patient_id = await erp_bridge_service.get_or_create_patient(payload.lead_id)
+        if patient_id:
+            logger.info(
+                f"Patient '{patient_id}' created/verified in ERPNext "
+                f"for lead {payload.lead_id} after assessment"
+            )
+    except Exception as e:
+        logger.error(
+            f"Patient auto-creation failed for lead {payload.lead_id} "
+            f"after assessment (non-critical): {e}"
+        )
 
     await db.commit()
 

@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from app.config.database import Base                                            # noqa
 from app.orientation.models import OrientationSession, OrientationParticipant  # noqa
 from app.events.logger import EventLog                                          # noqa
+from app.casesheet.models import CasesheetSession, CasesheetDraft               # noqa
 
 # ── Alembic config ────────────────────────────────────────────────────────────
 config = context.config

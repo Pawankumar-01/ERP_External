@@ -109,8 +109,9 @@ class AddParticipantRequest(BaseModel):
 
 class TokenRequest(BaseModel):
     session_id: str
-    lead_id: str
-    lead_name: str
+    lead_id:    str
+    lead_name:  str
+    mobile:     Optional[str] = None  # Used for identity verification against ERPNext
 
 
 class ParticipantResponse(BaseModel):

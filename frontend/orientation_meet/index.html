@@ -32,12 +32,16 @@
         <input type="text" id="input-lead-id" placeholder="e.g. SGP-LEAD-2026-0001" />
       </div>
       <div class="form-section">
+        <label>Registered Mobile Number</label>
+        <input type="tel" id="input-mobile" placeholder="e.g. 9876543210" autocomplete="tel" />
+      </div>
+      <div class="form-section">
         <label>Session ID</label>
         <input type="text" id="input-session-id" placeholder="Auto-filled from your link" />
       </div>
       <div id="join-error" class="error-msg hidden"></div>
       <button id="btn-join" class="btn-primary" onclick="joinSession()">
-        <span class="btn-icon">▶</span> Enter Orientation
+        <span class="btn-icon"></span>Enter Orientation
       </button>
       <p class="join-note">Please ensure your camera and microphone are enabled.</p>
     </div>
@@ -53,7 +57,7 @@
       <div class="meet-meta">
         <div id="timer-display" class="timer">00:00</div>
         <div id="participant-count" class="pill">1 participant</div>
-        <div id="session-status" class="pill pill-live">● LIVE</div>
+        <div id="session-status" class="pill pill-live">LIVE</div>
       </div>
     </header>
 
@@ -62,8 +66,8 @@
       <section class="spotlight-section">
         <div id="host-tile" class="video-tile tile-host">
           <div class="tile-placeholder">
-            <div class="avatar-ring"><span class="avatar-icon">🩺</span></div>
-            <p class="tile-label">Waiting for presenter…</p>
+            <div class="avatar-ring"><span class="avatar-icon"></span></div>
+            <p class="tile-label">Waiting for presenter</p>
           </div>
           <video id="host-video" autoplay playsinline style="display:none"></video>
           <div class="tile-overlay">
@@ -102,7 +106,7 @@
       </button>
       <div class="ctrl-spacer"></div>
       <button class="ctrl-btn ctrl-leave" onclick="leaveSession()">
-        <span class="ctrl-icon">✕</span>
+        <span class="ctrl-icon"></span>
         <span class="ctrl-label">Leave</span>
       </button>
       <p class="ctrl-note">Session is controlled by the presenter</p>

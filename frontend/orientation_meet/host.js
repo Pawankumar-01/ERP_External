@@ -115,7 +115,12 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
     .on(RoomEvent.ParticipantConnected,    onPatientJoined)
     .on(RoomEvent.ParticipantDisconnected, onPatientLeft)
     .on(RoomEvent.TrackSubscribed,         onTrackSubscribed)
-    .on(RoomEvent.TrackUnsubscribed,       track => track.detach())
+    .on(RoomEvent.TrackUnsubscribed, (track, pub, p) => {
+      track.detach();
+      if (track.kind === LivekitClient.Track.Kind.Audio) {
+        document.getElementById(`audio-${p.sid}`)?.remove();
+      }
+    })
     .on(RoomEvent.Disconnected,            () => clearInterval(timerInterval));
 
   await room.connect(livekitUrl, token);
@@ -177,12 +182,20 @@ function onPatientLeft(participant) {
 function onTrackSubscribed(track, publication, participant) {
   const { Track } = LivekitClient;
   if (participant.identity.startsWith('host:')) return;
+
+  if (track.kind === Track.Kind.Audio) {
+    const audioEl = document.createElement('audio');
+    audioEl.autoplay = true;
+    audioEl.id = `audio-${participant.sid}`;
+    document.body.appendChild(audioEl);
+    track.attach(audioEl);
+    return;
+  }
+
   const tile = document.getElementById(`tile-${participant.sid}`);
-  if (!tile) return;
-  if (track.kind === Track.Kind.Video) {
+  if (tile && track.kind === Track.Kind.Video) {
     track.attach(tile.querySelector('video'));
   }
-  // Audio plays automatically through WebRTC
 }
 
 function updateCount() {
@@ -201,7 +214,7 @@ async function toggleMic() {
   await room.localParticipant.setMicrophoneEnabled(micEnabled);
   const btn = document.getElementById('btn-mic');
   btn.className = `ctrl-btn ${micEnabled ? 'ctrl-active' : 'ctrl-muted'}`;
-  document.getElementById('mic-icon').textContent  = micEnabled ? '🎙' : '🔇';
+  document.getElementById('mic-icon').textContent  = micEnabled ? 'MIC' : 'MUTED';
   btn.querySelector('.ctrl-label').textContent     = micEnabled ? 'Mute' : 'Unmute';
 }
 
@@ -211,7 +224,7 @@ async function toggleCam() {
   await room.localParticipant.setCameraEnabled(camEnabled);
   const btn = document.getElementById('btn-cam');
   btn.className = `ctrl-btn ${camEnabled ? 'ctrl-active' : 'ctrl-muted'}`;
-  document.getElementById('cam-icon').textContent = camEnabled ? '📷' : '🚫';
+  document.getElementById('cam-icon').textContent = camEnabled ? 'CAM' : 'OFF';
   btn.querySelector('.ctrl-label').textContent    = camEnabled ? 'Camera' : 'Camera off';
 }
 
@@ -226,14 +239,14 @@ async function toggleScreenShare() {
       });
       screenSharing = true;
       btn.className = 'ctrl-btn ctrl-active';
-      btn.querySelector('.ctrl-icon').textContent  = '🖥';
+      btn.querySelector('.ctrl-icon').textContent  = 'SCR';
       btn.querySelector('.ctrl-label').textContent = 'Stop Share';
       document.getElementById('screen-share-indicator')?.classList.remove('hidden');
     } else {
       await room.localParticipant.setScreenShareEnabled(false);
       screenSharing = false;
       btn.className = 'ctrl-btn';
-      btn.querySelector('.ctrl-icon').textContent  = '🖥';
+      btn.querySelector('.ctrl-icon').textContent  = 'SCR';
       btn.querySelector('.ctrl-label').textContent = 'Share Screen';
       document.getElementById('screen-share-indicator')?.classList.add('hidden');
     }

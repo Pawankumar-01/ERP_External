@@ -108,18 +108,42 @@ class LeadService:
         logger.info(f"Lead {lead_id} status: {old_status} → {update_data.status}")
         return lead
 
-    async def mark_orientation_attended(self, lead_id: str) -> LeadResponse:
+    async def mark_orientation_attended(
+        self, lead_id: str, session_erp_name: str = None
+    ) -> LeadResponse:
         """
-        Called automatically by the attendance tracker after 70% threshold is met.
-        Updates ERPNext SGP Lead status to ORIENTATION_ATTENDED.
+        Called after orientation completion (70% watch time + quiz submitted).
+        Updates ERPNext SGP Lead:
+          - status → ORIENTATION_ATTENDED
+          - orientation_completed → 1
+          - orientation_session → session ERP name (if provided)
         """
-        return await self.update_status(
-            lead_id,
-            LeadStatusUpdate(
-                status=LeadStatus.ORIENTATION_ATTENDED,
-                notes="Auto: orientation attendance threshold met",
-            ),
-        )
+        from app.erp_bridge.service import erp_bridge_service
+
+        # Build the update payload
+        # NOTE: orientation_session is a Link field — only set it if the session
+        # exists in ERPNext (i.e. ERP mirror succeeded). Sending an unknown UUID
+        # causes LinkValidationError. For now we update status + checkbox only.
+        update_data = {
+            "status":                "ORIENTATION_ATTENDED",
+            "orientation_completed": 1,
+        }
+        # Uncomment once ERP session mirror is confirmed working:
+        # if session_erp_name:
+        #     update_data["orientation_session"] = session_erp_name
+
+        try:
+            result = await erp_bridge_service._request(
+                "PUT",
+                f"/api/resource/SGP Lead/{lead_id}",
+                data=update_data,
+            )
+            if result:
+                return LeadResponse.from_erp(result)
+        except Exception as e:
+            raise RuntimeError(f"Failed to update lead {lead_id} in ERPNext: {e}")
+
+        raise RuntimeError(f"Failed to update lead {lead_id} status in ERPNext.")
 
 
 lead_service = LeadService()

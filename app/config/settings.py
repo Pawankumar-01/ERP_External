@@ -49,15 +49,32 @@ class Settings(BaseSettings):
     ERP_MAX_RETRIES: int = 3     # attempts before giving up
 
     # ─── CORS ─────────────────────────────────────────────────────────────────
+    # Production CORS origins - never use wildcard in production
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:8000",
-        "*",
+        "http://localhost:5500",  # For local development
+        "https://your-production-domain.com",  # Replace with actual domain
     ]
+    
+    # Additional security settings
+    CORS_ALLOW_CREDENTIALS: bool = True
+    CORS_ALLOW_METHODS: List[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    CORS_ALLOW_HEADERS: List[str] = ["*"]
+
+    # ─── Caching ───────────────────────────────────────────────────────────────────
+    # Redis configuration for caching
+    REDIS_URL: str = "redis://localhost:6379/0"
+    CACHE_TTL: int = 3600  # 1 hour default TTL
+    ENABLE_CACHE: bool = True
 
     # ─── Orientation Business Rules ───────────────────────────────────────────
     # Minimum fraction of session duration a participant must watch
     ORIENTATION_COMPLETION_THRESHOLD: float = 0.70   # 70 %
+
+    # ─── AI Casesheet ─────────────────────────────────────────────────────────────
+    OPENROUTER_API_KEY: str = ""
+    LLM_MODEL: str = "google/gemini-2.5-flash"
 
     class Config:
         env_file = ".env"

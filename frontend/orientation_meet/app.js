@@ -101,11 +101,12 @@ async function joinSession() {
   const name      = document.getElementById('input-name').value.trim();
   const leadId    = document.getElementById('input-lead-id').value.trim();
   const sessionId = document.getElementById('input-session-id').value.trim();
+  const mobile    = document.getElementById('input-mobile').value.trim();
   const errEl     = document.getElementById('join-error');
   const btn       = document.getElementById('btn-join');
 
-  if (!name || !leadId || !sessionId) {
-    errEl.textContent = 'Please fill in all fields.';
+  if (!name || !leadId || !sessionId || !mobile) {
+    errEl.textContent = 'Please fill in all fields including your mobile number.';
     errEl.classList.remove('hidden');
     return;
   }
@@ -117,7 +118,7 @@ async function joinSession() {
     const res = await fetch(`${API_BASE}/orientation/sessions/${sessionId}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, lead_id: leadId, lead_name: name }),
+      body: JSON.stringify({ session_id: sessionId, lead_id: leadId, lead_name: name, mobile }),
     });
     if (!res.ok) {
       const e = await res.json();
@@ -218,6 +219,18 @@ function onParticipantLeft(participant) {
 
 function onTrackSubscribed(track, publication, participant) {
   const { Track } = LivekitClient;
+
+  if (track.kind === Track.Kind.Audio) {
+    // Always attach audio to a dedicated <audio> element
+    // Do NOT attach to the video element — causes echo/sync issues
+    const audioEl = document.createElement('audio');
+    audioEl.autoplay = true;
+    audioEl.id = `audio-${participant.sid}`;
+    document.body.appendChild(audioEl);
+    track.attach(audioEl);
+    return;
+  }
+
   if (participant.identity.startsWith('host:')) {
     if (track.kind === Track.Kind.Video || track.kind === Track.Kind.Screen) {
       const vid = document.getElementById('host-video');
@@ -225,7 +238,6 @@ function onTrackSubscribed(track, publication, participant) {
       track.attach(vid);
       document.querySelector('#host-tile .tile-placeholder').style.display = 'none';
     }
-    // Host audio plays through the video element automatically
   } else {
     const tile = document.getElementById(`tile-${participant.sid}`);
     if (tile && track.kind === Track.Kind.Video) {
@@ -235,9 +247,14 @@ function onTrackSubscribed(track, publication, participant) {
 }
 
 function onTrackUnsubscribed(track, publication, participant) {
+  const { Track } = LivekitClient;
   track.detach();
+  // Clean up dedicated audio elements
+  if (track.kind === Track.Kind.Audio) {
+    document.getElementById(`audio-${participant.sid}`)?.remove();
+    return;
+  }
   if (participant?.identity?.startsWith('host:')) {
-    // Check if host still has any video track
     const hasVideo = [...participant.getTrackPublications().values()]
       .some(p => p.track?.kind === 'video' && !p.isMuted);
     if (!hasVideo) {
@@ -300,7 +317,7 @@ async function toggleMic() {
   await room.localParticipant.setMicrophoneEnabled(micEnabled);
   const btn = document.getElementById('btn-mic');
   btn.className = `ctrl-btn ${micEnabled ? 'ctrl-active' : 'ctrl-muted'}`;
-  document.getElementById('mic-icon').textContent  = micEnabled ? '🎙' : '🔇';
+  document.getElementById('mic-icon').textContent  = micEnabled ? 'MIC' : 'MUTED';
   btn.querySelector('.ctrl-label').textContent      = micEnabled ? 'Mute' : 'Unmute';
 }
 
@@ -310,7 +327,7 @@ async function toggleCam() {
   await room.localParticipant.setCameraEnabled(camEnabled);
   const btn = document.getElementById('btn-cam');
   btn.className = `ctrl-btn ${camEnabled ? 'ctrl-active' : 'ctrl-muted'}`;
-  document.getElementById('cam-icon').textContent = camEnabled ? '📷' : '🚫';
+  document.getElementById('cam-icon').textContent = camEnabled ? 'CAM' : 'OFF';
   btn.querySelector('.ctrl-label').textContent     = camEnabled ? 'Camera' : 'Camera off';
 }
 

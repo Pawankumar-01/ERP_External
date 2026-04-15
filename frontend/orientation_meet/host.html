@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="description" content="Host orientation session for medical practitioners" />
+  <meta name="theme-color" content="#2c5f2d" />
   <title>Host — Orientation Session — SGP</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
@@ -24,16 +26,16 @@
         <p class="brand-sub">Host / Presenter Login</p>
       </div>
       <div class="form-section">
-        <label>Your Name</label>
-        <input type="text" id="input-name" placeholder="e.g. Dr. Sharma" autocomplete="name" />
+        <label for="input-name">Your Name</label>
+        <input type="text" id="input-name" placeholder="e.g. Dr. Sharma" autocomplete="name" aria-required="true" required />
       </div>
       <div class="form-section">
-        <label>Session ID</label>
-        <input type="text" id="input-session-id" placeholder="Session UUID" />
+        <label for="input-session-id">Session ID</label>
+        <input type="text" id="input-session-id" placeholder="Session UUID" aria-required="true" required />
       </div>
       <div id="join-error" class="error-msg hidden"></div>
-      <button id="btn-join" class="btn-primary" onclick="joinHost()">
-        <span class="btn-icon">▶</span> Start Session
+      <button id="btn-join" class="btn-primary" onclick="joinHost()" aria-label="Start orientation session">
+        <span class="btn-icon"></span>Start Session
       </button>
       <p class="join-note">You will be visible to all participants as the presenter.</p>
     </div>
@@ -51,21 +53,21 @@
       <div class="meet-meta">
         <div id="timer-display" class="timer">00:00</div>
         <div id="patient-count" class="pill">0 patients</div>
-        <div class="pill pill-live">● LIVE</div>
+        <div class="pill pill-live">LIVE</div>
       </div>
     </header>
 
-    <!-- Main layout: self-view (left) + patients grid (right) -->
+    <!-- Main layout: responsive self-view + patients grid -->
     <main class="host-stage">
 
       <!-- Host self-view + screen share preview -->
       <section class="host-self-section">
         <div class="host-self-card">
-          <video id="host-self-video" autoplay playsinline muted class="host-self-video"></video>
+          <video id="host-self-video" autoplay playsinline muted class="host-self-video" aria-label="Your camera feed"></video>
           <div class="host-self-overlay">
             <span id="host-self-name" class="name-badge">🩺 You</span>
           </div>
-          <div id="screen-share-indicator" class="screen-share-badge hidden">
+          <div id="screen-share-indicator" class="screen-share-badge hidden" role="status" aria-live="polite">
             🖥 Sharing screen
           </div>
         </div>
@@ -84,9 +86,10 @@
       <!-- Patients grid -->
       <section class="patients-section">
         <div class="patients-header">
-          <span>Participants</span>
+          <h2>Participants</h2>
+          <span id="patient-count-aria" class="sr-only" aria-live="polite">0 patients joined</span>
         </div>
-        <div id="patients-grid" class="patients-grid">
+        <div id="patients-grid" class="patients-grid" role="region" aria-label="Patient video feeds">
           <div class="no-patients-msg" id="no-patients-msg">
             <p>Waiting for patients to join…</p>
           </div>
@@ -96,26 +99,26 @@
     </main>
 
     <!-- Controls -->
-    <footer class="controls-bar host-controls">
-      <button id="btn-mic" class="ctrl-btn ctrl-active" onclick="toggleMic()">
-        <span class="ctrl-icon" id="mic-icon">🎙</span>
+    <footer class="controls-bar host-controls" role="toolbar" aria-label="Meeting controls">
+      <button id="btn-mic" class="ctrl-btn ctrl-active" onclick="toggleMic()" aria-label="Toggle microphone" aria-pressed="true">
+        <span class="ctrl-icon" id="mic-icon" aria-hidden="true">🎙</span>
         <span class="ctrl-label">Mute</span>
       </button>
-      <button id="btn-cam" class="ctrl-btn ctrl-active" onclick="toggleCam()">
-        <span class="ctrl-icon" id="cam-icon">📷</span>
+      <button id="btn-cam" class="ctrl-btn ctrl-active" onclick="toggleCam()" aria-label="Toggle camera" aria-pressed="true">
+        <span class="ctrl-icon" id="cam-icon" aria-hidden="true">📷</span>
         <span class="ctrl-label">Camera</span>
       </button>
-      <button id="btn-screen" class="ctrl-btn" onclick="toggleScreenShare()">
-        <span class="ctrl-icon">🖥</span>
-        <span class="ctrl-label">Share Screen</span>
+      <button id="btn-screen" class="ctrl-btn" onclick="toggleScreenShare()" aria-label="Share screen" aria-pressed="false">
+        <span class="ctrl-icon" aria-hidden="true">🖥</span>
+        <span class="ctrl-label">Share</span>
       </button>
-      <button id="btn-mute-all" class="ctrl-btn" onclick="muteAllPatients()">
-        <span class="ctrl-icon">🔇</span>
+      <button id="btn-mute-all" class="ctrl-btn" onclick="muteAllPatients()" aria-label="Mute all participants">
+        <span class="ctrl-icon" aria-hidden="true">🔇</span>
         <span class="ctrl-label">Mute All</span>
       </button>
       <div class="ctrl-spacer"></div>
-      <button id="btn-end" class="ctrl-btn ctrl-end" onclick="endSessionForAll()">
-        <span class="ctrl-icon">⬛</span>
+      <button id="btn-end" class="ctrl-btn ctrl-end" onclick="endSessionForAll()" aria-label="End session for all participants">
+        <span class="ctrl-icon" aria-hidden="true">🚪</span>
         <span class="ctrl-label">End Session</span>
       </button>
     </footer>

@@ -54,7 +54,9 @@ class EventType(str, Enum):
     ERP_ATTENDANCE_CREATED = "erp_attendance_created"
 
     # Downstream clinical events
-    APPOINTMENT_CREATED = "appointment_created"
+    APPOINTMENT_CREATED        = "appointment_created"
+    APPOINTMENT_STATUS_UPDATED = "appointment_status_updated"
+    REORIENTATION_TRIGGERED    = "reorientation_triggered"
     ENCOUNTER_CREATED   = "encounter_created"       # ← new
 
 
