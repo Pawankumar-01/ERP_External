@@ -41,13 +41,15 @@ class OrientationService:
     # ── Session CRUD ──────────────────────────────────────────────────────────
 
     async def create_session(
-        self, db: AsyncSession, data: SessionCreate
+        self, db: AsyncSession, data: "SessionCreate"
     ) -> OrientationSession:
         """
         1. Generate session ID + LiveKit room name.
         2. Provision room on LiveKit Cloud.
         3. Persist session record to local PostgreSQL.
-        4. Mirror session to ERPNext (non-blocking — failure is logged, not raised).
+        4. Mirror session to ERPNext (non-blocking).
+        5. If lead_ids provided: auto-register all leads as participants and mark
+           each lead ORIENTATION_SCHEDULED in ERPNext (patient manager batch flow).
         """
         import uuid
         from app.erp_bridge.service import erp_bridge_service
@@ -57,13 +59,19 @@ class OrientationService:
 
         # Provision LiveKit room
         await livekit_client.create_room(room_name)
+        scheduled_at_dt = None
+        if data.scheduled_at:
+            if isinstance(data.scheduled_at, str):
+                scheduled_at_dt = datetime.fromisoformat(data.scheduled_at)
+            else:
+                scheduled_at_dt = data.scheduled_at
 
         # Persist locally (analytics/operational data)
         session = OrientationSession(
             id=session_id,
             title=data.title,
             livekit_room_name=room_name,
-            scheduled_at=data.scheduled_at,
+            scheduled_at=scheduled_at_dt,
         )
         db.add(session)
         await db.flush()
@@ -77,7 +85,7 @@ class OrientationService:
                 scheduled_at=(
                     session.scheduled_at.isoformat() if session.scheduled_at else None
                 ),
-                status="Scheduled",   # ERPNext options: Scheduled, On Going, Completed, Cancelled
+                status="Scheduled",
             )
         except Exception as e:
             logger.warning(f"ERP mirror for session {session_id} failed (non-critical): {e}")
@@ -90,6 +98,39 @@ class OrientationService:
             triggered_by="api",
         )
         logger.info(f"Orientation session created: {session.id} | room: {room_name}")
+
+        # ── Pre-register leads if provided (patient manager batch scheduling) ──
+        lead_ids = getattr(data, "lead_ids", []) or []
+        for lead_id in lead_ids:
+            try:
+                identity = f"{lead_id}:Patient"
+                participant = OrientationParticipant(
+                    session_id=session_id,
+                    lead_id=lead_id,
+                    livekit_identity=identity,
+                )
+                db.add(participant)
+                await db.flush()
+
+                # Mark lead as ORIENTATION_SCHEDULED in ERPNext
+                await erp_bridge_service.update_lead_orientation_scheduled(
+                    lead_id=lead_id,
+                    session_title=session.title,
+                )
+
+                await event_logger.log(
+                    entity_type="lead",
+                    entity_id=lead_id,
+                    event_type=EventType.ORIENTATION_SCHEDULED,
+                    payload={"session_id": session_id, "session_title": session.title},
+                    triggered_by="api",
+                )
+                logger.info(f"Lead {lead_id} pre-registered + marked ORIENTATION_SCHEDULED")
+            except Exception as e:
+                logger.error(
+                    f"Failed to pre-register lead {lead_id} in session {session_id}: {e}"
+                )
+
         return session
 
     async def get_session(
@@ -251,10 +292,12 @@ class OrientationService:
         session.started_at = datetime.now(timezone.utc)
         await db.flush()
 
-        # Mirror status update to ERP (non-blocking)
+        # Mirror status update to ERP — use ERPNext-valid status value
         try:
             from app.erp_bridge.service import erp_bridge_service
-            await erp_bridge_service.update_orientation_session_status(session_id, "LIVE")
+            await erp_bridge_service.update_orientation_session_status(
+                session_id, "On Going"
+            )
         except Exception as e:
             logger.warning(f"ERP session status update failed (non-critical): {e}")
 
@@ -293,10 +336,12 @@ class OrientationService:
 
         await self._finalize_attendance(db, session)
 
-        # Mirror to ERP (non-blocking)
+        # Mirror to ERP (non-blocking) — use ERPNext-valid status value
         try:
             from app.erp_bridge.service import erp_bridge_service
-            await erp_bridge_service.update_orientation_session_status(session_id, "ENDED")
+            await erp_bridge_service.update_orientation_session_status(
+                session_id, "Completed"
+            )
         except Exception as e:
             logger.warning(f"ERP session end mirror failed (non-critical): {e}")
 
@@ -510,15 +555,23 @@ class OrientationService:
             )
 
         # 3. Auto-promote lead → Patient in ERPNext
-        #    Patient is created here so it appears in ERPNext immediately after
-        #    orientation, without waiting for the appointment manager to schedule.
-        #    get_or_create_patient() is idempotent — safe to re-call later.
         try:
             patient_id = await erp_bridge_service.get_or_create_patient(participant.lead_id)
             if patient_id:
                 logger.info(
                     f"✅ Patient '{patient_id}' created/verified in ERPNext "
                     f"for lead {participant.lead_id}"
+                )
+                await event_logger.log(
+                    entity_type="patient",
+                    entity_id=patient_id,
+                    event_type=EventType.PATIENT_CREATED,
+                    payload={
+                        "lead_id":    participant.lead_id,
+                        "session_id": session.id,
+                        "source":     "orientation_completion",
+                    },
+                    triggered_by="system",
                 )
             else:
                 logger.warning(

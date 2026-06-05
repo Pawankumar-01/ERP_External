@@ -18,6 +18,8 @@ from app.events.router import router as events_router
 from app.assessment.router import router as assessment_router
 from app.appointment.router import router as appointment_router
 from app.events.logger import event_logger
+from app.whatsapp.router import router as whatsapp_router
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +68,7 @@ app.include_router(events_router,      prefix="/api/v1/events",       tags=["Eve
 app.include_router(assessment_router,  prefix="/api/v1/assessment",   tags=["Assessment"])
 app.include_router(appointment_router, prefix="/api/v1/appointments", tags=["Appointments"])
 app.include_router(casesheet_router,   prefix="/api/v1/casesheet",    tags=["Case Sheet V2"])
+app.include_router(whatsapp_router, prefix="/api/v1/whatsapp", tags=["WhatsApp"])
 
 # ─── Static files (frontend) ─────────────────────────────────────────────────
 app.mount("/meet", StaticFiles(directory="frontend/orientation_meet", html=True), name="meet")

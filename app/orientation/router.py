@@ -3,7 +3,7 @@ Orientation Router — HTTP Endpoints
 Session creation, participant management, token generation, lifecycle control.
 """
 
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,20 @@ from app.orientation.models import (
     TokenRequest,
     TokenResponse,
 )
+from app.orientation.models import SessionCreate as _SessionCreateBase
 from app.orientation.service import orientation_service
+from pydantic import BaseModel
+
+
+class SessionCreate(BaseModel):
+    """Extended SessionCreate: accepts lead_ids for batch pre-registration."""
+    title: str
+    scheduled_at: Optional[str] = None
+    lead_ids: Optional[List[str]] = []
+
+    def to_base(self):
+        """Convert to base model for service compatibility."""
+        return self
 
 router = APIRouter()
 

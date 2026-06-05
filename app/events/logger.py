@@ -32,6 +32,7 @@ class EventType(str, Enum):
     # Lead lifecycle
     LEAD_CREATED              = "lead_created"
     LEAD_STATUS_UPDATED       = "lead_status_updated"
+    ORIENTATION_SCHEDULED     = "orientation_scheduled"   # lead added to batch session
 
     # Orientation session lifecycle
     ORIENTATION_SESSION_CREATED = "orientation_session_created"
@@ -49,15 +50,24 @@ class EventType(str, Enum):
     ROOM_FINISHED = "room_finished"
 
     # ERP Bridge calls
-    ERP_CALL_SUCCESS     = "erp_call_success"       # ← new
-    ERP_CALL_FAILED      = "erp_call_failed"
+    ERP_CALL_SUCCESS       = "erp_call_success"
+    ERP_CALL_FAILED        = "erp_call_failed"
     ERP_ATTENDANCE_CREATED = "erp_attendance_created"
+
+    # Patient lifecycle
+    PATIENT_CREATED = "patient_created"   # lead auto-promoted to patient
+
+    # Payment & finance
+    PAYMENT_VERIFIED = "payment_verified"  # payment confirmed before casesheet
+
+    # Clinical encounter
+    CASESHEET_STARTED  = "casesheet_started"  # doctor opens casesheet session
+    ENCOUNTER_CREATED  = "encounter_created"  # finalized and pushed to ERPNext
 
     # Downstream clinical events
     APPOINTMENT_CREATED        = "appointment_created"
     APPOINTMENT_STATUS_UPDATED = "appointment_status_updated"
     REORIENTATION_TRIGGERED    = "reorientation_triggered"
-    ENCOUNTER_CREATED   = "encounter_created"       # ← new
 
 
 # ─── ORM Model ────────────────────────────────────────────────────────────────

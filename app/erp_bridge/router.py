@@ -28,6 +28,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from app.config.settings import settings
 from app.erp_bridge.service import erp_bridge_service
 from app.events.logger import EventType, event_logger
 
@@ -228,7 +229,6 @@ async def sync_attendance(req: AttendanceSyncRequest):
         session_id=req.session_id,
         attendance_status=req.attendance_status,
         watch_time=req.watch_time_seconds,
-        completion_pct=req.completion_pct,
     )
     if not success:
         raise HTTPException(status_code=502, detail="ERP sync failed — check server logs")
@@ -339,7 +339,3 @@ async def bridge_status():
             else "not configured"
         ),
     }
-
-
-# Import settings here to avoid circular imports at module level
-from app.config.settings import settings

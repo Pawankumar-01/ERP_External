@@ -19,15 +19,20 @@ from typing import Any, Dict, Optional
 import httpx
 
 from app.casesheet.prompts import SECTION_PROMPTS, BASE_RULES, GLOBAL_MEDICAL_INSTRUCTION
+from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_KEY  = os.getenv("OPENROUTER_API_KEY", "")
 
-# Free model that works well for clinical JSON extraction
-DEFAULT_MODEL   = os.getenv("LLM_MODEL", "mistralai/mistral-7b-instruct:free")
+# Primary model from settings/env, with safe fallbacks for OpenRouter 404s.
+PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemini-2.5-flash")
+MODEL_CANDIDATES = [
+    PRIMARY_MODEL,
+    "mistralai/mistral-7b-instruct:free",
+    "openai/gpt-4o-mini",
+]
 
 # Timeout for LLM calls — clinical extraction can be slow on free tier
 LLM_TIMEOUT     = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
@@ -92,32 +97,40 @@ class LLMService:
 
     async def _call_llm(self, messages: list) -> str:
         """Make the HTTP call to OpenRouter and return raw content string."""
-        if not OPENROUTER_KEY:
+        # Read key at call time from central settings first, then env fallback.
+        openrouter_key = settings.OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY", "")
+        if not openrouter_key:
             raise RuntimeError(
                 "OPENROUTER_API_KEY not set in .env — "
                 "LLM extraction unavailable"
             )
 
         headers = {
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "Authorization": f"Bearer {openrouter_key}",
             "Content-Type":  "application/json",
             "HTTP-Referer":  "https://sgp.clinic",
             "X-Title":       "SGP Clinical AI",
         }
 
-        payload = {
-            "model":       DEFAULT_MODEL,
-            "messages":    messages,
-            "temperature": 0.1,     # low temp for consistent structured output
-            "max_tokens":  1500,
-        }
-
         async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-            resp = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-
-        return data["choices"][0]["message"]["content"]
+            for model in MODEL_CANDIDATES:
+                payload = {
+                    "model":       model,
+                    "messages":    messages,
+                    "temperature": 0.1,     # low temp for consistent structured output
+                    "max_tokens":  1500,
+                }
+                resp = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+                if resp.status_code == 404:
+                    logger.warning(f"OpenRouter model not found: {model} (trying fallback)")
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+            raise RuntimeError(
+                "All configured OpenRouter models returned 404. "
+                "Set LLM_MODEL to a valid slug for your OpenRouter account."
+            )
 
     def _parse_json(self, raw: str) -> Optional[Any]:
         """

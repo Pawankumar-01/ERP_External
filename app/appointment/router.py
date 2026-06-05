@@ -4,15 +4,16 @@ Appointment Module
 Handles the full lead → patient → appointment flow.
 
 Flow:
-  1. Validate lead exists and status = ORIENTATION_ATTENDED
+  1. Validate lead exists and status = ORIENTATION_ATTENDED (70% orientation required)
   2. Convert lead to Patient in ERPNext (if not already converted)
   3. Create Patient Appointment in ERPNext
   4. Update SGP Lead: status=APPOINTMENT_SCHEDULED, appointment=<name>
   5. Emit event log
   6. Return appointment details
 
-Gating rule (from blueprint):
-  Appointments are LOCKED until orientation + assessment are complete.
+Gating rule (confirmed):
+  Appointments are LOCKED until orientation completion (70% watch time).
+  Assessment is optional — NOT required for appointment scheduling.
   FastAPI enforces this independently of ERPNext validation.
 """
 
@@ -85,15 +86,9 @@ async def schedule_appointment(
             status_code=403,
             detail=(
                 f"Lead {req.lead_id} is not eligible for appointment scheduling. "
-                f"Current status: {lead_status}. Required: ORIENTATION_ATTENDED"
+                f"Current status: {lead_status}. "
+                "Patient must complete the orientation session (70% watch time) before scheduling."
             ),
-        )
-
-    orientation_done = lead.get("orientation_completed", 0)
-    if not orientation_done:
-        raise HTTPException(
-            status_code=403,
-            detail="Orientation must be completed before scheduling an appointment.",
         )
 
     lead_name    = lead.get("lead_name", "")
@@ -112,6 +107,7 @@ async def schedule_appointment(
         "department":       req.department,
         "duration":         req.duration,
         "notes":            req.notes,
+        "billing_item": "Consultation Fee",
         "status":           "Open",
         # Link back to SGP Lead via reference fields
         "reference_doctype": "SGP Lead",
@@ -171,6 +167,29 @@ async def get_lead_appointments(lead_id: str):
         params={
             "filters": f'[["reference_docname","=","{lead_id}"]]',
             "fields":  '["name","patient","practitioner","appointment_date","appointment_time","status","notes"]',
+        },
+    )
+    return result or []
+
+
+@router.get("/by-patient/{patient_id}")
+async def get_appointments_by_patient(patient_id: str):
+    """
+    List all appointments for a Patient in ERPNext.
+    Used by Flutter to show appointment history and pre-fill casesheet sessions.
+    Returns appointments ordered by date descending.
+    """
+    result = await erp_bridge_service._request(
+        "GET",
+        "/api/resource/Patient Appointment",
+        params={
+            "filters": f'[["patient","=","{patient_id}"]]',
+            "fields":  (
+                '["name","patient","patient_name","practitioner",'
+                '"appointment_date","appointment_time","status","notes"]'
+            ),
+            "order_by": "appointment_date desc",
+            "limit":    "50",
         },
     )
     return result or []

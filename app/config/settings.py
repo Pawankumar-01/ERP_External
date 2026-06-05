@@ -10,11 +10,12 @@ Integration variables added in this version:
   - ERP_MAX_RETRIES      : max retry attempts on transient failures
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     # ─── App ─────────────────────────────────────────────────────────────────
     APP_ENV:    str = "development"
@@ -48,6 +49,11 @@ class Settings(BaseSettings):
     ERP_TIMEOUT:     int = 15    # seconds per request
     ERP_MAX_RETRIES: int = 3     # attempts before giving up
 
+    #Whatsapp
+    WHATSAPP_TOKEN: str
+    WHATSAPP_PHONE_ID: int
+    FRONTEND_BASE_URL: str = "http://localhost:8001"
+
     # ─── CORS ─────────────────────────────────────────────────────────────────
     # Production CORS origins - never use wildcard in production
     CORS_ORIGINS: List[str] = [
@@ -76,9 +82,6 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     LLM_MODEL: str = "google/gemini-2.5-flash"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
 
 
 settings = Settings()

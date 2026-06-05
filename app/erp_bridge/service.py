@@ -291,12 +291,35 @@ class ERPBridgeService:
     async def update_orientation_session_status(
         self, session_id: str, status: str
     ) -> Optional[Dict]:
-        """PUT /api/resource/SGP Orientation Session/{session_id}"""
+        """
+        PUT /api/resource/SGP Orientation Session/{session_id}
+        Valid ERPNext status values: Scheduled, On Going, Completed, Cancelled
+        """
         return await self._request(
             "PUT",
             f"/api/resource/{DOCTYPE_ORIENTATION_SESSION}/{session_id}",
             data={"status": status},
         )
+
+    async def update_lead_orientation_scheduled(
+        self, lead_id: str, session_title: str
+    ) -> Optional[Dict]:
+        """
+        Mark an SGP Lead as scheduled for orientation.
+        Called when patient manager registers leads into a batch session.
+        Sets status → ORIENTATION_SCHEDULED so it appears in the orientation funnel.
+        """
+        result = await self._request(
+            "PUT",
+            f"/api/resource/{DOCTYPE_LEAD}/{lead_id}",
+            data={"status": "ORIENTATION_SCHEDULED"},
+        )
+        if result:
+            logger.info(
+                f"[ERP] Lead {lead_id} marked ORIENTATION_SCHEDULED "
+                f"for session '{session_title}'"
+            )
+        return result
 
     # ── Orientation Attendance operations ─────────────────────────────────────
 
@@ -423,6 +446,19 @@ class ERPBridgeService:
 
         patient_name = new_patient.get("name")
         logger.info(f"[ERP] Patient '{patient_name}' created from lead {lead_id}")
+        if patient_name and mobile:
+            try:
+                patient_doc = await self._request("GET", f"/api/resource/{DOCTYPE_PATIENT}/{patient_name}")
+                if patient_doc and patient_doc.get("customer"):
+                    await self._request(
+                        "PUT",
+                        f"/api/resource/Customer/{patient_doc['customer']}",
+                        data={"mobile_no": mobile},
+                    )
+                    logger.info(f"[ERP] Customer mobile updated for patient '{patient_name}'")
+            except Exception as e:
+                logger.warning(f"[ERP] Could not sync mobile to customer: {e}")
+
         return patient_name
 
     async def create_patient(self, lead_id: str, patient_data: Dict) -> Optional[Dict]:
@@ -489,6 +525,105 @@ class ERPBridgeService:
             "GET", f"/api/resource/{DOCTYPE_APPOINTMENT}/{appointment_id}"
         )
 
+    async def close_appointment(self, appointment_id: str) -> Optional[Dict]:
+        """
+        Mark a Patient Appointment as Closed after the encounter is finalized.
+        Called automatically from casesheet finalize flow.
+        """
+        result = await self._request(
+            "PUT",
+            f"/api/resource/{DOCTYPE_APPOINTMENT}/{appointment_id}",
+            data={"status": "Closed"},
+        )
+        if result:
+            logger.info(f"[ERP] Appointment {appointment_id} closed after encounter finalize")
+        return result
+
+    async def get_payment_for_appointment(
+        self, appointment_id: str
+    ) -> Optional[Dict]:
+        """
+        Look up a posted Payment Entry linked to this appointment.
+        ERPNext Payment Entry stores reference in 'reference_name'.
+        Returns the payment entry dict if found, None if not yet paid.
+        """
+        result = await self._request(
+            "GET",
+            "/api/resource/Payment Entry",
+            params={
+                "filters": (
+                    f'[["Payment Entry Reference","reference_name","=","{appointment_id}"]'
+                    f',["Payment Entry","docstatus","=","1"]]'
+                ),
+                "fields": '["name","paid_amount","mode_of_payment","posting_date","party"]',
+                "limit": "1",
+            },
+        )
+        if result and isinstance(result, list) and len(result) > 0:
+            return result[0]
+        return None
+
+    async def get_payment_for_patient(
+        self, patient_id: str
+    ) -> Optional[Dict]:
+        """Look up most recent posted Payment Entry for a patient (walk-in flow)."""
+        result = await self._request(
+            "GET",
+            "/api/resource/Payment Entry",
+            params={
+                "filters": (
+                    f'[["Payment Entry","party","=","{patient_id}"]'
+                    f',["Payment Entry","docstatus","=","1"]]'
+                ),
+                "fields": '["name","paid_amount","mode_of_payment","posting_date","party"]',
+                "order_by": "posting_date desc",
+                "limit": "1",
+            },
+        )
+        if result and isinstance(result, list) and len(result) > 0:
+            return result[0]
+        return None
+
+
+    async def get_patient_by_mobile(self, mobile: str) -> Optional[Dict]:
+        """Find patient by mobile number."""
+        clean = mobile.strip().replace("+91", "").replace(" ", "").replace("-", "")
+        if len(clean) == 10:
+            search_nums = [clean, "91" + clean, "+91" + clean]
+        else:
+            search_nums = [clean]
+
+        for num in search_nums:
+            result = await self._request(
+                "GET",
+                "/api/resource/Patient",
+                params={
+                    "filters": f'[["Patient","mobile","=","{num}"]]',
+                    "fields": '["name","patient_name","mobile","customer","custom_sgp_lead"]',
+                    "limit": "1",
+                },
+            )
+            if result and isinstance(result, list) and len(result) > 0:
+                return result[0]
+        return None
+
+    async def update_encounter_payment(
+        self, encounter_id: str, payment_entry_id: str, paid_amount: float
+    ) -> Optional[Dict]:
+        """
+        Link a verified payment entry to an SGP Encounter.
+        Stores payment reference and amount on the encounter record.
+        Requires custom fields on SGP Encounter: custom_payment_entry, custom_paid_amount.
+        """
+        return await self._request(
+            "PUT",
+            f"/api/resource/{DOCTYPE_ENCOUNTER}/{encounter_id}",
+            data={
+                "custom_payment_entry": payment_entry_id,
+                "custom_paid_amount": paid_amount,
+            },
+        )
+
     # ── Webhook verification (inbound: ERPNext → FastAPI) ─────────────────────
 
     def verify_erp_webhook(self, body: bytes, signature_header: str) -> bool:
@@ -518,3 +653,6 @@ class ERPBridgeService:
 
 
 erp_bridge_service = ERPBridgeService()
+
+    
+    
