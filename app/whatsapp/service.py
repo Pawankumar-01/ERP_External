@@ -1,9 +1,7 @@
 """
 WhatsApp Service — Meta Cloud API
-Uses approved template: orientation_invite
+Uses approved template: sgp_orientation_invite
 """
-
-import base64
 import logging
 import httpx
 from typing import Optional
@@ -12,9 +10,7 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 GRAPH_API_URL = "https://graph.facebook.com/v19.0"
 
-
 class WhatsAppService:
-
     async def send_orientation_invite(
         self,
         phone: str,
@@ -31,33 +27,25 @@ class WhatsAppService:
 
         date_time = scheduled_at or "To be confirmed"
 
-        # Encode both IDs into a single URL-safe token
-        token = base64.urlsafe_b64encode(
-            f"{session_id}:{patient_id}".encode()
-        ).decode().rstrip("=")
+        # Join URL — frontend orientation page
+        join_url = f"{settings.FRONTEND_BASE_URL}/meet/index.html?session={session_id}"
 
         payload = {
             "messaging_product": "whatsapp",
             "to": clean_phone,
             "type": "template",
             "template": {
-                "name": "orientation_invite",
+                "name": "orientation_details",
                 "language": {"code": "en"},
                 "components": [
                     {
                         "type": "body",
                         "parameters": [
-                            {"type": "text", "text": lead_name},      # {{1}}
-                            {"type": "text", "text": session_title},  # {{2}}
-                            {"type": "text", "text": date_time},      # {{3}}
-                        ],
-                    },
-                    {
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": "0",
-                        "parameters": [
-                            {"type": "text", "text": token}           # {{1}} in URL
+                            {"type": "text", "text": lead_name},    # {{1}} name
+                            {"type": "text", "text": patient_id},   # {{2}} patient id
+                            {"type": "text", "text": session_id},   # {{3}} session id
+                            {"type": "text", "text": date_time},    # {{4}} date time
+                            {"type": "text", "text": join_url},     # {{5}} join link
                         ],
                     },
                 ],
@@ -68,21 +56,19 @@ class WhatsAppService:
             "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
             "Content-Type": "application/json",
         }
-
         url = f"{GRAPH_API_URL}/{settings.WHATSAPP_PHONE_ID}/messages"
 
         async with httpx.AsyncClient(timeout=10) as client:
             try:
                 res = await client.post(url, json=payload, headers=headers)
                 if res.status_code == 200:
-                    logger.info(f"WhatsApp template sent to {clean_phone}")
+                    logger.info(f"WhatsApp sent to {clean_phone}")
                     return True
                 else:
                     logger.error(f"WhatsApp failed for {clean_phone}: {res.text}")
                     return False
             except Exception as e:
-                logger.error(f"WhatsApp request error for {clean_phone}: {e}")
+                logger.error(f"WhatsApp error for {clean_phone}: {e}")
                 return False
-
 
 whatsapp_service = WhatsAppService()
