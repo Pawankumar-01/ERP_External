@@ -433,10 +433,159 @@ def _today() -> str:
     return date.today().isoformat()
 
 
-def _join(lst, sep=", ") -> str:
-    if not lst:
+
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def _as_list(value: Any) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [value]
+
+
+def _clean(value: Any) -> str:
+    if value is None:
         return ""
-    return sep.join(str(x) for x in lst if x)
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        parts = []
+        for key, val in value.items():
+            if val in (None, "", [], {}):
+                continue
+            parts.append(f"{key}: {_clean(val)}")
+        return "; ".join(parts)
+    if isinstance(value, list):
+        return ", ".join(_clean(item) for item in value if _clean(item))
+    return str(value)
+
+
+def _join(value: Any, sep: str = ", ") -> str:
+    return sep.join(_clean(item) for item in _as_list(value) if _clean(item))
+
+
+def _join_lines(value: Any) -> str:
+    return _join(value, sep="\n")
+
+
+def _num_or_none(value: Any):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value).replace(",", "").strip())
+    except Exception:
+        return None
+
+
+def _format_pulse(pulse: Any) -> str:
+    lines = []
+    for p in _as_list(pulse):
+        if not isinstance(p, dict):
+            continue
+        parts = []
+        if p.get("system"):
+            parts.append(_clean(p.get("system")))
+        if p.get("vata"):
+            parts.append(f"V={p.get('vata')}")
+        if p.get("pitta"):
+            parts.append(f"P={p.get('pitta')}")
+        if p.get("kapha"):
+            parts.append(f"K={p.get('kapha')}")
+        if parts:
+            lines.append(" ".join(parts))
+    return " | ".join(lines)
+
+
+def _format_medicines_from_current(items: Any, system_filter: Optional[str] = None) -> str:
+    lines = []
+    for m in _as_list(items):
+        if not isinstance(m, dict):
+            if m:
+                lines.append(_clean(m))
+            continue
+        if system_filter:
+            system = _clean(m.get("system")).lower()
+            if system_filter.lower() not in system:
+                continue
+        name = _clean(m.get("name"))
+        if not name:
+            continue
+        parts = [name]
+        for key in ["dose", "frequency", "route", "duration", "timing", "remarks"]:
+            if m.get(key):
+                parts.append(_clean(m.get(key)))
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
+
+
+def _format_sgp_rx(items: Any) -> str:
+    lines = []
+    for m in _as_list(items):
+        if not isinstance(m, dict):
+            if m:
+                lines.append(_clean(m))
+            continue
+        name = _clean(m.get("name"))
+        if not name:
+            continue
+        doses = []
+        if m.get("dose_morning"):
+            doses.append(f"M:{m.get('dose_morning')}")
+        if m.get("dose_afternoon"):
+            doses.append(f"A:{m.get('dose_afternoon')}")
+        if m.get("dose_evening"):
+            doses.append(f"E:{m.get('dose_evening')}")
+        if m.get("dose_night"):
+            doses.append(f"N:{m.get('dose_night')}")
+        if m.get("dose"):
+            doses.append(_clean(m.get("dose")))
+        if m.get("frequency"):
+            doses.append(_clean(m.get("frequency")))
+        if m.get("remarks"):
+            doses.append(_clean(m.get("remarks")))
+        lines.append(" ".join([name] + doses))
+    return "\n".join(lines)
+
+
+def _format_panchakarma(panca: Any) -> str:
+    if not isinstance(panca, dict):
+        return _clean(panca)
+    lines = []
+    for s in _as_list(panca.get("sessions")):
+        if not isinstance(s, dict):
+            if s:
+                lines.append(_clean(s))
+            continue
+        parts = []
+        for key in ["procedure", "companion_procedure", "body_site", "laterality"]:
+            if s.get(key):
+                parts.append(_clean(s.get(key)))
+        if s.get("session_count"):
+            parts.append(f"x{s.get('session_count')}")
+        if s.get("oils_or_ingredients"):
+            parts.append("with " + _join(s.get("oils_or_ingredients")))
+        if s.get("temperature_celsius"):
+            parts.append(f"{s.get('temperature_celsius')} deg C")
+        if s.get("remarks"):
+            parts.append(_clean(s.get("remarks")))
+        if parts:
+            lines.append(" ".join(parts))
+    if panca.get("overall_remarks"):
+        lines.append(_clean(panca.get("overall_remarks")))
+    return "\n".join(lines)
 
 
 def _map_draft_to_encounter(
@@ -447,129 +596,176 @@ def _map_draft_to_encounter(
     lead_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Map structured casesheet draft → SGP Encounter DocType fields.
-    All field names match the SGP Encounter doctype exactly (no custom_ prefix needed
-    since SGP Encounter is our own doctype in sgp_clinical_core).
-    Full JSON preserved in notes for audit.
+    Map expanded case-sheet draft to SGP Encounter DocType fields.
+
+    Priority:
+    1. final composer erp_field_summaries, if present.
+    2. section-level structured JSON from expanded prompts.
+    3. older draft fields from the original implementation.
     """
     import json as _json
 
+    final = draft.get("_final_case_sheet") or draft.get("final_case_sheet") or {}
+    erp = final.get("erp_field_summaries") if isinstance(final, dict) else {}
+    erp = erp or {}
+
     chief = draft.get("chief_complaint") or {}
     anamn = draft.get("anamnesis") or {}
-    vpk   = draft.get("overall_vpk") or {}
+    symptoms = draft.get("symptom_analysis") or {}
+    vitals = draft.get("vitals_anthropometry") or {}
+    vpk = draft.get("overall_vpk") or {}
+    ayu_ext = draft.get("ayurvedic_assessment_extended") or {}
     pulse = draft.get("pulse_diagnosis") or []
-    ayur  = draft.get("ayurvedic_supplements") or []
+    ayur = draft.get("ayurvedic_supplements") or []
     panca = draft.get("panchakarma") or {}
     treat = draft.get("treatment_and_background") or {}
-    pers  = draft.get("personal_history") or {}
-    pmh   = draft.get("past_medical_history") or {}
-    ap    = draft.get("assessment_and_plan") or {}
-    ros   = draft.get("review_of_systems") or {}
+    medhist = draft.get("medication_history") or {}
+    disease = draft.get("disease_history") or {}
+    pers = draft.get("personal_history") or {}
+    pmh = draft.get("past_medical_history") or {}
+    surg = draft.get("surgical_history") or {}
+    allergy = draft.get("allergy_history") or {}
+    family = draft.get("family_history_detailed") or {}
+    genex = draft.get("general_examination") or {}
+    local = draft.get("local_examination") or {}
+    inv = draft.get("investigation_reports") or {}
+    ap = draft.get("assessment_and_plan") or {}
+    ros = draft.get("review_of_systems") or {}
     sysex = draft.get("systemic_examination") or {}
 
-    plan = ap.get("plan") or {} if isinstance(ap, dict) else {}
-    diet = plan.get("diet_advice") or {} if isinstance(plan, dict) else {}
-    fup  = plan.get("follow_up") or {} if isinstance(plan, dict) else {}
+    plan = ap.get("plan") if isinstance(ap, dict) else {}
+    plan = plan or {}
+    diet = plan.get("diet_advice") if isinstance(plan, dict) else {}
+    diet = diet or {}
+    fup = plan.get("follow_up") if isinstance(plan, dict) else {}
+    fup = fup or {}
 
-    # Chief complaint
-    cc_summary = chief.get("summary") or ""
-    if chief.get("ayurvedic_name"):
-        cc_summary += f" ({chief['ayurvedic_name']})"
-    if chief.get("duration"):
-        cc_summary += f" — {chief['duration']}"
+    chief_fallback = _clean(chief.get("summary")) if isinstance(chief, dict) else _clean(chief)
+    if isinstance(chief, dict) and chief.get("complaints") and not chief_fallback:
+        chief_fallback = _join([c.get("complaint") for c in chief.get("complaints") if isinstance(c, dict)])
 
-    # Anamnesis
-    anamn_text = anamn.get("summary") or anamn.get("history") or (_join(list(anamn.values())) if isinstance(anamn, dict) else str(anamn))
+    anamn_fallback = _clean(anamn.get("summary")) or _clean(anamn.get("relevant_context")) if isinstance(anamn, dict) else _clean(anamn)
+    if isinstance(symptoms, dict) and symptoms.get("overall_symptom_summary"):
+        anamn_fallback = (anamn_fallback + "\n" if anamn_fallback else "") + _clean(symptoms.get("overall_symptom_summary"))
 
-    # Allopathic medications
-    allop_meds = _join(
-        [" ".join(filter(None, [m.get("name"), m.get("dose"), m.get("frequency"), m.get("route")]))
-         for m in (treat.get("current_medications") or []) if isinstance(m, dict)],
-        sep="\n",
-    )
+    known_conditions = []
+    for item in _as_list(disease.get("known_conditions") if isinstance(disease, dict) else []):
+        if isinstance(item, dict):
+            condition = _clean(item.get("condition"))
+            duration = _clean(item.get("duration"))
+            status = _clean(item.get("status"))
+            known_conditions.append(" ".join(x for x in [condition, duration, status] if x))
+        else:
+            known_conditions.append(_clean(item))
+    pmh_text = _join(known_conditions + _as_list(pmh.get("medical") if isinstance(pmh, dict) else []))
+    if isinstance(surg, dict):
+        surgery_text = _join(surg.get("surgeries") or surg.get("hospitalizations") or [])
+        if surgery_text:
+            pmh_text = (pmh_text + "; " if pmh_text else "") + "Surgical/Hospitalization: " + surgery_text
 
-    # SGP Rx
-    sgp_rx = _join(
-        [f"{s.get('name','')} M:{s.get('dose_morning','-')} A:{s.get('dose_afternoon','-')} E:{s.get('dose_evening','-')} N:{s.get('dose_night','-')}"
-         for s in (ayur if isinstance(ayur, list) else []) if isinstance(s, dict)],
-        sep="\n",
-    )
+    allopathic_from_treat = _format_medicines_from_current(treat.get("current_medications") if isinstance(treat, dict) else [])
+    allopathic_from_medhist = _format_medicines_from_current(medhist.get("current_medicines") if isinstance(medhist, dict) else [], system_filter="allopathic")
+    allopathic_medicines = "\n".join(x for x in [allopathic_from_treat, allopathic_from_medhist] if x)
 
-    # Panchakarma
-    pk_sessions = _join(
-        [" ".join(filter(None, [
-            s.get("procedure"),
-            "+" + s.get("companion_procedure", "") if s.get("companion_procedure") else None,
-            f"x{s.get('session_count')}" if s.get("session_count") else None,
-            "with " + _join(s.get("oils_or_ingredients") or []) if s.get("oils_or_ingredients") else None,
-            f"{s.get('temperature_celsius')}°C" if s.get("temperature_celsius") else None,
-        ]))
-         for s in (panca.get("sessions") or []) if isinstance(s, dict)],
-        sep="\n",
-    )
+    sgp_rx = _format_sgp_rx(ayur)
+    if isinstance(medhist, dict):
+        sgp_from_medhist = _format_medicines_from_current(medhist.get("current_medicines"), system_filter="SGP")
+        if sgp_from_medhist:
+            sgp_rx = (sgp_rx + "\n" if sgp_rx else "") + sgp_from_medhist
 
-    # Pulse summary
-    pulse_lines = []
-    for p in (pulse if isinstance(pulse, list) else []):
-        if not isinstance(p, dict):
-            continue
-        parts = [p.get("system", "")]
-        if p.get("vata"):  parts.append(f"V={p['vata']}")
-        if p.get("pitta"): parts.append(f"P={p['pitta']}")
-        if p.get("kapha"): parts.append(f"K={p['kapha']}")
-        pulse_lines.append(" ".join(parts))
-    pulse_summary = "  |  ".join(pulse_lines)
+    allergies = []
+    if isinstance(allergy, dict):
+        for item in _as_list(allergy.get("allergies")):
+            allergies.append(_clean(item))
+        if allergy.get("no_known_allergies") is True:
+            allergies.append("No known allergies")
+    if isinstance(treat, dict):
+        allergies.extend(_as_list(treat.get("allergies")))
+    if isinstance(pmh, dict):
+        allergies.extend(_as_list(pmh.get("allergies")))
 
-    # Follow-up
-    fup_parts = []
-    if fup.get("daily"):   fup_parts.append(f"Daily: {fup['daily']}")
-    if fup.get("weekly"):  fup_parts.append(f"Weekly: {fup['weekly']}")
-    if fup.get("monthly"): fup_parts.append(f"Monthly: {fup['monthly']}")
-    fup_str = "  |  ".join(fup_parts)
+    family_text = ""
+    if isinstance(family, dict) and family.get("family_conditions"):
+        family_text = _join(family.get("family_conditions"))
+    elif isinstance(pmh, dict):
+        family_text = _join(pmh.get("family_history"))
 
-    # Review of systems
-    ros_text = ros.get("summary") or (_join([f"{k}: {v}" for k, v in ros.items()], sep="\n") if isinstance(ros, dict) else str(ros))
+    ros_text = _clean(ros.get("summary")) if isinstance(ros, dict) else _clean(ros)
+    if not ros_text and isinstance(ros, dict):
+        ros_text = _join([f"{key}: {_clean(val)}" for key, val in ros.items() if val and key != "needs_doctor_confirmation"], sep="\n")
 
-    # Systemic examination
-    sysex_text = sysex.get("summary") or (_join([f"{k}: {v}" for k, v in sysex.items()], sep="\n") if isinstance(sysex, dict) else str(sysex))
+    sysex_text = _clean(sysex.get("summary")) if isinstance(sysex, dict) else _clean(sysex)
+    if not sysex_text and isinstance(sysex, dict):
+        sysex_text = _join([f"{key}: {_clean(val)}" for key, val in sysex.items() if val and key != "needs_doctor_confirmation"], sep="\n")
+    if isinstance(genex, dict) and _clean(genex):
+        sysex_text = (sysex_text + "\n" if sysex_text else "") + "General: " + _clean(genex)
+    if isinstance(local, dict) and _clean(local):
+        sysex_text = (sysex_text + "\n" if sysex_text else "") + "Local: " + _clean(local)
+
+    fup_text = _join([v for v in [fup.get("daily"), fup.get("weekly"), fup.get("monthly"), fup.get("next_visit")] if v], sep=" | ") if isinstance(fup, dict) else ""
+
+    investigations_text = _join(plan.get("investigations") if isinstance(plan, dict) else [])
+    if isinstance(inv, dict):
+        inv_advised = _join(inv.get("investigations_advised"))
+        if inv_advised:
+            investigations_text = (investigations_text + ", " if investigations_text else "") + inv_advised
+
+    full_notes_payload = {
+        "case_sheet_markdown": final.get("case_sheet_markdown") if isinstance(final, dict) else None,
+        "case_sheet_summary": final.get("case_sheet_summary") if isinstance(final, dict) else None,
+        "doctor_review_summary": draft.get("_doctor_review_summary"),
+        "quality": draft.get("_quality"),
+        "raw_draft": draft,
+    }
 
     return {
-        # ── Core fields ────────────────────────────────────────────────────
-        "patient":                patient_id,
-        "doctor":                 doctor_id,
-        "appointment":            appointment_id,
-        "lead":                   lead_id,
-        "encounter_date":         _today(),
-        "status":                 "Draft",
-        "case_type":              "Ayurvedic",
-        # ── Clinical ──────────────────────────────────────────────────────
-        "chief_complaint":        cc_summary,
-        "anamnesis":              anamn_text,
-        "vpk_dominance":          vpk.get("dominance") or "",
-        "pulse_diagnosis":        pulse_summary,
-        "ayurvedic_diagnosis":    ap.get("ayurvedic_diagnosis") or "",
-        "allopathic_diagnosis":   _join(ap.get("allopathic_diagnosis") or []),
-        "review_of_systems":      ros_text,
-        "systemic_examination":   sysex_text,
-        # ── Treatment ─────────────────────────────────────────────────────
-        "sgp_rx":                 sgp_rx,
-        "allopathic_medicines":   allop_meds,
-        "panchakarma":            pk_sessions,
-        "home_remedies":          _join(plan.get("home_remedies") or []),
-        # ── Diet & Lifestyle ──────────────────────────────────────────────
-        "diet_include":           _join(diet.get("include") or []),
-        "diet_exclude":           _join(diet.get("exclude") or []),
-        "lifestyle_advice":       _join(plan.get("lifestyle_advice") or []),
-        "investigations_advised": _join(plan.get("investigations") or []),
-        # ── History ───────────────────────────────────────────────────────
-        "personal_history_diet":  str(pers.get("diet") or ""),
-        "personal_history_sleep": str(pers.get("sleep_hours") or ""),
-        "past_medical_history":   _join(pmh.get("medical") or []),
-        "family_history":         _join(pmh.get("family_history") or []),
-        "allergies":              _join(treat.get("allergies") or pmh.get("allergies") or []),
-        # ── Follow up ─────────────────────────────────────────────────────
-        "follow_up":              fup_str,
-        "prognosis":              ap.get("prognosis") or "",
-        # ── Raw JSON backup ───────────────────────────────────────────────
-        "notes":                  _json.dumps(draft, ensure_ascii=False, indent=2),
+        "patient": patient_id,
+        "doctor": doctor_id,
+        "appointment": appointment_id,
+        "lead": lead_id,
+        "encounter_date": _today(),
+        "status": "Draft",
+        "case_type": _clean(erp.get("case_type")) or "Integrated",
+
+        "chief_complaint": _clean(erp.get("chief_complaint")) or chief_fallback,
+        "anamnesis": _clean(erp.get("anamnesis")) or anamn_fallback,
+
+        "height_cm": _num_or_none(erp.get("height_cm")) or _num_or_none(vitals.get("height_cm") if isinstance(vitals, dict) else None),
+        "weight_kg": _num_or_none(erp.get("weight_kg")) or _num_or_none(vitals.get("weight_kg") if isinstance(vitals, dict) else None),
+        "wrist_cm": _num_or_none(erp.get("wrist_cm")) or _num_or_none(vitals.get("wrist_cm") if isinstance(vitals, dict) else None),
+        "waist_cm": _num_or_none(erp.get("waist_cm")) or _num_or_none(vitals.get("waist_cm") if isinstance(vitals, dict) else None),
+        "fore_arm_cm": _num_or_none(erp.get("fore_arm_cm")) or _num_or_none(vitals.get("fore_arm_cm") if isinstance(vitals, dict) else None),
+        "hip_cm": _num_or_none(erp.get("hip_cm")) or _num_or_none(vitals.get("hip_cm") if isinstance(vitals, dict) else None),
+        "temp": _clean(erp.get("temp")) or _clean(vitals.get("temperature") if isinstance(vitals, dict) else None),
+        "bp": _clean(erp.get("bp")) or _clean(vitals.get("bp") if isinstance(vitals, dict) else None),
+        "pr": _clean(erp.get("pr")) or _clean(vitals.get("pulse_rate") if isinstance(vitals, dict) else None),
+        "rr": _clean(erp.get("rr")) or _clean(vitals.get("respiratory_rate") if isinstance(vitals, dict) else None),
+
+        "vpk_dominance": _clean(erp.get("vpk_dominance")) or _clean(vpk.get("dominance") if isinstance(vpk, dict) else None) or _clean(ayu_ext.get("vpk_dominance") if isinstance(ayu_ext, dict) else None),
+        "pulse_diagnosis": _clean(erp.get("pulse_diagnosis")) or _format_pulse(pulse),
+        "ayurvedic_diagnosis": _clean(erp.get("ayurvedic_diagnosis")) or _clean(ap.get("ayurvedic_diagnosis") if isinstance(ap, dict) else None) or _clean(ayu_ext.get("ayurvedic_diagnosis") if isinstance(ayu_ext, dict) else None),
+        "allopathic_diagnosis": _clean(erp.get("allopathic_diagnosis")) or _join(ap.get("allopathic_diagnosis") if isinstance(ap, dict) else []),
+        "review_of_systems": _clean(erp.get("review_of_systems")) or ros_text,
+        "systemic_examination": _clean(erp.get("systemic_examination")) or sysex_text,
+
+        "sgp_rx": _clean(erp.get("sgp_rx")) or sgp_rx,
+        "allopathic_medicines": _clean(erp.get("allopathic_medicines")) or allopathic_medicines,
+        "panchakarma": _clean(erp.get("panchakarma")) or _format_panchakarma(panca),
+        "home_remedies": _clean(erp.get("home_remedies")) or _join(plan.get("home_remedies") if isinstance(plan, dict) else []),
+
+        "diet_include": _clean(erp.get("diet_include")) or _join(diet.get("include") if isinstance(diet, dict) else []),
+        "diet_exclude": _clean(erp.get("diet_exclude")) or _join(diet.get("exclude") if isinstance(diet, dict) else []),
+        "lifestyle_advice": _clean(erp.get("lifestyle_advice")) or _join(plan.get("lifestyle_advice") if isinstance(plan, dict) else []),
+        "investigations_advised": _clean(erp.get("investigations_advised")) or investigations_text,
+
+        "personal_history_diet": _clean(erp.get("personal_history_diet")) or _clean(pers.get("diet") if isinstance(pers, dict) else None),
+        "personal_history_sleep": _clean(erp.get("personal_history_sleep")) or _clean(pers.get("sleep_hours") if isinstance(pers, dict) else None) or _clean(pers.get("sleep_quality") if isinstance(pers, dict) else None),
+        "past_medical_history": _clean(erp.get("past_medical_history")) or pmh_text,
+        "family_history": _clean(erp.get("family_history")) or family_text,
+        "allergies": _clean(erp.get("allergies")) or _join(allergies),
+
+        "follow_up": _clean(erp.get("follow_up")) or fup_text,
+        "prognosis": _clean(erp.get("prognosis")) or _clean(ap.get("prognosis") if isinstance(ap, dict) else None),
+        "notes": _clean(erp.get("notes")) or _json.dumps(full_notes_payload, ensure_ascii=False, indent=2, default=str),
     }
+

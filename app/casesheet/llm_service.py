@@ -1,14 +1,20 @@
 """
-LLM Service — Clinical Section Extraction
-──────────────────────────────────────────
-Calls OpenRouter (or Groq) to format transcribed doctor dictation
-into structured JSON sections using clinical prompts.
+LLM Service V1 - Clinical Section Extraction + Case Sheet Composition
+=====================================================================
 
-Error handling:
-- If LLM returns invalid JSON → save raw transcript as fallback
-- If LLM call fails entirely → save raw transcript as fallback
-- Never raise to caller — always return something usable
+Drop-in replacement candidate for:
+    app/casesheet/llm_service.py
+
+Compatible with the existing router because extract_section(section, transcript)
+keeps the same signature. Adds:
+    - dynamic max_tokens from prompts.SECTION_MAX_TOKENS
+    - compose_from_draft(prompt_name, draft, patient_context=None)
+    - run_quality_check(check_name, draft, patient_context=None)
+
+All failures return usable JSON instead of raising to the caller.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -18,52 +24,46 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from app.casesheet.prompts import SECTION_PROMPTS, BASE_RULES, GLOBAL_MEDICAL_INSTRUCTION
+from app.casesheet.prompts import (
+    SECTION_PROMPTS,
+    COMPOSER_PROMPTS,
+    QUALITY_PROMPTS,
+    SECTION_MAX_TOKENS,
+    GLOBAL_MEDICAL_INSTRUCTION,
+)
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Config ─────────────────────────────────────────────────────────────────────
-OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions"
-
-# Primary model from settings/env, with safe fallbacks for OpenRouter 404s.
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemini-2.5-flash")
 MODEL_CANDIDATES = [
     PRIMARY_MODEL,
     "mistralai/mistral-7b-instruct:free",
     "openai/gpt-4o-mini",
 ]
-
-# Timeout for LLM calls — clinical extraction can be slow on free tier
-LLM_TIMEOUT     = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS_DEFAULT", "2000"))
 
 
 class LLMService:
-    """
-    Async service for clinical section extraction via OpenRouter.
-    One method: extract_section(section, transcript) → dict
-    """
+    """Async service for extraction, quality checks and full case-sheet composition."""
 
-    async def extract_section(
-        self, section: str, transcript: str
-    ) -> Dict[str, Any]:
+    async def extract_section(self, section: str, transcript: str) -> Dict[str, Any]:
         """
-        Send transcript to LLM for structured extraction of a clinical section.
-        Falls back to raw transcript on any failure.
+        Send a single section transcript to LLM and return structured JSON.
+        This preserves the existing service contract used by router.py.
         """
         if not transcript.strip():
             return {"_raw": "", "_error": "empty transcript"}
 
         prompt = SECTION_PROMPTS.get(section)
         if not prompt:
-            logger.warning(f"No prompt defined for section: {section}")
+            logger.warning("No prompt defined for section: %s", section)
             return {"_raw": transcript, "_error": f"unknown section: {section}"}
 
         messages = [
-            {
-                "role": "system",
-                "content": GLOBAL_MEDICAL_INSTRUCTION.strip(),
-            },
+            {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
             {
                 "role": "user",
                 "content": (
@@ -74,81 +74,157 @@ class LLMService:
             },
         ]
 
+        return await self._safe_json_call(
+            messages=messages,
+            label=f"section:{section}",
+            fallback={"_raw": transcript},
+            max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
+        )
+
+    async def compose_from_draft(
+        self,
+        prompt_name: str,
+        draft: Dict[str, Any],
+        patient_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compose a full case sheet, doctor review summary or ERP field mapper output.
+        prompt_name examples:
+            - final_case_sheet
+            - doctor_review_summary
+            - patient_friendly_summary
+            - erpnext_field_mapper
+        """
+        prompt = COMPOSER_PROMPTS.get(prompt_name)
+        if not prompt:
+            return {"_error": f"unknown composer prompt: {prompt_name}"}
+
+        payload = {
+            "patient_context": patient_context or {},
+            "draft": draft or {},
+        }
+
+        messages = [
+            {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
+            {
+                "role": "user",
+                "content": (
+                    f"FULL_CASESHEET_DRAFT_JSON:\n<<<\n{json.dumps(payload, ensure_ascii=False, default=str)}\n>>>\n\n"
+                    f"{prompt}\n\n"
+                    "IMPORTANT: Respond with ONLY valid JSON. No markdown, no explanation."
+                ),
+            },
+        ]
+
+        return await self._safe_json_call(
+            messages=messages,
+            label=f"composer:{prompt_name}",
+            fallback={"_raw_draft": draft},
+            max_tokens=SECTION_MAX_TOKENS.get(prompt_name, 6000),
+        )
+
+    async def run_quality_check(
+        self,
+        check_name: str,
+        draft: Dict[str, Any],
+        patient_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run a full-draft quality check.
+        check_name examples:
+            - missing_information_check
+            - contradiction_check
+            - red_flag_check
+        """
+        prompt = QUALITY_PROMPTS.get(check_name)
+        if not prompt:
+            return {"_error": f"unknown quality prompt: {check_name}"}
+
+        payload = {
+            "patient_context": patient_context or {},
+            "draft": draft or {},
+        }
+
+        messages = [
+            {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
+            {
+                "role": "user",
+                "content": (
+                    f"FULL_CASESHEET_DRAFT_JSON:\n<<<\n{json.dumps(payload, ensure_ascii=False, default=str)}\n>>>\n\n"
+                    f"{prompt}\n\n"
+                    "IMPORTANT: Respond with ONLY valid JSON. No markdown, no explanation."
+                ),
+            },
+        ]
+
+        return await self._safe_json_call(
+            messages=messages,
+            label=f"quality:{check_name}",
+            fallback={"_raw_draft": draft},
+            max_tokens=SECTION_MAX_TOKENS.get(check_name, 3000),
+        )
+
+    async def _safe_json_call(
+        self,
+        messages: list,
+        label: str,
+        fallback: Dict[str, Any],
+        max_tokens: int,
+    ) -> Dict[str, Any]:
         try:
-            raw = await self._call_llm(messages)
+            raw = await self._call_llm(messages=messages, max_tokens=max_tokens)
             parsed = self._parse_json(raw)
-
             if parsed is None:
-                logger.warning(
-                    f"LLM returned non-JSON for section '{section}', saving raw transcript"
-                )
-                return {"_raw": transcript, "_llm_output": raw}
-
-            logger.info(f"Section '{section}' extracted successfully")
+                logger.warning("LLM returned non-JSON for %s", label)
+                return {**fallback, "_llm_output": raw, "_error": "invalid_json"}
+            logger.info("LLM JSON success for %s", label)
             return parsed
-
         except httpx.TimeoutException:
-            logger.error(f"LLM timeout for section '{section}'")
-            return {"_raw": transcript, "_error": "llm_timeout"}
+            logger.error("LLM timeout for %s", label)
+            return {**fallback, "_error": "llm_timeout"}
+        except Exception as exc:
+            logger.error("LLM call failed for %s: %s", label, exc)
+            return {**fallback, "_error": str(exc)}
 
-        except Exception as e:
-            logger.error(f"LLM extraction failed for section '{section}': {e}")
-            return {"_raw": transcript, "_error": str(e)}
-
-    async def _call_llm(self, messages: list) -> str:
-        """Make the HTTP call to OpenRouter and return raw content string."""
-        # Read key at call time from central settings first, then env fallback.
+    async def _call_llm(self, messages: list, max_tokens: int) -> str:
         openrouter_key = settings.OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY", "")
         if not openrouter_key:
-            raise RuntimeError(
-                "OPENROUTER_API_KEY not set in .env — "
-                "LLM extraction unavailable"
-            )
+            raise RuntimeError("OPENROUTER_API_KEY not set in .env")
 
         headers = {
             "Authorization": f"Bearer {openrouter_key}",
-            "Content-Type":  "application/json",
-            "HTTP-Referer":  "https://sgp.clinic",
-            "X-Title":       "SGP Clinical AI",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://sgp.clinic",
+            "X-Title": "SGP Clinical AI",
         }
 
         async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
             for model in MODEL_CANDIDATES:
                 payload = {
-                    "model":       model,
-                    "messages":    messages,
-                    "temperature": 0.1,     # low temp for consistent structured output
-                    "max_tokens":  1500,
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "max_tokens": int(max_tokens),
                 }
-                resp = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-                if resp.status_code == 404:
-                    logger.warning(f"OpenRouter model not found: {model} (trying fallback)")
+                response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+                if response.status_code == 404:
+                    logger.warning("OpenRouter model not found: %s. Trying fallback.", model)
                     continue
-                resp.raise_for_status()
-                data = resp.json()
+                response.raise_for_status()
+                data = response.json()
                 return data["choices"][0]["message"]["content"]
-            raise RuntimeError(
-                "All configured OpenRouter models returned 404. "
-                "Set LLM_MODEL to a valid slug for your OpenRouter account."
-            )
+
+        raise RuntimeError("All configured OpenRouter models returned 404. Set LLM_MODEL to a valid slug.")
 
     def _parse_json(self, raw: str) -> Optional[Any]:
-        """
-        Parse JSON from LLM output.
-        Handles common LLM habits: markdown fences, leading/trailing text.
-        Returns None if parsing fails completely.
-        """
-        # Strip markdown code fences
         cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip()
         cleaned = re.sub(r"```\s*$", "", cleaned).strip()
 
-        # Try direct parse
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
             pass
 
-        # Try to extract JSON object/array from within the text
         json_match = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
         if json_match:
             try:
@@ -159,5 +235,4 @@ class LLMService:
         return None
 
 
-# Module-level singleton
 llm_service = LLMService()
