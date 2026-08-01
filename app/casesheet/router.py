@@ -19,7 +19,7 @@ Architecture:
 
 import logging
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
@@ -491,6 +491,31 @@ def _num_or_none(value: Any):
 
 
 def _format_pulse(pulse: Any) -> str:
+    if isinstance(pulse, dict):
+        overall = pulse.get("overall_vpk") or {}
+        systems = pulse.get("systems") or []
+        parts = []
+        if isinstance(overall, dict) and overall.get("dominance"):
+            parts.append(f"Overall VPK Dominance: {_clean(overall.get('dominance'))}")
+        sys_parts = []
+        for p in _as_list(systems):
+            if not isinstance(p, dict):
+                continue
+            sys_info = []
+            if p.get("system"):
+                sys_info.append(_clean(p.get("system")))
+            if p.get("vata"):
+                sys_info.append(f"V={p.get('vata')}")
+            if p.get("pitta"):
+                sys_info.append(f"P={p.get('pitta')}")
+            if p.get("kapha"):
+                sys_info.append(f"K={p.get('kapha')}")
+            if sys_info:
+                sys_parts.append(" ".join(sys_info))
+        if sys_parts:
+            parts.append("Systems: " + " | ".join(sys_parts))
+        return " • ".join(parts)
+
     lines = []
     for p in _as_list(pulse):
         if not isinstance(p, dict):
@@ -613,9 +638,11 @@ def _map_draft_to_encounter(
     anamn = draft.get("anamnesis") or {}
     symptoms = draft.get("symptom_analysis") or {}
     vitals = draft.get("vitals_anthropometry") or {}
-    vpk = draft.get("overall_vpk") or {}
+    vpk = (draft.get("pulse_diagnosis") or {}).get("overall_vpk") if isinstance(draft.get("pulse_diagnosis"), dict) else (draft.get("overall_vpk") or {})
+    vpk = vpk or {}
     ayu_ext = draft.get("ayurvedic_assessment_extended") or {}
-    pulse = draft.get("pulse_diagnosis") or []
+    pulse = (draft.get("pulse_diagnosis") or {}).get("systems") if isinstance(draft.get("pulse_diagnosis"), dict) else (draft.get("pulse_diagnosis") or [])
+    pulse = pulse or []
     ayur = draft.get("ayurvedic_supplements") or []
     panca = draft.get("panchakarma") or {}
     treat = draft.get("treatment_and_background") or {}
@@ -632,6 +659,7 @@ def _map_draft_to_encounter(
     ap = draft.get("assessment_and_plan") or {}
     ros = draft.get("review_of_systems") or {}
     sysex = draft.get("systemic_examination") or {}
+    encounter_ctx = draft.get("encounter_context") or {}
 
     plan = ap.get("plan") if isinstance(ap, dict) else {}
     plan = plan or {}
@@ -723,9 +751,10 @@ def _map_draft_to_encounter(
         "doctor": doctor_id,
         "appointment": appointment_id,
         "lead": lead_id,
-        "encounter_date": _today(),
+        "encounter_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "status": "Draft",
         "case_type": _clean(erp.get("case_type")) or "Integrated",
+        "consent_verified": 1 if (isinstance(encounter_ctx, dict) and encounter_ctx.get("consent_verified")) else 0,
 
         "chief_complaint": _clean(erp.get("chief_complaint")) or chief_fallback,
         "anamnesis": _clean(erp.get("anamnesis")) or anamn_fallback,

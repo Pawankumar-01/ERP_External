@@ -55,14 +55,12 @@ class CasesheetDraft(Base):
     Draft structure (sections filled progressively as audio chunks arrive):
     {
         "chief_complaint":          { ... },
-        "overall_vpk":              { ... },
-        "pulse_diagnosis":          [ ... ],
+        "pulse_diagnosis":          { ... },
         "panchakarma":              { ... },
         "anamnesis":                { ... },
         "ayurvedic_supplements":    { ... },
         "treatment_and_background": { ... },
         "personal_history":         { ... },
-        "review_of_systems":        { ... },
         "systemic_examination":     { ... },
         "past_medical_history":     { ... },
         "assessment_and_plan":      { ... },

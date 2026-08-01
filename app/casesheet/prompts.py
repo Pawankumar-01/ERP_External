@@ -47,49 +47,170 @@ _MEDICAL_BASE = (
 
 _MEDICINE_BASE = (
     "Medication terms: tablet tab capsule cap syrup ointment gel drops injection IV IM SC topical oral nasal inhalation. "
-    "Dosing: mg mcg gram ml drops units OD BD TDS QID HS QHS SOS PRN before food after food empty stomach morning afternoon "
+    "Dosing: mg mcg gram ml drops units OD BD BID TDS QID HS QHS SOS PRN before food after food empty stomach morning afternoon "
     "evening night weekly monthly. Allopathic medicines: Metformin Amlodipine Telmisartan Losartan Atorvastatin Rosuvastatin "
     "Aspirin Clopidogrel Pantoprazole Omeprazole Thyroxine Metoprolol Pregabalin Gabapentin Duloxetine Paracetamol Ibuprofen "
-    "Diclofenac Etoricoxib Vitamin D B12 calcium. SGP proprietary medicine codes: APD ATZ NTP SYN RESERVE CISSUES "
-    "QUADRANGULARIES. Ayurvedic medicines: Ashwagandha Triphala Brahmi Shatavari Guduchi Amalaki Haritaki Vibhitaki Trikatu "
-    "Hingvastak Dashamoola Chyawanprash Arjuna Punarnava Gokshura Vacha Shankhapushpi." 
+    "Diclofenac Etoricoxib Vitamin D B12 calcium. "
+    "SGP proprietary canonical medicine names: APD ATHEROLYZIN MIGRANONE IMUMODULIN BIOTIN ALLOWYN SYNGEN D-TOX NEUROTROPIN "
+    "CAG Nuts RESERVE CISSUES QUADRANGULARIES. "
+    "Common SGP medicine spoken variants: atherolyzine ethylizine migranine neurotropine imd allowin syngin singin detox dtox. "
+    "Ayurvedic medicines: Ashwagandha Triphala Brahmi Shatavari Guduchi Amalaki Haritaki Vibhitaki Trikatu "
+    "Hingvastak Dashamoola Chyawanprash Arjuna Punarnava Gokshura Vacha Shankhapushpi."
 )
 
 _PANCHAKARMA_BASE = (
-    "Panchakarma and therapy terms: Abhyanga Shirodhara Nasya Basti Virechana Vamana Janu Pichu Janu Basti Greeva Basti "
-    "Kati Basti Netra Tarpana Karna Purana Pinda Sweda Njavara Udwarthana Sauna Steam Pizhichil Patra Pinda Sweda "
-    "Choornasweda Valuka Sweda Lepam Dhanyamla Dhara. Oils: Niutex Ksheerabala Dhanwantharam Bala Anu Tailam Chandanadi "
-    "Neelibhringadi Brahmi Narayana Kottamchukkadi Mahanarayana Sahacharadi Murivenna." 
+    "Panchakarma and therapy terms: Abhyanga Shirodhara Nasya Basti Virechana Vamana Janu Pichu Januvasthi Greeva Vasthi "
+    "Kati Vasthi Netra Tarpana Karna Purana Pinda Sweda Njavara Udwarthana Sauna Steam Pizhichil Patra Pinda Sweda "
+    "Choornasweda Valuka Sweda Lepam Dhanyamla Dhara. "
+    "Oils: Nutex Niutex Ksheerabala Dhanwantharam Bala Anu Tailam Chandanadi Thailam "
+    "NeeliBringadi Keera Tailam Neelibhringadi Brahmi Narayana Kottamchukkadi Mahanarayana Sahacharadi Murivenna. "
+    "SGP procedures: Gandusham Gandusha Nithya Virechana Prathivaara Virechana Karma Anutailam Steam Inhalations SGP Covid Protocol. "
+    "Detox decoctions: Fennel Tea Barley Soup Rice Soup Tapioca Soup Sabu Dana Raagi Soup Jowar Soup. "
+    "Exercises yoga: Naukasanam Bhujangasanam Stretching Pranayama."
 )
 
+# -----------------------------------------------------------------------------
+# SGP Medicine Canonical Name Correction Table
+# Embedded into LLM prompts to fix speech-to-text spelling errors
+# -----------------------------------------------------------------------------
+
+_SGP_MEDICINE_KNOWLEDGE = """\
+SGP PROPRIETARY MEDICINE CANONICAL NAME CORRECTION TABLE:
+When the transcript phonetically or visually matches any listed spoken/misspelled variant,
+output ONLY the canonical name shown. Never output the misspelled/spoken variant.
+
+Spoken/Misspelled -> Canonical Name:
+- apd, a p d, apidi, a.p.d -> APD
+- atherolyzin, atherolyzine, ethylizine, ethylizin, athero lizin -> ATHEROLYZIN
+- migranone, migranine, migraine tab, migranol, migranon -> MIGRANONE
+- imumodulin, imd, immunodulin, imumoduline, immu modulin, i.m.d -> IMUMODULIN
+- biotin, biotine, bio tin -> BIOTIN
+- allowyn, allowin, allo win, alowyn -> ALLOWYN
+- syngen, syngin, singin, singen, syn gen -> SYNGEN
+- d-tox, dtox, detox tab, dee tox, d tox -> D-TOX
+- neurotropin, neurotropine, neurotrophin, neuro tropin -> NEUROTROPIN
+- cag nuts, cag, c a g, kag nuts -> CAG Nuts
+- reserve, reserw, reserv -> RESERVE
+- cissues, c issues, sishues -> CISSUES
+- quadrangularies, quadrangularis, quadrangulary -> QUADRANGULARIES
+
+CRITICAL: Always use the canonical name. If uncertain between a known SGP canonical name
+and an unknown name, prefer the canonical SGP name and note uncertainty in needs_doctor_confirmation.
+"""
+
+# -----------------------------------------------------------------------------
+# SGP Procedure and Therapy Canonical Name Correction Table
+# -----------------------------------------------------------------------------
+
+_SGP_PROCEDURE_KNOWLEDGE = """\
+SGP PROCEDURE AND THERAPY CANONICAL NAME CORRECTION TABLE:
+When the transcript phonetically matches any listed spoken/misspelled variant,
+output ONLY the canonical procedure name shown.
+
+Spoken/Misspelled -> Canonical Name:
+- gandusham, gandusha, gandoosha, gandush -> Gandusham
+- nutex oil, nutex, nu tex -> Nutex Oil
+- chandanadi, chandanadi tailam, chandanadi oil -> Chandanadi Thailam
+- neelibringadi, neelibrungadi, nilibringadi -> NeeliBringadi Keera Tailam
+- nithya virechana, daily virechana, nithya virechan -> Nithya Virechana Process
+- prathivaara virechana, prathivara virechana, weekly virechana -> Prathivaara Virechana Karma
+- anutailam, anu tailam, anutail -> Anutailam
+- steam inhalation, steam inhalations, steaming -> Steam Inhalations
+- fennel tea, fennel, saunf tea -> Fennel Tea
+- barley soup, barley water -> Barley Soup
+- rice soup, rice water, kanji -> Rice Soup
+- tapioca soup, sabu dana, saboo dana, sago -> Tapioca Soup (Sabu Dana)
+- raagi soup, ragi soup, finger millet soup -> Raagi Soup (Finger Millet)
+- jowar soup, jwar soup -> Jowar Soup
+- sgp covid protocol, covid protocol -> SGP Covid Protocol
+- januvasthi, januvasti, janu basti, knee basti -> Januvasthi
+- greeva vasthi, greeva basti, neck basti -> Greeva Vasthi
+- kati vasthi, kati basti, lumbar basti -> Kati Vasthi
+"""
+
 WHISPER_INITIAL_PROMPTS: dict[str, str] = {
-    "patient_identity": _AYU_BASE + _MEDICAL_BASE + "Patient name age gender mobile patient ID visit type new follow up doctor appointment encounter.",
-    "encounter_context": _AYU_BASE + _MEDICAL_BASE + "Encounter date doctor department case type consent verified source voice dictation follow up consultation.",
-    "transcript_cleanup": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + _PANCHAKARMA_BASE + "Clean transcript without changing clinical meaning.",
-    "chief_complaint": _AYU_BASE + _MEDICAL_BASE + "Chief complaint duration site side laterality severity aggravating relieving factors functional impact.",
-    "symptom_analysis": _AYU_BASE + _MEDICAL_BASE + "Symptom analysis SOCRATES OLDCARTS onset location duration character aggravating relieving timing severity associated symptoms red flags.",
-    "anamnesis": _AYU_BASE + _MEDICAL_BASE + "History of present illness onset progression course associated symptoms negative history disease timeline.",
-    "overall_vpk": _AYU_BASE + "Overall VPK dominance Vata Pitta Kapha V P K VP VK PK VPK Prakriti Vikriti Tridosha.",
-    "pulse_diagnosis": _AYU_BASE + "Nadi Pariksha pulse diagnosis. System codes CVS GIT IS PAN KUB PRO RT LB GB LIV SS LSCS LISI RB. Dosha codes V P K PV VP PK KP VK KV VPK. Severity mild mild moderate moderate severe.",
-    "ayurvedic_assessment_extended": _AYU_BASE + "Prakriti Vikriti VPK dominance Ama Agni Koshta Ojas Bala Srotas Dhatu Mala Mutra Jihva Nidana Samprapti Ayurvedic diagnosis.",
-    "ayurvedic_supplements": _AYU_BASE + _MEDICINE_BASE + "SGP Rx Ayurvedic supplements doses morning afternoon evening night frequency remarks.",
-    "panchakarma": _AYU_BASE + _PANCHAKARMA_BASE + "Panchakarma sessions procedures oils ingredients session count temperature remarks.",
-    "treatment_and_background": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + "Treatment background allopathic drugs ongoing therapies allergies previous treatments.",
-    "medication_history": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + "Medication history current medicines past medicines stopped medicines dose route frequency duration indication compliance side effects.",
-    "disease_history": _AYU_BASE + _MEDICAL_BASE + "Known diseases diabetes hypertension thyroid asthma COPD cardiac kidney liver autoimmune neurological psychiatric cancer infection duration control complications.",
-    "past_medical_history": _AYU_BASE + _MEDICAL_BASE + "Past medical surgical family history chronic conditions surgeries hospitalizations allergies trauma transfusion implants.",
-    "surgical_history": _AYU_BASE + _MEDICAL_BASE + "Surgical history operations hospitalization procedures trauma implants transfusion anesthesia complications.",
-    "allergy_history": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + "Drug allergy food allergy environmental allergy herbal intolerance reaction severity confirmed suspected.",
-    "family_history_detailed": _AYU_BASE + _MEDICAL_BASE + "Family history diabetes hypertension cardiac disease cancer autoimmune neurological hereditary diseases relation age.",
-    "personal_history": _AYU_BASE + _MEDICAL_BASE + "Diet appetite bowel urine sleep exercise occupation stress addictions smoking alcohol tobacco tea coffee.",
-    "menstrual_obstetric_history": _AYU_BASE + _MEDICAL_BASE + "Female history LMP cycle regularity flow pain pregnancy obstetric history menopause contraception gynecological disease.",
-    "review_of_systems": _AYU_BASE + _MEDICAL_BASE + "Review of systems general ENT respiratory cardiovascular gastrointestinal genitourinary neurological musculoskeletal skin endocrine psychiatric.",
-    "vitals_anthropometry": _AYU_BASE + _MEDICAL_BASE + "Vitals height weight BMI temperature BP PR RR pulse respiratory rate SpO2 blood sugar waist hip wrist forearm.",
-    "general_examination": _AYU_BASE + _MEDICAL_BASE + "General examination built nourishment pallor icterus cyanosis clubbing lymph nodes edema hydration gait pain score.",
-    "systemic_examination": _AYU_BASE + _MEDICAL_BASE + "Systemic examination cardiovascular respiratory abdomen CNS musculoskeletal skin ENT eyes genitourinary normal abnormal.",
-    "local_examination": _AYU_BASE + _MEDICAL_BASE + "Local examination inspection palpation tenderness swelling warmth deformity range of motion special tests gait neurological vascular wound skin.",
-    "investigation_reports": _AYU_BASE + _MEDICAL_BASE + "Investigations lab reports imaging reports values units reference ranges abnormal findings tests advised pending reports.",
-    "assessment_and_plan": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + _PANCHAKARMA_BASE + "Assessment diagnosis plan medicines therapies investigations home remedies diet lifestyle follow up prognosis referral.",
+    "patient_identity": _AYU_BASE + _MEDICAL_BASE + (
+        "Patient name age gender mobile patient ID OP number appointment visit type new follow up doctor. "
+        "Assigned doctor followup doctor followup contact alternate number PT number OP number."
+    ),
+    "encounter_context": _AYU_BASE + _MEDICAL_BASE + (
+        "Encounter date doctor department case type consent verified source voice dictation follow up consultation "
+        "assigned doctor followup doctor name followup doctor contact."
+    ),
+    "transcript_cleanup": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + _PANCHAKARMA_BASE + (
+        "Clean transcript without changing clinical meaning. "
+        "APD ATHEROLYZIN MIGRANONE IMUMODULIN BIOTIN ALLOWYN SYNGEN D-TOX NEUROTROPIN CAG RESERVE CISSUES QUADRANGULARIES."
+    ),
+    "chief_complaint": _AYU_BASE + _MEDICAL_BASE + (
+        "Chief complaint duration site side laterality severity aggravating relieving factors functional impact."
+    ),
+    "anamnesis": _AYU_BASE + _MEDICAL_BASE + (
+        "History of present illness onset progression course associated symptoms negative history disease timeline."
+    ),
+    "pulse_diagnosis": _AYU_BASE + (
+        "Nadi Pariksha pulse diagnosis. System codes CVS GIT IS PAN KUB PRO RT LB GB LIV SS LSCS LISI RB OBG. "
+        "Dosha codes V P K VP VK PK VPK. Severity Mild Very Mild Mild Moderate Moderate Severe."
+    ),
+    "ayurvedic_assessment_extended": _AYU_BASE + (
+        "Prakriti Vikriti VPK dominance Ama Agni Koshta Ojas Bala Srotas Dhatu Mala Mutra Jihva Nidana Samprapti Ayurvedic diagnosis."
+    ),
+    "ayurvedic_supplements": _AYU_BASE + _MEDICINE_BASE + (
+        "SGP Rx Ayurvedic supplements. APD ATHEROLYZIN MIGRANONE IMUMODULIN BIOTIN ALLOWYN SYNGEN D-TOX NEUROTROPIN "
+        "CAG Nuts RESERVE CISSUES QUADRANGULARIES. Doses morning afternoon evening night frequency remarks start week."
+    ),
+    "panchakarma": _AYU_BASE + _PANCHAKARMA_BASE + (
+        "Panchakarma sessions procedures oils ingredients session count temperature remarks. "
+        "Gandusham Nithya Virechana Prathivaara Virechana Anutailam Steam Inhalations Fennel Tea Barley Soup."
+    ),
+    "exercises_yoga": _AYU_BASE + _PANCHAKARMA_BASE + (
+        "Exercises yoga prescribed. Naukasanam Bhujangasanam Stretching Pranayama walking swimming."
+    ),
+    "detox_procedures": _AYU_BASE + _PANCHAKARMA_BASE + (
+        "Detoxifying procedures decoctions. Fennel Tea Barley Soup Rice Soup Tapioca Soup Raagi Soup Jowar Soup. "
+        "Gandusham Nithya Virechana Prathivaara Virechana Anutailam Steam Inhalations."
+    ),
+    "followup_details": _AYU_BASE + _MEDICAL_BASE + (
+        "Follow up details assigned doctor followup doctor name contact number next visit date department."
+    ),
+    "treatment_and_background": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + (
+        "Treatment background allopathic drugs ongoing therapies allergies previous treatments."
+    ),
+    "medication_history": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + (
+        "Medication history current medicines past medicines stopped medicines dose route frequency duration indication compliance side effects."
+    ),
+    "past_medical_history": _AYU_BASE + _MEDICAL_BASE + (
+        "Past medical surgical family history chronic conditions surgeries hospitalizations allergies trauma transfusion implants."
+    ),
+    "surgical_history": _AYU_BASE + _MEDICAL_BASE + (
+        "Surgical history operations hospitalization procedures trauma implants transfusion anesthesia complications."
+    ),
+    "allergy_history": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + (
+        "Drug allergy food allergy environmental allergy herbal intolerance reaction severity confirmed suspected."
+    ),
+    "family_history_detailed": _AYU_BASE + _MEDICAL_BASE + (
+        "Family history diabetes hypertension cardiac disease cancer autoimmune neurological hereditary diseases relation age."
+    ),
+    "personal_history": _AYU_BASE + _MEDICAL_BASE + (
+        "Diet appetite bowel urine sleep exercise occupation stress addictions smoking alcohol tobacco tea coffee."
+    ),
+    "menstrual_obstetric_history": _AYU_BASE + _MEDICAL_BASE + (
+        "Female history LMP cycle regularity flow pain pregnancy obstetric history menopause contraception gynecological disease."
+    ),
+    "vitals_anthropometry": _AYU_BASE + _MEDICAL_BASE + (
+        "Vitals height weight BMI temperature BP PR RR pulse respiratory rate SpO2 blood sugar waist hip wrist forearm."
+    ),
+    "general_examination": _AYU_BASE + _MEDICAL_BASE + (
+        "General examination built nourishment pallor icterus cyanosis clubbing lymph nodes edema hydration gait pain score."
+    ),
+    "systemic_examination": _AYU_BASE + _MEDICAL_BASE + (
+        "Systemic examination cardiovascular respiratory abdomen CNS musculoskeletal skin ENT eyes genitourinary normal abnormal."
+    ),
+    "investigation_reports": _AYU_BASE + _MEDICAL_BASE + (
+        "Investigations lab reports imaging reports values units reference ranges abnormal findings tests advised pending reports."
+    ),
+    "assessment_and_plan": _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + _PANCHAKARMA_BASE + (
+        "Assessment diagnosis plan medicines therapies investigations home remedies diet lifestyle follow up prognosis referral."
+    ),
 }
 
 # -----------------------------------------------------------------------------
@@ -109,6 +230,18 @@ STRICT RULES:
 - Do not create a final diagnosis, prescription, order, referral, or treatment change unless explicitly dictated by the clinician.
 - Distinguish patient-reported history, doctor examination findings, and clinician assessment.
 - If a negation is stated, record it as absent/denied rather than deleting it.
+
+ANTI-HALLUCINATION RULES (CRITICAL — NEVER VIOLATE):
+- REJECT any transcript segment that contains non-Latin, non-Sanskrit, non-ASCII characters
+  (e.g. Korean, Chinese, Japanese, Arabic, Cyrillic). Treat such segments as noise and return null.
+- NEVER output raw JSON field names (e.g. needs_doctor_confirmation, _raw, _error) as clinical text.
+- NEVER let internal schema keys or Python dict keys appear inside string values.
+- If a transcript segment is incoherent, garbled, or contains random characters, skip it and return null.
+- NEVER invent or assume numeric values (vitals, measurements, doses) not explicitly stated.
+- NEVER copy text from the system prompt or schema into clinical output fields.
+- The needs_doctor_confirmation field is for INTERNAL USE ONLY. Its values must never be rendered
+  as clinical text in any other field.
+- If the same field could be filled from the transcript OR from a schema example, use ONLY the transcript.
 """
 
 GLOBAL_MEDICAL_INSTRUCTION = """\
@@ -118,27 +251,39 @@ Doctors may dictate in English with Ayurvedic Sanskrit terms, local-language phr
 medicine codes, and speech-to-text errors.
 
 Your task:
-1. Extract clinical facts from doctor dictation.
-2. Normalize speech into structured clinical data without inventing facts.
-3. Map data exactly to the requested JSON schema.
-4. Preserve Ayurvedic terms, SGP medicine names, drug doses, and clinical abbreviations.
-5. Return only valid JSON.
+1. Extract clinical facts from doctor dictation only.
+2. Normalize speech into structured clinical data WITHOUT inventing facts.
+3. Map data exactly to the requested JSON schema — no extra keys, no missing required keys.
+4. Preserve Ayurvedic terms, SGP medicine names, drug doses, and clinical abbreviations exactly.
+5. Return only valid JSON. No markdown, no code fences, no explanation text.
 
 Core Ayurvedic glossary:
 - Vata, Pitta, Kapha: doshas.
-- Prakriti: constitution.
-- Vikriti: current imbalance.
-- Ama: metabolic toxin or undigested residue.
-- Agni: digestive/metabolic capacity.
-- Koshta: bowel tendency.
-- Srotas: channel/system involvement.
-- Dhatu: tissue system.
-- Ojas: vitality/immunity essence.
-- Nadi Pariksha: pulse diagnosis.
-- Samprapti: pathogenesis.
+- Prakriti: constitution. Vikriti: current imbalance.
+- Ama: metabolic toxin. Agni: digestive capacity. Koshta: bowel tendency.
+- Srotas: channel/system. Dhatu: tissue. Ojas: vitality.
+- Nadi Pariksha: pulse diagnosis. Samprapti: pathogenesis.
+
+SGP Proprietary Medicine Canonical Names (correct any misspelling to these):
+APD | ATHEROLYZIN | MIGRANONE | IMUMODULIN | BIOTIN | ALLOWYN | SYNGEN |
+D-TOX | NEUROTROPIN | CAG Nuts | RESERVE | CISSUES | QUADRANGULARIES
+
+SGP System Codes for Pulse Diagnosis:
+CVS (cardiovascular) | GIT (gastrointestinal) | IS (immune system) | PAN (pancreas) |
+KUB (kidney ureter bladder) | PRO (prostate) | RT (respiratory tract) | LB (lower back) |
+GB (gallbladder) | LIV (liver) | SS (skeletal system) | LSCS (lumbo sacro cranial) |
+LISI (large intestine small intestine) | RB (reproductive bladder) | OBG (obstetrics gynecology)
+
+CRITICAL OUTPUT RULES:
+- If any transcript segment contains non-ASCII, non-Latin, non-Sanskrit characters
+  (Korean, Chinese, Arabic, Cyrillic, etc.) treat the entire segment as noise and return null for that field.
+- The needs_doctor_confirmation field content must NEVER appear in any other clinical field.
+- Never copy schema keys, field names, or prompt text into output values.
+- Never fabricate numeric measurements, vitals, or doses not spoken in the transcript.
+- Respond with valid JSON only — parseable by json.loads() without preprocessing.
 
 Safety boundary:
-This is documentation support for clinician review. Do not behave as an autonomous doctor.
+This is documentation support only. Do not act as an autonomous clinician.
 """
 
 # -----------------------------------------------------------------------------
@@ -147,10 +292,14 @@ This is documentation support for clinician review. Do not behave as an autonomo
 
 _SECTION_FOOTER = """\
 VALIDATION:
-- Output must be parseable JSON.
-- No markdown.
-- No comments.
-- Do not include extra keys outside the schema unless the schema explicitly allows it.
+- Output must be parseable by Python json.loads() with zero preprocessing.
+- No markdown fences, no backticks, no code blocks, no explanatory text.
+- No comments inside JSON.
+- Do not include extra keys outside the schema.
+- If the transcript has no data for this section, return the schema with all values as null or [].
+- NEVER place raw field names, schema keys, or prompt text inside string values.
+- NEVER include non-ASCII characters (Korean, Chinese, Arabic, etc.) in any output field.
+  If the transcript contained such characters, skip that segment and return null.
 """
 
 SECTION_PROMPTS: dict[str, str] = {
@@ -262,47 +411,6 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "symptom_analysis": BASE_RULES + """\
-Extract detailed symptom analysis for every symptom or complaint mentioned.
-Use a clinical SOCRATES/OLDCARTS style structure.
-
-Rules:
-- One symptom object per distinct symptom.
-- Do not infer missing attributes.
-- If pain is mentioned, capture pain character, radiation, VAS if stated, stiffness, swelling, restriction, sleep disturbance, walking difficulty, neurological symptoms if stated.
-- Capture explicitly denied red flags in red_flags_absent.
-
-Schema:
-{
-  "symptoms": [
-    {
-      "symptom": "string",
-      "site": "string | null",
-      "laterality": "right | left | bilateral | midline | generalized | null",
-      "onset": "string | null",
-      "duration": "string | null",
-      "course": "string | null",
-      "severity": "string | null",
-      "vas_score": "number | null",
-      "character": "string | null",
-      "radiation": "string | null",
-      "timing_pattern": "string | null",
-      "aggravating_factors": ["string"],
-      "relieving_factors": ["string"],
-      "associated_symptoms": ["string"],
-      "negative_associated_symptoms": ["string"],
-      "functional_limitation": ["string"],
-      "previous_episodes": "string | null",
-      "red_flags_present": ["string"],
-      "red_flags_absent": ["string"],
-      "notes": "string | null",
-      "needs_doctor_confirmation": ["string"]
-    }
-  ],
-  "overall_symptom_summary": "string | null"
-}
-""" + _SECTION_FOOTER,
-
     "anamnesis": BASE_RULES + """\
 Extract Anamnesis / History of Present Illness.
 
@@ -328,57 +436,55 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "overall_vpk": BASE_RULES + """\
-Extract overall VPK / Tridosha dominance.
+    "pulse_diagnosis": BASE_RULES + """\
+Extract Pulse Diagnosis / Nadi Pariksha, including overall VPK / Tridosha dominance and system-wise pulse severity.
 
-Rules:
-- Use only one of: V, P, K, VP, VK, PK, VPK, null.
-- Normalize PV to VP, KV to VK, KP to PK.
-- Extract only if explicitly stated. Do not infer from symptoms.
+Rules for overall VPK:
+- Use only one of: V, P, K, VP, VK, PK, VPK, null for dominance.
+- Normalize: PV->VP, KV->VK, KP->PK.
+- Extract Prakriti, Vikriti, notes, dominance ONLY if explicitly stated.
+
+Rules for system-wise pulse:
+- Valid system codes ONLY (do not invent codes):
+  CVS (cardiovascular), GIT (gastrointestinal), IS (immune system), PAN (pancreas),
+  KUB (kidney ureter bladder), PRO (prostate), RT (respiratory tract), LB (lower back),
+  GB (gallbladder), LIV (liver), SS (skeletal system), LSCS (lumbo sacro cranial system),
+  LISI (large intestine small intestine), RB (reproductive bladder), OBG (obstetrics gynecology).
+- Doshas: V=Vata, P=Pitta, K=Kapha. VP=Vata+Pitta, VK=Vata+Kapha, PK=Pitta+Kapha, VPK=all three.
+- Severity normalization (map spoken terms):
+  "very mild", "very-mild" -> "very_mild"
+  "mild" -> "mild"
+  "mild moderate", "mild-moderate", "mild-mod" -> "mild_moderate"
+  "moderate", "mod" -> "moderate"
+  "moderate severe", "moderate-severe" -> "moderate_severe"
+  "severe", "sev" -> "severe"
+- When doshas appear together next to one severity, apply that severity to all listed doshas.
+- When doshas appear separately with separate severities, assign individually.
+- Unmentioned doshas for a system must be null (do not assume zero/absent).
+- ONLY include systems explicitly mentioned in the transcript. Do not list systems not spoken.
+
+ANTI-HALLUCINATION: Never invent system codes. Only use codes from the valid list above.
 
 Schema:
 {
-  "dominance": "V | P | K | VP | VK | PK | VPK | null",
-  "prakriti": "string | null",
-  "vikriti": "string | null",
-  "notes": "string | null",
+  "overall_vpk": {
+    "dominance": "V | P | K | VP | VK | PK | VPK | null",
+    "prakriti": "string | null",
+    "vikriti": "string | null",
+    "notes": "string | null"
+  },
+  "systems": [
+    {
+      "system": "CVS | GIT | IS | PAN | KUB | PRO | RT | LB | GB | LIV | SS | LSCS | LISI | RB | OBG",
+      "vata": "very_mild | mild | mild_moderate | moderate | moderate_severe | severe | null",
+      "pitta": "very_mild | mild | mild_moderate | moderate | moderate_severe | severe | null",
+      "kapha": "very_mild | mild | mild_moderate | moderate | moderate_severe | severe | null",
+      "raw_phrase": "string | null",
+      "needs_doctor_confirmation": ["string"]
+    }
+  ],
   "needs_doctor_confirmation": ["string"]
 }
-""" + _SECTION_FOOTER,
-
-    "pulse_diagnosis": BASE_RULES + """\
-Extract Pulse Diagnosis / Nadi Pariksha: dosha severity per organ system.
-
-System codes:
-CVS cardiovascular, GIT gastrointestinal, IS immune system, PAN pancreas, KUB kidney ureter bladder,
-PRO prostate, RT respiratory tract, LB lower back, GB gallbladder, LIV liver, SS skeletal system,
-LSCS lumbo sacro cranial system, LISI large intestine small intestine, RB reproductive bladder.
-
-Doshas:
-V = Vata, P = Pitta, K = Kapha. VP/PV = Vata and Pitta. VK/KV = Vata and Kapha. PK/KP = Pitta and Kapha. VPK = all three.
-
-Severity normalization:
-- mild -> mild
-- mild moderate or mild-mod -> mild_moderate
-- moderate or mod -> moderate
-- severe or sev -> severe
-
-Parsing:
-- When doshas appear together next to one severity, apply that severity to all doshas.
-- When doshas appear separately with separate severities, assign individually.
-- Unmentioned doshas are null.
-
-Schema:
-[
-  {
-    "system": "CVS | GIT | IS | PAN | KUB | PRO | RT | LB | GB | LIV | SS | LSCS | LISI | RB",
-    "vata": "mild | mild_moderate | moderate | severe | null",
-    "pitta": "mild | mild_moderate | moderate | severe | null",
-    "kapha": "mild | mild_moderate | moderate | severe | null",
-    "raw_phrase": "string | null",
-    "needs_doctor_confirmation": ["string"]
-  }
-]
 """ + _SECTION_FOOTER,
 
     "ayurvedic_assessment_extended": BASE_RULES + """\
@@ -408,27 +514,33 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "ayurvedic_supplements": BASE_RULES + """\
+    "ayurvedic_supplements": BASE_RULES + _SGP_MEDICINE_KNOWLEDGE + """\
 Extract Ayurvedic supplements and SGP proprietary medicines prescribed or currently used.
 
 Rules:
-- Capture SGP medicine codes exactly as spoken.
-- SGP dose sequence, when four values are dictated, is morning, afternoon, evening, night.
-- Do not interpret the meaning of SGP medicine codes.
-- Capture standard Ayurvedic medicines separately from allopathic medicines.
+- APPLY the SGP MEDICINE CANONICAL NAME CORRECTION TABLE above to fix any misspelled medicine names.
+- When the doctor says a name that matches a known SGP canonical name (or variant), output the canonical name.
+- SGP dose sequence when spoken as four values: morning / afternoon / evening / night.
+- When dose is spoken as a fraction sequence (e.g. "quarter half one", "1/4-1/2-1"), map:
+  first value = dose_morning, second = dose_evening (BID), OR map all four if four values given.
+- start_week: capture which week the medicine starts (e.g. "1st week", "2nd week").
+- Do not interpret or translate the clinical meaning of SGP codes.
+- Capture standard Ayurvedic medicines with their classical names.
+- Do NOT mix allopathic medicines here; put them in treatment_and_background.
 
 Schema:
 [
   {
     "name": "string",
     "medicine_category": "SGP proprietary | Ayurvedic classical | Ayurvedic supplement | herb | unknown | null",
+    "start_week": "string | null",
     "dose_morning": "string | null",
     "dose_afternoon": "string | null",
     "dose_evening": "string | null",
     "dose_night": "string | null",
     "dose": "string | null",
-    "frequency": "string | null",
-    "route": "string | null",
+    "frequency": "OD | BID | TDS | QID | SOS | string | null",
+    "route": "PO (Oral) | topical | nasal | string | null",
     "duration": "string | null",
     "timing": "string | null",
     "indication": "string | null",
@@ -438,13 +550,17 @@ Schema:
 ]
 """ + _SECTION_FOOTER,
 
-    "panchakarma": BASE_RULES + """\
-Extract Panchakarma therapy prescription details.
+    "panchakarma": BASE_RULES + _SGP_PROCEDURE_KNOWLEDGE + """\
+Extract Panchakarma and classical therapy prescription details.
 
 Rules:
+- APPLY the SGP PROCEDURE CANONICAL NAME CORRECTION TABLE above to fix any misspelled procedure names.
+- When the doctor names a procedure that matches a canonical SGP procedure, output the canonical name.
 - One procedure or procedure combination per session object.
-- Capture procedure, companion procedure, oils/ingredients, session count, temperature, duration, body site, laterality and remarks.
-- Do not invent oils, session counts or temperatures.
+- Capture procedure, companion procedure, oils/ingredients, session count, temperature, duration, body site, laterality, remarks.
+- Do not invent oils, session counts, or temperatures not spoken.
+- If doctor says "already done" for a procedure, set status to "completed". If prescribed, set to "prescribed".
+- status field: "prescribed" | "completed" | "ongoing" | null.
 
 Schema:
 {
@@ -460,6 +576,7 @@ Schema:
       "duration_per_session": "string | null",
       "temperature_celsius": "number | null",
       "sequence_or_schedule": "string | null",
+      "status": "prescribed | completed | ongoing | null",
       "indication": "string | null",
       "contraindication_or_caution_mentioned": ["string"],
       "remarks": "string | null",
@@ -536,33 +653,6 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "disease_history": BASE_RULES + """\
-Extract known disease history and chronic comorbidities.
-
-Rules:
-- Capture known diagnosed diseases, their duration, control status, complications and current treatment if stated.
-- Do not infer diseases from medicines.
-- If the doctor says no history of a disease, put it in denied_conditions.
-
-Schema:
-{
-  "known_conditions": [
-    {
-      "condition": "string",
-      "duration": "string | null",
-      "status": "controlled | uncontrolled | stable | active | resolved | unknown | null",
-      "current_treatment": "string | null",
-      "complications": ["string"],
-      "last_known_measurement": "string | null",
-      "notes": "string | null",
-      "needs_doctor_confirmation": ["string"]
-    }
-  ],
-  "denied_conditions": ["string"],
-  "risk_factors": ["string"],
-  "disease_history_summary": "string | null"
-}
-""" + _SECTION_FOOTER,
 
     "past_medical_history": BASE_RULES + """\
 Extract past medical, surgical, hospitalization, trauma and family history.
@@ -715,31 +805,6 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "review_of_systems": BASE_RULES + """\
-Extract Review of Systems by body system.
-
-Rules:
-- For each system mentioned, list present and absent symptoms.
-- Do not invent normal findings for unmentioned systems.
-- If the doctor says "all other systems negative", record it in global_notes.
-
-Schema:
-{
-  "general": {"present": ["string"], "absent": ["string"]},
-  "ent": {"present": ["string"], "absent": ["string"]},
-  "respiratory": {"present": ["string"], "absent": ["string"]},
-  "cardiovascular": {"present": ["string"], "absent": ["string"]},
-  "gastrointestinal": {"present": ["string"], "absent": ["string"]},
-  "genitourinary": {"present": ["string"], "absent": ["string"]},
-  "neurological": {"present": ["string"], "absent": ["string"]},
-  "musculoskeletal": {"present": ["string"], "absent": ["string"]},
-  "skin": {"present": ["string"], "absent": ["string"]},
-  "endocrine": {"present": ["string"], "absent": ["string"]},
-  "psychiatric": {"present": ["string"], "absent": ["string"]},
-  "global_notes": "string | null",
-  "needs_doctor_confirmation": ["string"]
-}
-""" + _SECTION_FOOTER,
 
     "vitals_anthropometry": BASE_RULES + """\
 Extract vitals and anthropometry.
@@ -818,38 +883,6 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "local_examination": BASE_RULES + """\
-Extract local examination findings for the affected area or system.
-
-Rules:
-- This is for region-specific findings such as knee, spine, shoulder, wound, skin lesion or local swelling.
-- Do not include general systemic examination unless it is locally relevant.
-
-Schema:
-{
-  "local_exams": [
-    {
-      "body_site": "string | null",
-      "laterality": "right | left | bilateral | midline | generalized | null",
-      "inspection": "string | null",
-      "palpation": "string | null",
-      "tenderness": "string | null",
-      "swelling": "string | null",
-      "warmth": "string | null",
-      "deformity": "string | null",
-      "range_of_motion": "string | null",
-      "special_tests": ["string"],
-      "gait": "string | null",
-      "neurological_findings": "string | null",
-      "vascular_findings": "string | null",
-      "skin_or_wound_findings": "string | null",
-      "impression_from_exam": "string | null",
-      "needs_doctor_confirmation": ["string"]
-    }
-  ],
-  "local_exam_summary": "string | null"
-}
-""" + _SECTION_FOOTER,
 
     "investigation_reports": BASE_RULES + """\
 Extract investigations, reports and tests advised.
@@ -931,6 +964,99 @@ Schema:
   "needs_doctor_confirmation": ["string"]
 }
 """ + _SECTION_FOOTER,
+
+    "exercises_yoga": BASE_RULES + """\
+Extract exercises, yoga, and physical activity prescriptions.
+
+Rules:
+- Capture only exercises explicitly prescribed by the doctor.
+- Each exercise gets its own object. Do not merge separate exercises.
+- frequency: how often (daily, alternate days, twice a week, etc.).
+- duration_minutes: only if explicitly stated.
+- sequence_note: any ordering instruction (e.g., "do after Abhyanga").
+- Do NOT include Panchakarma procedures here; only physical exercises and yoga asanas.
+
+Schema:
+{
+  "exercises": [
+    {
+      "name": "string",
+      "category": "yoga | stretching | breathing | walking | swimming | general_exercise | null",
+      "frequency": "string | null",
+      "duration_minutes": "number | null",
+      "repetitions": "string | null",
+      "sequence_note": "string | null",
+      "contraindication_note": "string | null",
+      "remarks": "string | null",
+      "needs_doctor_confirmation": ["string"]
+    }
+  ],
+  "general_activity_advice": "string | null",
+  "restrictions": ["string"],
+  "needs_doctor_confirmation": ["string"]
+}
+""" + _SECTION_FOOTER,
+
+    "detox_procedures": BASE_RULES + _SGP_PROCEDURE_KNOWLEDGE + """\
+Extract detoxifying procedures, decoctions, home therapies, and SGP-specific protocols.
+
+Rules:
+- APPLY the SGP PROCEDURE CANONICAL NAME CORRECTION TABLE above to identify canonical procedure names.
+- Capture each detox/decoction/home therapy as a separate item.
+- Include: Gandusham, Nithya Virechana Process, Prathivaara Virechana Karma, Anutailam,
+  Steam Inhalations, Fennel Tea, Barley Soup, Rice Soup, Tapioca Soup (Sabu Dana),
+  Raagi Soup (Finger Millet), Jowar Soup, SGP Covid Protocol, hair/skin oil applications,
+  and any other detox, cleanse or decoction procedure mentioned.
+- Do NOT include classical Panchakarma procedures (Abhyanga, Basti, Shirodhara, etc.) here;
+  those belong in the panchakarma section.
+- quantity: e.g., "2 drops", "1-2 tablespoons", "1 litre".
+- frequency: e.g., "daily", "twice a week", "once in a week".
+- timing: e.g., "before bed", "morning empty stomach", "alternate days".
+
+Schema:
+{
+  "detox_items": [
+    {
+      "name": "string",
+      "category": "decoction | oil_application | nasal_drops | virechana | steam | protocol | other | null",
+      "quantity": "string | null",
+      "frequency": "string | null",
+      "timing": "string | null",
+      "instructions": "string | null",
+      "indication": "string | null",
+      "remarks": "string | null",
+      "needs_doctor_confirmation": ["string"]
+    }
+  ],
+  "overall_detox_notes": "string | null",
+  "needs_doctor_confirmation": ["string"]
+}
+""" + _SECTION_FOOTER,
+
+    "followup_details": BASE_RULES + """\
+Extract follow-up and care continuity details.
+
+Rules:
+- Capture assigned doctor, follow-up doctor name and contact, next visit date/duration.
+- If the doctor mentions different doctors for different purposes (e.g., assigned vs followup), capture separately.
+- Do not infer doctor names from context; only use explicitly dictated names.
+- next_visit_date: as spoken (e.g., "after 2 weeks", "15th March").
+- followup_doc_contact: phone number or contact as spoken.
+
+Schema:
+{
+  "assigned_doc": "string | null",
+  "followup_doc_name": "string | null",
+  "followup_doc_contact": "string | null",
+  "followup_doc_department": "string | null",
+  "next_visit_date": "string | null",
+  "next_visit_duration": "string | null",
+  "followup_instructions": "string | null",
+  "referral_doctor": "string | null",
+  "referral_reason": "string | null",
+  "needs_doctor_confirmation": ["string"]
+}
+""" + _SECTION_FOOTER,
 }
 
 # -----------------------------------------------------------------------------
@@ -939,7 +1065,7 @@ Schema:
 
 QUALITY_PROMPTS: dict[str, str] = {
     "missing_information_check": BASE_RULES + """\
-You will receive the full case sheet draft JSON. Identify missing information needed for a complete, elaborate clinical case sheet.
+You will receive the full case sheet draft JSON. Identify missing information needed for a complete clinical case sheet.
 
 Rules:
 - Do not invent missing values.
@@ -948,6 +1074,7 @@ Rules:
 - If a symptom is present but site/duration/laterality/severity are missing, flag them.
 - If medications are present but dose/frequency/route are missing, flag them.
 - If treatment plan exists without follow-up, flag follow-up.
+- Check that exercises_yoga, detox_procedures, and followup_details sections are present if treatment was prescribed.
 
 Return JSON schema:
 {
@@ -961,7 +1088,10 @@ Return JSON schema:
     "medication_history": "complete | partial | missing",
     "past_history": "complete | partial | missing",
     "examination": "complete | partial | missing",
-    "assessment_plan": "complete | partial | missing"
+    "assessment_plan": "complete | partial | missing",
+    "exercises_yoga": "complete | partial | missing | not_applicable",
+    "detox_procedures": "complete | partial | missing | not_applicable",
+    "followup_details": "complete | partial | missing"
   }
 }
 """,
@@ -972,13 +1102,15 @@ You will receive the full case sheet draft JSON. Identify contradictions, ambigu
 Check for:
 - left/right/bilateral conflicts.
 - duration conflicts.
-- allergy conflicts.
+- allergy conflicts (substance listed as both allergic and prescribed).
 - same medicine repeated with different doses.
 - male patient with pregnancy/gynecology entries.
 - female patient with prostate entries.
 - diagnosis/plan mismatch.
-- unclear speech-to-text terms.
+- unclear or garbled speech-to-text terms (flag as ambiguous).
 - unsupported plan items not present in dictated assessment.
+- non-medical characters or symbols appearing in clinical fields (flag as data quality issue).
+- SGP medicine names that appear misspelled (not matching canonical names).
 
 Return JSON schema:
 {
@@ -987,6 +1119,7 @@ Return JSON schema:
   ],
   "ambiguous_items": ["string"],
   "duplicate_items": ["string"],
+  "data_quality_issues": ["string"],
   "unsafe_or_sensitive_items_for_review": ["string"],
   "overall_quality_status": "ready_for_review | needs_completion | unsafe_until_review"
 }
@@ -1016,6 +1149,7 @@ Rules:
 - Preserve all clinical facts.
 - Do not add new clinical facts.
 - If uncertain, place content in _raw or needs_doctor_confirmation.
+- Remove any non-ASCII, non-Latin, non-Sanskrit characters found in string values.
 - Return only valid JSON.
 """,
 }
@@ -1037,6 +1171,8 @@ Strict rules:
 - If a field is missing, write "Not documented" in the markdown.
 - If a field is unclear, write "Needs doctor confirmation".
 - Preserve Ayurvedic, SGP and allopathic terms exactly.
+- NEVER output internal field names (needs_doctor_confirmation, _raw, _error) as clinical text.
+- NEVER output non-ASCII characters in any field.
 - Output only valid JSON.
 
 Return JSON schema:
@@ -1050,11 +1186,12 @@ Return JSON schema:
     "pulse_diagnosis": "string",
     "ayurvedic_diagnosis": "string",
     "allopathic_diagnosis": "string",
-    "review_of_systems": "string",
     "systemic_examination": "string",
     "sgp_rx": "string",
     "allopathic_medicines": "string",
     "panchakarma": "string",
+    "detox_procedures": "string",
+    "exercises_yoga": "string",
     "home_remedies": "string",
     "diet_include": "string",
     "diet_exclude": "string",
@@ -1066,6 +1203,7 @@ Return JSON schema:
     "family_history": "string",
     "allergies": "string",
     "follow_up": "string",
+    "followup_doc": "string",
     "prognosis": "string",
     "notes": "string"
   },
@@ -1084,24 +1222,28 @@ The case_sheet_markdown must use this section order:
 1. Encounter Details
 2. Chief Complaints
 3. History of Present Illness / Anamnesis
-4. Symptom Analysis
-5. Past Medical and Disease History
-6. Surgical / Hospitalization History
-7. Medication and Treatment History
-8. Allergy and Adverse Reaction History
-9. Family History
-10. Personal and Lifestyle History
-11. Menstrual / Obstetric History, if applicable
-12. Vitals and Anthropometry
-13. General Examination
-14. Systemic Examination
-15. Local Examination
-16. Review of Systems
-17. Investigations and Reports
-18. Ayurvedic Assessment
-19. Allopathic / Integrated Assessment
-20. Treatment Plan
-21. Doctor Review Checklist
+4. Past Medical History
+5. Surgical / Hospitalization History
+6. Medication and Treatment History
+7. Allergy History
+8. Family History
+9. Personal and Lifestyle History
+10. Menstrual / Obstetric History (if applicable)
+11. Vitals and Anthropometry
+12. General Examination
+13. Systemic Examination
+14. Investigations and Reports
+15. Pulse Diagnosis (Nadi Pariksha)
+16. Ayurvedic Assessment
+17. Allopathic / Integrated Assessment
+18. Ayurvedic Supplements (SGP Rx)
+19. Panchakarma / Purvakarma Therapies
+20. Detoxifying Procedures and Decoctions
+21. Exercises and Yoga
+22. Diet Plan (Include / Exclude)
+23. Lifestyle Advice
+24. Follow-Up Details
+25. Doctor Review Checklist
 """,
 
     "doctor_review_summary": BASE_RULES + """\
@@ -1166,7 +1308,6 @@ Return JSON schema:
   "pulse_diagnosis": "string",
   "ayurvedic_diagnosis": "string",
   "allopathic_diagnosis": "string",
-  "review_of_systems": "string",
   "systemic_examination": "string",
   "sgp_rx": "string",
   "allopathic_medicines": "string",
@@ -1197,33 +1338,31 @@ SECTION_MAX_TOKENS: dict[str, int] = {
     "encounter_context": 1200,
     "transcript_cleanup": 3000,
     "chief_complaint": 1800,
-    "symptom_analysis": 3000,
     "anamnesis": 2500,
-    "overall_vpk": 1000,
-    "pulse_diagnosis": 2200,
+    "pulse_diagnosis": 2500,
     "ayurvedic_assessment_extended": 2500,
-    "ayurvedic_supplements": 2500,
-    "panchakarma": 2800,
+    "ayurvedic_supplements": 3000,
+    "panchakarma": 3000,
+    "exercises_yoga": 2000,
+    "detox_procedures": 2500,
+    "followup_details": 1500,
     "treatment_and_background": 2500,
     "medication_history": 3000,
-    "disease_history": 2800,
     "past_medical_history": 2500,
     "surgical_history": 2200,
     "allergy_history": 2000,
     "family_history_detailed": 2000,
     "personal_history": 2200,
     "menstrual_obstetric_history": 2000,
-    "review_of_systems": 2600,
     "vitals_anthropometry": 1800,
     "general_examination": 2200,
     "systemic_examination": 2500,
-    "local_examination": 2800,
     "investigation_reports": 3000,
     "assessment_and_plan": 3500,
     "missing_information_check": 3000,
     "contradiction_check": 3000,
     "red_flag_check": 2500,
-    "final_case_sheet": 7000,
+    "final_case_sheet": 8000,
     "doctor_review_summary": 2500,
     "patient_friendly_summary": 2500,
     "erpnext_field_mapper": 3500,
@@ -1236,10 +1375,9 @@ SECTION_MAX_TOKENS: dict[str, int] = {
 DISPLAY_SECTION_ORDER: list[str] = [
     "patient_identity",
     "encounter_context",
+    "followup_details",
     "chief_complaint",
-    "symptom_analysis",
     "anamnesis",
-    "disease_history",
     "past_medical_history",
     "surgical_history",
     "medication_history",
@@ -1250,14 +1388,13 @@ DISPLAY_SECTION_ORDER: list[str] = [
     "vitals_anthropometry",
     "general_examination",
     "systemic_examination",
-    "local_examination",
-    "review_of_systems",
     "investigation_reports",
-    "overall_vpk",
     "pulse_diagnosis",
     "ayurvedic_assessment_extended",
     "ayurvedic_supplements",
     "panchakarma",
+    "detox_procedures",
+    "exercises_yoga",
     "treatment_and_background",
     "assessment_and_plan",
 ]
@@ -1282,15 +1419,16 @@ ERP_FIELD_MAPPING_RULES: dict[str, str] = {
     "bp": "Use vitals_anthropometry.bp.",
     "pr": "Use vitals_anthropometry.pulse_rate.",
     "rr": "Use vitals_anthropometry.respiratory_rate.",
-    "vpk_dominance": "Use overall_vpk.dominance or ayurvedic_assessment_extended.vpk_dominance.",
-    "pulse_diagnosis": "Summarize pulse_diagnosis array.",
+    "vpk_dominance": "Use pulse_diagnosis.overall_vpk.dominance or ayurvedic_assessment_extended.vpk_dominance.",
+    "pulse_diagnosis": "Summarize pulse_diagnosis.systems (each system row: system code, vata/pitta/kapha severity) and overall_vpk.",
     "ayurvedic_diagnosis": "Use assessment_and_plan.ayurvedic_diagnosis or ayurvedic_assessment_extended.ayurvedic_diagnosis.",
     "allopathic_diagnosis": "Join assessment_and_plan.allopathic_diagnosis.",
-    "review_of_systems": "Compact summary of review_of_systems.",
-    "systemic_examination": "Compact summary of systemic_examination plus local_examination if needed.",
-    "sgp_rx": "Summarize ayurvedic_supplements with SGP medicines.",
+    "systemic_examination": "Compact summary of systemic_examination fields only. Do not include needs_doctor_confirmation text.",
+    "sgp_rx": "Summarize ayurvedic_supplements: each medicine name with start_week, dose, frequency.",
     "allopathic_medicines": "Summarize treatment_and_background.current_medications and medication_history allopathic medicines.",
-    "panchakarma": "Summarize panchakarma sessions.",
+    "panchakarma": "Summarize panchakarma.sessions with procedure, session_count, status, oils.",
+    "detox_procedures": "Summarize detox_procedures.detox_items with name, quantity, frequency, timing.",
+    "exercises_yoga": "Summarize exercises_yoga.exercises with name, frequency, remarks.",
     "home_remedies": "Use assessment_and_plan.plan.home_remedies.",
     "diet_include": "Use assessment_and_plan.plan.diet_advice.include.",
     "diet_exclude": "Use assessment_and_plan.plan.diet_advice.exclude.",
@@ -1298,10 +1436,11 @@ ERP_FIELD_MAPPING_RULES: dict[str, str] = {
     "investigations_advised": "Use investigation_reports.investigations_advised and assessment_and_plan.plan.investigations.",
     "personal_history_diet": "Use personal_history.diet and personal_history.diet_details.",
     "personal_history_sleep": "Use personal_history.sleep_hours or personal_history.sleep_quality.",
-    "past_medical_history": "Use disease_history.known_conditions and past_medical_history.medical.",
+    "past_medical_history": "Use past_medical_history.medical.",
     "family_history": "Use family_history_detailed.family_conditions or past_medical_history.family_history.",
     "allergies": "Use allergy_history.allergies plus past_medical_history.allergies.",
-    "follow_up": "Use assessment_and_plan.plan.follow_up.",
+    "follow_up": "Use assessment_and_plan.plan.follow_up. Also check followup_details.next_visit_date.",
+    "followup_doc": "Use followup_details.followup_doc_name and followup_details.followup_doc_contact.",
     "prognosis": "Use assessment_and_plan.prognosis.",
     "notes": "Store final_case_sheet.case_sheet_markdown plus full JSON backup.",
 }

@@ -36,10 +36,10 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemini-2.5-flash")
+PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemma-4-31b-it:free")
 MODEL_CANDIDATES = [
     PRIMARY_MODEL,
-    "mistralai/mistral-7b-instruct:free",
+    "google/gemma-4-26b-a4b-it:free",
     "openai/gpt-4o-mini",
 ]
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
