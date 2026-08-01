@@ -207,14 +207,14 @@ class LLMService:
                     "max_tokens": int(max_tokens),
                 }
                 response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-                if response.status_code == 404:
-                    logger.warning("OpenRouter model not found: %s. Trying fallback.", model)
+                if response.status_code in (400, 404, 429, 502, 503, 504):
+                    logger.warning("OpenRouter error %s for model %s: %s. Trying fallback.", response.status_code, model, response.text)
                     continue
                 response.raise_for_status()
                 data = response.json()
                 return data["choices"][0]["message"]["content"]
 
-        raise RuntimeError("All configured OpenRouter models returned 404. Set LLM_MODEL to a valid slug.")
+        raise RuntimeError(f"All configured OpenRouter models ({', '.join(MODEL_CANDIDATES)}) failed or were rate-limited (429/5xx).")
 
     def _parse_json(self, raw: str) -> Optional[Any]:
         cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip()
