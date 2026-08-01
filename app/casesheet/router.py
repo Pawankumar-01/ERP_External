@@ -613,6 +613,42 @@ def _format_panchakarma(panca: Any) -> str:
     return "\n".join(lines)
 
 
+def _format_allergy_list(items: Any) -> list:
+    results = []
+    for item in _as_list(items):
+        if not isinstance(item, dict):
+            val = _clean(item)
+            if val and val.lower() not in [r.lower() for r in results]:
+                results.append(val)
+            continue
+        substance = _clean(item.get("substance") or item.get("allergen") or item.get("name"))
+        if not substance:
+            continue
+        severity = _clean(item.get("severity"))
+        status = _clean(item.get("status"))
+        details = [x for x in [severity, status] if x and x.lower() != "unknown"]
+        formatted = f"{substance} ({', '.join(details)})" if details else substance
+        if not any(substance.lower() in ex.lower() for ex in results):
+            results.append(formatted)
+    return results
+
+
+def _format_exam_dict(exam: Any, prefix: str = "") -> str:
+    if not isinstance(exam, dict):
+        val = _clean(exam)
+        return f"{prefix}: {val}" if val and prefix else val
+    parts = []
+    for key, val in exam.items():
+        if key == "needs_doctor_confirmation" or val in (None, "", [], {}, "unknown", "absent"):
+            continue
+        clean_key = key.replace("_", " ").capitalize()
+        clean_val = _clean(val)
+        if clean_val:
+            parts.append(f"{clean_key}: {clean_val}")
+    res = "; ".join(parts)
+    return f"{prefix}: {res}" if res and prefix else res
+
+
 def _map_draft_to_encounter(
     patient_id: str,
     doctor_id: str,
@@ -696,21 +732,20 @@ def _map_draft_to_encounter(
     allopathic_medicines = "\n".join(x for x in [allopathic_from_treat, allopathic_from_medhist] if x)
 
     sgp_rx = _format_sgp_rx(ayur)
-    if isinstance(medhist, dict):
-        sgp_from_medhist = _format_medicines_from_current(medhist.get("current_medicines"), system_filter="SGP")
-        if sgp_from_medhist:
-            sgp_rx = (sgp_rx + "\n" if sgp_rx else "") + sgp_from_medhist
 
     allergies = []
     if isinstance(allergy, dict):
-        for item in _as_list(allergy.get("allergies")):
-            allergies.append(_clean(item))
-        if allergy.get("no_known_allergies") is True:
+        allergies.extend(_format_allergy_list(allergy.get("allergies")))
+        if allergy.get("no_known_allergies") is True and not allergies:
             allergies.append("No known allergies")
     if isinstance(treat, dict):
-        allergies.extend(_as_list(treat.get("allergies")))
+        for a in _format_allergy_list(treat.get("allergies")):
+            if not any(a.lower() in ex.lower() or ex.lower() in a.lower() for ex in allergies):
+                allergies.append(a)
     if isinstance(pmh, dict):
-        allergies.extend(_as_list(pmh.get("allergies")))
+        for a in _format_allergy_list(pmh.get("allergies")):
+            if not any(a.lower() in ex.lower() or ex.lower() in a.lower() for ex in allergies):
+                allergies.append(a)
 
     family_text = ""
     if isinstance(family, dict) and family.get("family_conditions"):
@@ -724,13 +759,25 @@ def _map_draft_to_encounter(
 
     sysex_text = _clean(sysex.get("summary")) if isinstance(sysex, dict) else _clean(sysex)
     if not sysex_text and isinstance(sysex, dict):
-        sysex_text = _join([f"{key}: {_clean(val)}" for key, val in sysex.items() if val and key != "needs_doctor_confirmation"], sep="\n")
+        sysex_text = _format_exam_dict(sysex)
     if isinstance(genex, dict) and _clean(genex):
-        sysex_text = (sysex_text + "\n" if sysex_text else "") + "General: " + _clean(genex)
+        gen_str = _format_exam_dict(genex, "General")
+        if gen_str:
+            sysex_text = (sysex_text + "\n\n" if sysex_text else "") + gen_str
     if isinstance(local, dict) and _clean(local):
-        sysex_text = (sysex_text + "\n" if sysex_text else "") + "Local: " + _clean(local)
+        loc_str = _format_exam_dict(local, "Local")
+        if loc_str:
+            sysex_text = (sysex_text + "\n\n" if sysex_text else "") + loc_str
 
     fup_text = _join([v for v in [fup.get("daily"), fup.get("weekly"), fup.get("monthly"), fup.get("next_visit")] if v], sep=" | ") if isinstance(fup, dict) else ""
+    if not fup_text and isinstance(draft.get("followup_details"), dict):
+        fup_details = draft.get("followup_details") or {}
+        fup_parts = [
+            f"Assigned Doc: {_clean(fup_details.get('assigned_doc'))}" if fup_details.get("assigned_doc") else "",
+            f"Next Visit: {_clean(fup_details.get('next_visit_duration') or fup_details.get('next_visit_date'))}" if (fup_details.get('next_visit_duration') or fup_details.get('next_visit_date')) else "",
+            _clean(fup_details.get("followup_instructions"))
+        ]
+        fup_text = " | ".join(p for p in fup_parts if p)
 
     investigations_text = _join(plan.get("investigations") if isinstance(plan, dict) else [])
     if isinstance(inv, dict):
@@ -739,6 +786,7 @@ def _map_draft_to_encounter(
             investigations_text = (investigations_text + ", " if investigations_text else "") + inv_advised
 
     full_notes_payload = {
+        **draft,
         "case_sheet_markdown": final.get("case_sheet_markdown") if isinstance(final, dict) else None,
         "case_sheet_summary": final.get("case_sheet_summary") if isinstance(final, dict) else None,
         "doctor_review_summary": draft.get("_doctor_review_summary"),

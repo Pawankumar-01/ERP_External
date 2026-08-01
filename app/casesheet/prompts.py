@@ -520,9 +520,15 @@ Extract Ayurvedic supplements and SGP proprietary medicines prescribed or curren
 Rules:
 - APPLY the SGP MEDICINE CANONICAL NAME CORRECTION TABLE above to fix any misspelled medicine names.
 - When the doctor says a name that matches a known SGP canonical name (or variant), output the canonical name.
+- CRITICAL DOSAGE FRACTION NORMALIZATION: Always convert spoken fractions or raw STT numeric strings into clean standard mathematical fractions:
+  * "one fourth" / "1 4th" / "1 by 4th" / "quarter" -> "1/4"
+  * "half" / "one half" -> "1/2"
+  * "three fourths" / "3 4th" / "3 by 4th" -> "3/4"
+  * "one eighth" / "1 8th" -> "1/8"
+  * "one ninth" / "1 9th" -> "1/9"
+- DOSAGE SEQUENCE & TITRATION: When multiple doses or fractions are spoken in a series for a medicine (e.g., "1 4th, half, and 3 by 4th" or "1/4, 1/2, 3/4"), format them cleanly as a step-up progression: "1/4 -> 1/2 -> 3/4" in the appropriate dose field (or in both dose_morning / dose_evening if BID is indicated). Do NOT leave messy STT phrases like "1 4th half".
+- GLOBAL FREQUENCY PROPAGATION: If a trailing or overarching command is spoken such as "all twice daily morning and evening", "take all BID", or "on an empty stomach", apply that frequency ("BID") and timing ("morning and evening") to ALL medicines in the extracted list unless specifically overridden for an individual item.
 - SGP dose sequence when spoken as four values: morning / afternoon / evening / night.
-- When dose is spoken as a fraction sequence (e.g. "quarter half one", "1/4-1/2-1"), map:
-  first value = dose_morning, second = dose_evening (BID), OR map all four if four values given.
 - start_week: capture which week the medicine starts (e.g. "1st week", "2nd week").
 - Do not interpret or translate the clinical meaning of SGP codes.
 - Capture standard Ayurvedic medicines with their classical names.
