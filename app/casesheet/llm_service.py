@@ -16,6 +16,7 @@ All failures return usable JSON instead of raising to the caller.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -37,11 +38,19 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemma-4-31b-it:free")
-MODEL_CANDIDATES = [
+_raw_candidates = [
     PRIMARY_MODEL,
     "google/gemma-4-31b-it:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "microsoft/phi-4:free",
+    "mistralai/mistral-7b-instruct:free",
     "google/gemma-4-26b-a4b-it:free",
 ]
+MODEL_CANDIDATES = []
+for m in _raw_candidates:
+    if m and m not in MODEL_CANDIDATES:
+        MODEL_CANDIDATES.append(m)
+
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS_DEFAULT", "2000"))
 
@@ -209,6 +218,8 @@ class LLMService:
                 response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
                 if response.status_code in (400, 404, 429, 502, 503, 504):
                     logger.warning("OpenRouter error %s for model %s: %s. Trying fallback.", response.status_code, model, response.text)
+                    if response.status_code == 429:
+                        await asyncio.sleep(0.5)
                     continue
                 response.raise_for_status()
                 data = response.json()
