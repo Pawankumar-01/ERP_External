@@ -527,6 +527,8 @@ Rules:
   * "one eighth" / "1 8th" -> "1/8"
   * "one ninth" / "1 9th" -> "1/9"
 - DOSAGE SEQUENCE & TITRATION: When multiple doses or fractions are spoken in a series for a medicine (e.g., "1 4th, half, and 3 by 4th" or "1/4, 1/2, 3/4"), format them cleanly as a step-up progression: "1/4 -> 1/2 -> 3/4" in the appropriate dose field (or in both dose_morning / dose_evening if BID is indicated). Do NOT leave messy STT phrases like "1 4th half".
+- MULTI-WEEK DOSAGE MATRIX (8 WEEKS): When week-by-week dosages are dictated (e.g. "1st week 1/4, 2nd week 1/2, from 3rd week onwards 1 tablet"), extract an explicit array of 8 strings corresponding to week 1 through week 8 dosing in the "weeks" field (e.g., ["1/4", "1/2", "1", "1", "1", "1", "1", "1"]).
+- QUANTITY / BASE WEIGHT: Always output "quantity_mg" as "1000mg" unless explicitly dictated otherwise.
 - GLOBAL FREQUENCY PROPAGATION: If a trailing or overarching command is spoken such as "all twice daily morning and evening", "take all BID", or "on an empty stomach", apply that frequency ("BID") and timing ("morning and evening") to ALL medicines in the extracted list unless specifically overridden for an individual item.
 - SGP dose sequence when spoken as four values: morning / afternoon / evening / night.
 - start_week: capture which week the medicine starts (e.g. "1st week", "2nd week").
@@ -539,6 +541,8 @@ Schema:
   {
     "name": "string",
     "medicine_category": "SGP proprietary | Ayurvedic classical | Ayurvedic supplement | herb | unknown | null",
+    "quantity_mg": "1000mg | string",
+    "weeks": ["string"],
     "start_week": "string | null",
     "dose_morning": "string | null",
     "dose_afternoon": "string | null",
@@ -1063,6 +1067,39 @@ Schema:
   "needs_doctor_confirmation": ["string"]
 }
 """ + _SECTION_FOOTER,
+
+    "prescription_sheet": BASE_RULES + """\
+Extract or structure executive summaries for the clinical prescription sheet and patient report.
+
+Rules:
+- Capture quick reference summaries for allopathy medicines, panchakarma, tests to be done, and others.
+- Capture daily regimen instructions for oil applications, detox procedures, home remedies, and breathing exercises.
+- Capture duration-based diet plans (e.g. PPD 4 weeks, KPD 2 weeks).
+
+Schema:
+{
+  "quick_summary": {
+    "allopathy_medicines": "string | null",
+    "panchakarma": "string | null",
+    "tests_to_be_done": "string | null",
+    "others": "string | null"
+  },
+  "daily_regimen": {
+    "oil_applications": "string | null",
+    "detox_procedures": "string | null",
+    "home_remedies": "string | null",
+    "breathing_exercises": "string | null"
+  },
+  "diet_plan_weeks": [
+    {
+      "diet_item": "string",
+      "no_of_weeks": "string"
+    }
+  ],
+  "review_after": "string | null",
+  "needs_doctor_confirmation": ["string"]
+}
+""" + _SECTION_FOOTER,
 }
 
 # -----------------------------------------------------------------------------
@@ -1352,6 +1389,7 @@ SECTION_MAX_TOKENS: dict[str, int] = {
     "exercises_yoga": 2000,
     "detox_procedures": 2500,
     "followup_details": 1500,
+    "prescription_sheet": 2500,
     "treatment_and_background": 2500,
     "medication_history": 3000,
     "past_medical_history": 2500,
@@ -1403,6 +1441,7 @@ DISPLAY_SECTION_ORDER: list[str] = [
     "exercises_yoga",
     "treatment_and_background",
     "assessment_and_plan",
+    "prescription_sheet",
 ]
 
 COMPOSER_SECTIONS = set(COMPOSER_PROMPTS.keys())

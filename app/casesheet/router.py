@@ -648,6 +648,149 @@ def _format_exam_dict(exam: Any, prefix: str = "") -> str:
     res = "; ".join(parts)
     return f"{prefix}: {res}" if res and prefix else res
 
+def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Synthesize prescription_sheet (quick_summary, daily_regimen, diet_plan_weeks, review_after)
+    from existing consultation sections if not explicitly provided or to enrich partial entries.
+    """
+    existing_rx = draft.get("prescription_sheet") if isinstance(draft.get("prescription_sheet"), dict) else {}
+    existing_qs = existing_rx.get("quick_summary") if isinstance(existing_rx.get("quick_summary"), dict) else {}
+    existing_dreg = existing_rx.get("daily_regimen") if isinstance(existing_rx.get("daily_regimen"), dict) else {}
+    existing_dietwk = existing_rx.get("diet_plan_weeks") if isinstance(existing_rx.get("diet_plan_weeks"), list) else []
+
+    treat = draft.get("treatment_and_background") or {}
+    medhist = draft.get("medication_history") or {}
+    panca = draft.get("panchakarma") or {}
+    inv = draft.get("investigation_reports") or {}
+    ap = draft.get("assessment_and_plan") or {}
+    plan = ap.get("plan") if isinstance(ap, dict) else {}
+    plan = plan or {}
+    detox = draft.get("detox_procedures") or {}
+    ex = draft.get("exercises_yoga") or {}
+    fup = draft.get("followup_details") or {}
+    plan_fup = plan.get("follow_up") if isinstance(plan, dict) else {}
+    plan_fup = plan_fup or {}
+
+    # Quick summary synthesis
+    allopathic_meds = existing_qs.get("allopathy_medicines")
+    if not allopathic_meds:
+        allopathic_from_treat = _format_medicines_from_current(treat.get("current_medications") if isinstance(treat, dict) else [])
+        allopathic_from_medhist = _format_medicines_from_current(medhist.get("current_medicines") if isinstance(medhist, dict) else [], system_filter="allopathic")
+        allopathic_meds = "\n".join(x for x in [allopathic_from_treat, allopathic_from_medhist] if x) or None
+
+    pk_summary = existing_qs.get("panchakarma")
+    if not pk_summary and isinstance(panca, dict):
+        sessions = panca.get("sessions") or []
+        if sessions:
+            pk_summary = "\n".join([f"• {s.get('procedure') or ''} ({s.get('session_count') or ''} sessions)" for s in sessions if isinstance(s, dict)])
+        else:
+            pk_summary = _clean(panca.get("overall_remarks") or "") or None
+
+    tests_summary = existing_qs.get("tests_to_be_done")
+    if not tests_summary:
+        inv_list = list(plan.get("investigations") or [])
+        if isinstance(inv, dict) and inv.get("investigations_advised"):
+            inv_list.extend(_as_list(inv.get("investigations_advised")))
+        tests_summary = ", ".join([_clean(x) for x in inv_list if _clean(x)]) or None
+
+    others_summary = existing_qs.get("others")
+    if not others_summary and isinstance(fup, dict):
+        others_summary = _clean(fup.get("followup_instructions") or "") or None
+
+    # Daily regimen synthesis
+    oils_list = []
+    detox_list = []
+    if isinstance(detox, dict) and isinstance(detox.get("detox_items"), list):
+        for d in detox.get("detox_items", []):
+            if isinstance(d, dict):
+                name = _clean(d.get("name"))
+                if not name:
+                    continue
+                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga"]):
+                    oils_list.append(f"• {name}: {d.get('instructions') or d.get('remarks') or 'As prescribed'}")
+                else:
+                    detox_list.append(f"• {name} ({d.get('quantity') or ''} {d.get('frequency') or ''}): {d.get('instructions') or ''}".strip())
+
+    oil_app = existing_dreg.get("oil_applications") or ("\n".join(oils_list) if oils_list else None)
+    detox_proc = existing_dreg.get("detox_procedures") or ("\n".join(detox_list) if detox_list else None)
+
+    home_rem = existing_dreg.get("home_remedies")
+    if not home_rem:
+        hr_list = plan.get("home_remedies") or []
+        if hr_list:
+            home_rem = "\n".join([f"• {_clean(h)}" for h in _as_list(hr_list) if _clean(h)]) or None
+
+    breathing_ex = existing_dreg.get("breathing_exercises")
+    if not breathing_ex and isinstance(ex, dict) and isinstance(ex.get("exercises"), list):
+        b_list = []
+        for e in ex.get("exercises", []):
+            if isinstance(e, dict) and (e.get("category") == "breathing" or any(k in (_clean(e.get("name")) or "").lower() for k in ["pranayama", "breathing", "anulom", "kapalabhati", "nostril"])):
+                b_list.append(f"• {e.get('name')}: {e.get('frequency') or ''} {e.get('duration_minutes') or ''} mins")
+        if b_list:
+            breathing_ex = "\n".join(b_list)
+
+    review_after = existing_rx.get("review_after")
+    if not review_after:
+        if isinstance(fup, dict):
+            review_after = _clean(fup.get("next_visit_duration") or fup.get("next_visit_date"))
+        if not review_after and isinstance(plan_fup, dict):
+            review_after = _clean(plan_fup.get("next_visit"))
+
+    return {
+        "quick_summary": {
+            "allopathy_medicines": allopathic_meds,
+            "panchakarma": pk_summary,
+            "tests_to_be_done": tests_summary,
+            "others": others_summary,
+        },
+        "daily_regimen": {
+            "oil_applications": oil_app,
+            "detox_procedures": detox_proc,
+            "home_remedies": home_rem,
+            "breathing_exercises": breathing_ex,
+        },
+        "diet_plan_weeks": existing_dietwk,
+        "review_after": review_after,
+        "needs_doctor_confirmation": existing_rx.get("needs_doctor_confirmation", []),
+    }
+
+
+def _normalize_supplements_weeks(supplements: Any) -> list:
+    """
+    Ensure each Ayurvedic supplement object has quantity_mg and an 8-week dosage array
+    for seamless rendering in the ERPNext Jinja print template's 8-week grid.
+    """
+    if not isinstance(supplements, list):
+        return []
+    norm = []
+    for item in supplements:
+        if not isinstance(item, dict):
+            continue
+        new_item = dict(item)
+        if not new_item.get("quantity_mg"):
+            new_item["quantity_mg"] = "1000mg"
+        if not new_item.get("weeks") or not isinstance(new_item.get("weeks"), list):
+            dose_val = _clean(new_item.get("dose") or new_item.get("dose_morning") or "")
+            if "->" in dose_val or "-" in dose_val:
+                parts = [p.strip() for p in dose_val.replace("->", "-").split("-") if p.strip()]
+                if len(parts) >= 3:
+                    new_item["weeks"] = [parts[0], parts[0], parts[1], parts[1], parts[2], parts[2], parts[-1], parts[-1]]
+                elif len(parts) == 2:
+                    new_item["weeks"] = [parts[0], parts[0], parts[0], parts[0], parts[1], parts[1], parts[1], parts[1]]
+                else:
+                    new_item["weeks"] = [parts[0] if parts else "1"] * 8
+            else:
+                base_dose = dose_val if (dose_val and any(c.isdigit() for c in dose_val)) else "1"
+                new_item["weeks"] = [base_dose] * 8
+        elif len(new_item.get("weeks", [])) < 8:
+            existing = list(new_item.get("weeks", []))
+            last = existing[-1] if existing else "1"
+            while len(existing) < 8:
+                existing.append(last)
+            new_item["weeks"] = existing[:8]
+        norm.append(new_item)
+    return norm
+
 
 def _map_draft_to_encounter(
     patient_id: str,
@@ -785,8 +928,13 @@ def _map_draft_to_encounter(
         if inv_advised:
             investigations_text = (investigations_text + ", " if investigations_text else "") + inv_advised
 
+    synth_rx = _synthesize_prescription_sheet(draft)
+    norm_supp = _normalize_supplements_weeks(draft.get("ayurvedic_supplements"))
+
     full_notes_payload = {
         **draft,
+        "ayurvedic_supplements": norm_supp,
+        "prescription_sheet": synth_rx,
         "case_sheet_markdown": final.get("case_sheet_markdown") if isinstance(final, dict) else None,
         "case_sheet_summary": final.get("case_sheet_summary") if isinstance(final, dict) else None,
         "doctor_review_summary": draft.get("_doctor_review_summary"),
