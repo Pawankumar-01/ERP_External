@@ -220,27 +220,37 @@ function onParticipantLeft(participant) {
 function onTrackSubscribed(track, publication, participant) {
   const { Track } = LivekitClient;
 
-  if (track.kind === Track.Kind.Audio) {
-    // Always attach audio to a dedicated <audio> element
-    // Do NOT attach to the video element — causes echo/sync issues
+  if (track.kind === Track.Kind.Audio || track.kind === 'audio') {
     const audioEl = document.createElement('audio');
     audioEl.autoplay = true;
-    audioEl.id = `audio-${participant.sid}`;
+    audioEl.id = `audio-${publication.trackSid || participant.sid}`;
     document.body.appendChild(audioEl);
     track.attach(audioEl);
     return;
   }
 
   if (participant.identity.startsWith('host:')) {
-    if (track.kind === Track.Kind.Video || track.kind === Track.Kind.Screen) {
-      const vid = document.getElementById('host-video');
+    const vid = document.getElementById('host-video');
+    const badge = document.getElementById('host-name-badge');
+    const isScreenShare = publication.source === Track.Source?.ScreenShare || publication.source === 'screen_share' || track.source === 'screen_share';
+    
+    if (track.kind === Track.Kind.Video || track.kind === 'video' || track.kind === 'screen') {
       vid.style.display = 'block';
       track.attach(vid);
       document.querySelector('#host-tile .tile-placeholder').style.display = 'none';
+      
+      if (isScreenShare) {
+        if (badge) badge.textContent = '🖥 Presenter\'s Screen';
+        showBanner('🖥 Presenter has started sharing screen', 'info');
+        setTimeout(hideBanner, 4000);
+      } else {
+        const name = participant.identity.replace('host:', '').replace(/_/g, ' ');
+        if (badge && !badge.textContent.includes('Screen')) badge.textContent = `🩺 ${name}`;
+      }
     }
   } else {
     const tile = document.getElementById(`tile-${participant.sid}`);
-    if (tile && track.kind === Track.Kind.Video) {
+    if (tile && (track.kind === Track.Kind.Video || track.kind === 'video')) {
       track.attach(tile.querySelector('video'));
     }
   }
@@ -249,17 +259,35 @@ function onTrackSubscribed(track, publication, participant) {
 function onTrackUnsubscribed(track, publication, participant) {
   const { Track } = LivekitClient;
   track.detach();
-  // Clean up dedicated audio elements
-  if (track.kind === Track.Kind.Audio) {
-    document.getElementById(`audio-${participant.sid}`)?.remove();
+  if (track.kind === Track.Kind.Audio || track.kind === 'audio') {
+    document.getElementById(`audio-${publication.trackSid || participant.sid}`)?.remove();
     return;
   }
   if (participant?.identity?.startsWith('host:')) {
-    const hasVideo = [...participant.getTrackPublications().values()]
-      .some(p => p.track?.kind === 'video' && !p.isMuted);
-    if (!hasVideo) {
-      document.getElementById('host-video').style.display = 'none';
-      document.querySelector('#host-tile .tile-placeholder').style.display = 'flex';
+    const isScreenShare = publication.source === Track.Source?.ScreenShare || publication.source === 'screen_share' || track.source === 'screen_share';
+    if (isScreenShare) {
+      showBanner('🖥 Presenter stopped sharing screen', 'info');
+      setTimeout(hideBanner, 3000);
+      const cameraPub = [...participant.getTrackPublications().values()]
+        .find(p => (p.source === Track.Source?.Camera || p.source === 'camera' || p.track?.kind === 'video') && p.track && p.trackSid !== publication.trackSid);
+      const vid = document.getElementById('host-video');
+      const badge = document.getElementById('host-name-badge');
+      if (cameraPub?.track && vid) {
+        cameraPub.track.attach(vid);
+        const name = participant.identity.replace('host:', '').replace(/_/g, ' ');
+        if (badge) badge.textContent = `🩺 ${name}`;
+      } else {
+        if (vid) vid.style.display = 'none';
+        document.querySelector('#host-tile .tile-placeholder').style.display = 'flex';
+        if (badge) badge.textContent = 'Presenter';
+      }
+    } else {
+      const hasVideo = [...participant.getTrackPublications().values()]
+        .some(p => p.track?.kind === 'video' && !p.isMuted && p.trackSid !== publication.trackSid);
+      if (!hasVideo) {
+        document.getElementById('host-video').style.display = 'none';
+        document.querySelector('#host-tile .tile-placeholder').style.display = 'flex';
+      }
     }
   }
 }

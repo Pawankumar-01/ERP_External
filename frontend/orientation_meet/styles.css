@@ -826,3 +826,22 @@ input:focus {
   margin: 0; align-self: center; max-width: 200px; line-height: 1.4;
 }
 .ctrl-spacer { flex: 1; }
+
+/* ── Toast Notifications & Presentation Preview ───────────────────────────── */
+#host-banner, #session-banner {
+  animation: bannerSlideDown 0.3s ease-out;
+}
+@keyframes bannerSlideDown {
+  from { opacity: 0; transform: translate(-50%, -15px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+#host-screen-card {
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+#host-screen-card:not(.hidden) {
+  animation: previewFadeIn 0.4s ease-out;
+}
+@keyframes previewFadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}

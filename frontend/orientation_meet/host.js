@@ -49,6 +49,37 @@ function showScreen(id) {
   });
 }
 
+function showHostBanner(message, type = 'info') {
+  let banner = document.getElementById('host-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'host-banner';
+    banner.style.cssText = `
+      position:fixed; top:68px; left:50%; transform:translateX(-50%); z-index:9999;
+      padding:10px 24px; border-radius:24px; font-size:13px; font-weight:500;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5); transition: opacity 0.3s;
+    `;
+    document.body.appendChild(banner);
+  }
+  const colors = {
+    info:    'background:#253027; color:#e2c47a; border:1px solid #c9a84c',
+    success: 'background:#1a3a22; color:#6dbf80; border:1px solid #4a9a5e',
+    warn:    'background:#3a2010; color:#e07a70; border:1px solid #c0564a',
+  };
+  banner.style.cssText += '; ' + (colors[type] || colors.info);
+  banner.textContent = message;
+  banner.style.opacity = '1';
+  banner.style.display = 'block';
+}
+
+function hideHostBanner() {
+  const banner = document.getElementById('host-banner');
+  if (banner) {
+    banner.style.opacity = '0';
+    setTimeout(() => { banner.style.display = 'none'; }, 300);
+  }
+}
+
 function startTimer() {
   startTime = Date.now();
   timerInterval = setInterval(() => {
@@ -209,39 +240,79 @@ function updateCount() {
 
 // ── Host controls ─────────────────────────────────────────────────────────────
 async function toggleMic() {
-  if (!room) return;
-  micEnabled = !micEnabled;
-  await room.localParticipant.setMicrophoneEnabled(micEnabled);
-  const btn = document.getElementById('btn-mic');
-  btn.className = `ctrl-btn ${micEnabled ? 'ctrl-active' : 'ctrl-muted'}`;
-  document.getElementById('mic-icon').textContent  = micEnabled ? 'MIC' : 'MUTED';
-  btn.querySelector('.ctrl-label').textContent     = micEnabled ? 'Mute' : 'Unmute';
+  if (!room) {
+    showHostBanner('⚠️ Not connected to meeting room.', 'warn');
+    setTimeout(hideHostBanner, 3000);
+    return;
+  }
+  try {
+    micEnabled = !micEnabled;
+    await room.localParticipant.setMicrophoneEnabled(micEnabled);
+    const btn = document.getElementById('btn-mic');
+    btn.className = `ctrl-btn ${micEnabled ? 'ctrl-active' : 'ctrl-muted'}`;
+    document.getElementById('mic-icon').textContent  = micEnabled ? 'MIC' : 'MUTED';
+    btn.querySelector('.ctrl-label').textContent     = micEnabled ? 'Mute' : 'Unmute';
+  } catch (e) {
+    showHostBanner('⚠️ Microphone error: ' + e.message, 'warn');
+    setTimeout(hideHostBanner, 4000);
+  }
 }
 
 async function toggleCam() {
-  if (!room) return;
-  camEnabled = !camEnabled;
-  await room.localParticipant.setCameraEnabled(camEnabled);
-  const btn = document.getElementById('btn-cam');
-  btn.className = `ctrl-btn ${camEnabled ? 'ctrl-active' : 'ctrl-muted'}`;
-  document.getElementById('cam-icon').textContent = camEnabled ? 'CAM' : 'OFF';
-  btn.querySelector('.ctrl-label').textContent    = camEnabled ? 'Camera' : 'Camera off';
+  if (!room) {
+    showHostBanner('⚠️ Not connected to meeting room.', 'warn');
+    setTimeout(hideHostBanner, 3000);
+    return;
+  }
+  try {
+    camEnabled = !camEnabled;
+    await room.localParticipant.setCameraEnabled(camEnabled);
+    const btn = document.getElementById('btn-cam');
+    btn.className = `ctrl-btn ${camEnabled ? 'ctrl-active' : 'ctrl-muted'}`;
+    document.getElementById('cam-icon').textContent = camEnabled ? 'CAM' : 'OFF';
+    btn.querySelector('.ctrl-label').textContent    = camEnabled ? 'Camera' : 'Camera off';
+  } catch (e) {
+    showHostBanner('⚠️ Camera error: ' + e.message, 'warn');
+    setTimeout(hideHostBanner, 4000);
+  }
 }
 
 async function toggleScreenShare() {
-  if (!room) return;
+  if (!room) {
+    showHostBanner('⚠️ Not connected to meeting room.', 'warn');
+    setTimeout(hideHostBanner, 3000);
+    return;
+  }
   const btn = document.getElementById('btn-screen');
+  btn.disabled = true;
   try {
     if (!screenSharing) {
-      await room.localParticipant.setScreenShareEnabled(true, {
-        audio: true,   // capture system audio for orientation videos
-        video: { frameRate: 15, width: 1280, height: 720 },
-      });
+      try {
+        await room.localParticipant.setScreenShareEnabled(true, {
+          audio: true,   // capture system audio when sharing a browser tab
+          video: { frameRate: 15, width: 1280, height: 720 },
+        });
+      } catch (audioErr) {
+        console.warn('Screen share with audio rejected, falling back to video-only:', audioErr.message);
+        await room.localParticipant.setScreenShareEnabled(true, {
+          audio: false,
+          video: { frameRate: 15, width: 1280, height: 720 },
+        });
+        showHostBanner('💡 Screen shared without audio (Select a Browser Tab to share system audio)', 'info');
+        setTimeout(hideHostBanner, 6000);
+      }
       screenSharing = true;
       btn.className = 'ctrl-btn ctrl-active';
       btn.querySelector('.ctrl-icon').textContent  = 'SCR';
       btn.querySelector('.ctrl-label').textContent = 'Stop Share';
       document.getElementById('screen-share-indicator')?.classList.remove('hidden');
+      
+      const screenPub = room.localParticipant.getTrackPublications()
+        .find(p => p.source === LivekitClient.Track.Source.ScreenShare || p.source === 'screen_share');
+      if (screenPub?.track) {
+        screenPub.track.attach(document.getElementById('host-screen-video'));
+        document.getElementById('host-screen-card')?.classList.remove('hidden');
+      }
     } else {
       await room.localParticipant.setScreenShareEnabled(false);
       screenSharing = false;
@@ -249,26 +320,42 @@ async function toggleScreenShare() {
       btn.querySelector('.ctrl-icon').textContent  = 'SCR';
       btn.querySelector('.ctrl-label').textContent = 'Share Screen';
       document.getElementById('screen-share-indicator')?.classList.add('hidden');
+      document.getElementById('host-screen-card')?.classList.add('hidden');
     }
   } catch (e) {
-    console.warn('Screen share error:', e.message);
+    console.warn('Screen share cancelled or failed:', e.message);
+    showHostBanner('⚠️ Screen share cancelled or permission denied', 'warn');
+    setTimeout(hideHostBanner, 4000);
     screenSharing = false;
     btn.className = 'ctrl-btn';
     btn.querySelector('.ctrl-label').textContent = 'Share Screen';
+    document.getElementById('host-screen-card')?.classList.add('hidden');
+  } finally {
+    btn.disabled = false;
   }
 }
 
 async function muteAllPatients() {
-  if (!room) return;
-  // Publish a mute-all data message to all participants
+  if (!room) {
+    showHostBanner('⚠️ Not connected to meeting room.', 'warn');
+    setTimeout(hideHostBanner, 3000);
+    return;
+  }
   const msg = new TextEncoder().encode(JSON.stringify({ type: 'mute_all' }));
   try {
     await room.localParticipant.publishData(msg, { reliable: true });
-    document.getElementById('btn-mute-all').querySelector('.ctrl-label').textContent = 'Muted All';
+    showHostBanner('🔇 Mute command broadcasted to all patients', 'success');
+    setTimeout(hideHostBanner, 3000);
+    const btn = document.getElementById('btn-mute-all');
+    btn.querySelector('.ctrl-label').textContent = 'Muted All';
     setTimeout(() => {
-      document.getElementById('btn-mute-all').querySelector('.ctrl-label').textContent = 'Mute All';
+      btn.querySelector('.ctrl-label').textContent = 'Mute All';
     }, 2000);
-  } catch (e) { console.warn('Mute all error:', e); }
+  } catch (e) { 
+    console.warn('Mute all error:', e);
+    showHostBanner('⚠️ Failed to send mute broadcast: ' + e.message, 'warn');
+    setTimeout(hideHostBanner, 4000);
+  }
 }
 
 async function endSessionForAll() {
