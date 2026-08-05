@@ -807,7 +807,7 @@ def _normalize_supplements_weeks(supplements: Any) -> list:
             continue
         new_item = dict(item)
         if not new_item.get("quantity_mg"):
-            new_item["quantity_mg"] = "1000mg"
+            new_item["quantity_mg"] = str(new_item.get("quantity") or new_item.get("strength") or "").strip()
         weeks = new_item.get("weeks")
         if not weeks or not isinstance(weeks, list):
             dose_val = _clean(new_item.get("dose") or new_item.get("dose_morning") or "")
@@ -887,6 +887,19 @@ def _map_draft_to_encounter(
     final = draft.get("_final_case_sheet") or draft.get("final_case_sheet") or {}
     erp = final.get("erp_field_summaries") if isinstance(final, dict) else {}
     erp = erp or {}
+
+    pat_identity = draft.get("patient_identity") or {}
+    pat_name = _clean(erp.get("patient_name")) or ( _clean(pat_identity.get("patient_name")) if isinstance(pat_identity, dict) else None )
+    pat_gender = _clean(erp.get("gender")) or ( _clean(pat_identity.get("gender")) if isinstance(pat_identity, dict) else None )
+    pat_mobile = _clean(erp.get("mobile")) or ( _clean(pat_identity.get("mobile")) if isinstance(pat_identity, dict) else None )
+    pat_age = _clean(erp.get("age"))
+    if not pat_age and isinstance(pat_identity, dict) and pat_identity.get("age"):
+        raw_age = str(pat_identity.get("age")).strip()
+        unit = str(pat_identity.get("age_unit") or "").strip()
+        if unit and unit.lower() not in raw_age.lower():
+            pat_age = f"{raw_age} {unit}"
+        else:
+            pat_age = raw_age
 
     chief = draft.get("chief_complaint") or {}
     anamn = draft.get("anamnesis") or {}
@@ -1114,6 +1127,10 @@ def _map_draft_to_encounter(
 
     return {
         "patient": patient_id,
+        "patient_name": pat_name,
+        "age": pat_age,
+        "gender": pat_gender,
+        "mobile": pat_mobile,
         "doctor": doctor_id,
         "appointment": appointment_id,
         "lead": lead_id,

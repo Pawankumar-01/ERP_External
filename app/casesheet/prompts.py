@@ -528,7 +528,7 @@ Rules:
   * "one ninth" / "1 9th" -> "1/9"
 - DOSAGE SEQUENCE & TITRATION: When multiple doses or fractions are spoken in a series for a medicine (e.g., "1 4th, half, and 3 by 4th" or "1/4, 1/2, 3/4"), format them cleanly as a step-up progression: "1/4 -> 1/2 -> 3/4" in the appropriate dose field (or in both dose_morning / dose_evening if BID is indicated). Do NOT leave messy STT phrases like "1 4th half".
 - MULTI-WEEK DOSAGE MATRIX (8 WEEKS): When week-by-week dosages are dictated (e.g. "1st week 1/4, 2nd week 1/2, from 3rd week onwards 1 tablet"), extract an explicit array of 8 strings corresponding to week 1 through week 8 dosing in the "weeks" field (e.g., ["1/4", "1/2", "1", "1", "1", "1", "1", "1"]).
-- QUANTITY / BASE WEIGHT: Always output "quantity_mg" as "1000mg" unless explicitly dictated otherwise.
+- QUANTITY / BASE WEIGHT: Extract the exact quantity, strength, or weight (e.g., "500mg", "250mg", "10 ml", "2 tablets") as specified by the doctor in "quantity_mg". Do NOT default to "1000mg" or hallucinate quantities if not stated or if another strength is spoken. If not mentioned, output null or empty string.
 - GLOBAL FREQUENCY PROPAGATION: If a trailing or overarching command is spoken such as "all twice daily morning and evening", "take all BID", or "on an empty stomach", apply that frequency ("BID") and timing ("morning and evening") to ALL medicines in the extracted list unless specifically overridden for an individual item.
 - SGP dose sequence when spoken as four values: morning / afternoon / evening / night.
 - start_week: capture which week the medicine starts (e.g. "1st week", "2nd week").
@@ -541,7 +541,7 @@ Schema:
   {
     "name": "string",
     "medicine_category": "SGP proprietary | Ayurvedic classical | Ayurvedic supplement | herb | unknown | null",
-    "quantity_mg": "1000mg | string",
+    "quantity_mg": "string | null",
     "weeks": ["string"],
     "start_week": "string | null",
     "dose_morning": "string | null",
