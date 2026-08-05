@@ -266,7 +266,36 @@ async def patch_draft(session_id: str, req: DraftPatchRequest, db: AsyncSession 
     if not draft_row:
         raise HTTPException(status_code=404, detail="Draft not found")
     current = dict(draft_row.draft or {})
-    current.update(req.updates)
+    from app.casesheet.protocols import enrich_section_data
+    for k, v in req.updates.items():
+        if "." in k:
+            parts = k.split(".")
+            target = current
+            for p in parts[:-1]:
+                if isinstance(target, dict):
+                    if p not in target or not isinstance(target.get(p), (dict, list)):
+                        target[p] = {}
+                    target = target[p]
+                elif isinstance(target, list) and p.isdigit():
+                    idx = int(p)
+                    while len(target) <= idx:
+                        target.append({})
+                    target = target[idx]
+                else:
+                    break
+            last_part = parts[-1]
+            if isinstance(target, dict):
+                target[last_part] = v
+            elif isinstance(target, list) and last_part.isdigit():
+                idx = int(last_part)
+                while len(target) <= idx:
+                    target.append(None)
+                target[idx] = v
+            top_sec = parts[0]
+            if top_sec in current and isinstance(current[top_sec], dict):
+                current[top_sec] = enrich_section_data(top_sec, current[top_sec])
+        else:
+            current[k] = enrich_section_data(k, v) if isinstance(v, dict) else v
     draft_row.draft = current
     await db.commit()
     logger.info(f"Draft updated: session={session_id} sections={list(req.updates.keys())}")
@@ -706,10 +735,20 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
                 name = _clean(d.get("name"))
                 if not name:
                     continue
-                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga"]):
-                    oils_list.append(f"• {name}: {d.get('instructions') or d.get('remarks') or 'As prescribed'}")
+                q = _clean(d.get("quantity")) or ""
+                f = _clean(d.get("frequency")) or ""
+                q_f_parts = []
+                for w in (f"{q} {f}").split():
+                    if not q_f_parts or w.lower() != q_f_parts[-1].lower():
+                        q_f_parts.append(w)
+                q_f_str = " ".join(q_f_parts).strip()
+                instr = _clean(d.get("instructions") or d.get("remarks")) or ""
+
+                header = f"• {name} ({q_f_str})" if q_f_str and q_f_str != "()" else f"• {name}"
+                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail"]):
+                    oils_list.append(f"{header}: {instr}" if instr else (f"{header}: As prescribed" if "anutail" not in name.lower() else header))
                 else:
-                    detox_list.append(f"• {name} ({d.get('quantity') or ''} {d.get('frequency') or ''}): {d.get('instructions') or ''}".strip())
+                    detox_list.append(f"{header}: {instr}" if instr else header)
 
     oil_app = existing_dreg.get("oil_applications") or ("\n".join(oils_list) if oils_list else None)
     detox_proc = existing_dreg.get("detox_procedures") or ("\n".join(detox_list) if detox_list else None)
@@ -769,7 +808,8 @@ def _normalize_supplements_weeks(supplements: Any) -> list:
         new_item = dict(item)
         if not new_item.get("quantity_mg"):
             new_item["quantity_mg"] = "1000mg"
-        if not new_item.get("weeks") or not isinstance(new_item.get("weeks"), list):
+        weeks = new_item.get("weeks")
+        if not weeks or not isinstance(weeks, list):
             dose_val = _clean(new_item.get("dose") or new_item.get("dose_morning") or "")
             if "->" in dose_val or "-" in dose_val:
                 parts = [p.strip() for p in dose_val.replace("->", "-").split("-") if p.strip()]
@@ -782,12 +822,41 @@ def _normalize_supplements_weeks(supplements: Any) -> list:
             else:
                 base_dose = dose_val if (dose_val and any(c.isdigit() for c in dose_val)) else "1"
                 new_item["weeks"] = [base_dose] * 8
-        elif len(new_item.get("weeks", [])) < 8:
-            existing = list(new_item.get("weeks", []))
+        else:
+            existing = list(weeks)
             last = existing[-1] if existing else "1"
             while len(existing) < 8:
                 existing.append(last)
-            new_item["weeks"] = existing[:8]
+            existing = existing[:8]
+            if any(isinstance(v, str) and ("->" in v or ("-" in v and not v.startswith("-") and not v.endswith("-"))) for v in existing):
+                cleaned_weeks = []
+                i = 0
+                while i < len(existing):
+                    val = str(existing[i]).strip()
+                    if "->" in val or ("-" in val and len(val.split("-")) >= 2):
+                        sep = "->" if "->" in val else "-"
+                        parts = [p.strip() for p in val.split(sep) if p.strip()]
+                        j = i
+                        while j < len(existing) and str(existing[j]).strip() == val:
+                            j += 1
+                        span = j - i
+                        if span > 1 and len(parts) == 2:
+                            half = (span + 1) // 2
+                            for k in range(span):
+                                cleaned_weeks.append(parts[0] if k < half else parts[1])
+                        elif span > 1 and len(parts) > 2:
+                            for k in range(span):
+                                idx = min(k * len(parts) // span, len(parts) - 1)
+                                cleaned_weeks.append(parts[idx])
+                        else:
+                            cleaned_weeks.append(parts[-1] if parts else "1")
+                        i = j
+                    else:
+                        cleaned_weeks.append(val)
+                        i += 1
+                new_item["weeks"] = cleaned_weeks
+            else:
+                new_item["weeks"] = existing
         norm.append(new_item)
     return norm
 
@@ -808,6 +877,12 @@ def _map_draft_to_encounter(
     3. older draft fields from the original implementation.
     """
     import json as _json
+    from app.casesheet.protocols import enrich_section_data
+
+    # Ensure protocols and procedures are enriched before mapping to ERP fields
+    for sec_key in ["detox_procedures", "panchakarma", "exercises_yoga", "assessment_and_plan"]:
+        if isinstance(draft.get(sec_key), dict):
+            draft[sec_key] = enrich_section_data(sec_key, draft[sec_key])
 
     final = draft.get("_final_case_sheet") or draft.get("final_case_sheet") or {}
     erp = final.get("erp_field_summaries") if isinstance(final, dict) else {}
@@ -830,6 +905,7 @@ def _map_draft_to_encounter(
     pers = draft.get("personal_history") or {}
     pmh = draft.get("past_medical_history") or {}
     surg = draft.get("surgical_history") or {}
+    obgyn = draft.get("menstrual_obstetric_history") or {}
     allergy = draft.get("allergy_history") or {}
     family = draft.get("family_history_detailed") or {}
     genex = draft.get("general_examination") or {}
@@ -839,6 +915,9 @@ def _map_draft_to_encounter(
     ros = draft.get("review_of_systems") or {}
     sysex = draft.get("systemic_examination") or {}
     encounter_ctx = draft.get("encounter_context") or {}
+    detox = draft.get("detox_procedures") or {}
+    ex_yoga = draft.get("exercises_yoga") or {}
+    fup_details = draft.get("followup_details") or {}
 
     plan = ap.get("plan") if isinstance(ap, dict) else {}
     plan = plan or {}
@@ -865,14 +944,46 @@ def _map_draft_to_encounter(
         else:
             known_conditions.append(_clean(item))
     pmh_text = _join(known_conditions + _as_list(pmh.get("medical") if isinstance(pmh, dict) else []))
-    if isinstance(surg, dict):
-        surgery_text = _join(surg.get("surgeries") or surg.get("hospitalizations") or [])
-        if surgery_text:
-            pmh_text = (pmh_text + "; " if pmh_text else "") + "Surgical/Hospitalization: " + surgery_text
+
+    surg_text = _clean(erp.get("surgical_history"))
+    if not surg_text and isinstance(surg, dict):
+        surg_items = []
+        for s in _as_list(surg.get("surgeries") or []):
+            if isinstance(s, dict):
+                parts = [p for p in [_clean(s.get("procedure")), _clean(s.get("year_or_date")), _clean(s.get("indication")), _clean(s.get("hospital"))] if p]
+                surg_items.append(" — ".join(parts))
+            elif s:
+                surg_items.append(_clean(s))
+        surg_items.extend([_clean(h) for h in _as_list(surg.get("hospitalizations") or []) if _clean(h)])
+        surg_text = "\n".join(surg_items)
+    elif not surg_text and surg:
+        surg_text = _clean(surg)
+
+    medhist_text = _clean(erp.get("medication_history"))
+    if not medhist_text and isinstance(medhist, dict):
+        meds_list = _format_medicines_from_current(medhist.get("current_medicines") or medhist.get("medicines") or [])
+        medhist_text = meds_list or _clean(medhist.get("summary") or "")
+    elif not medhist_text and medhist:
+        medhist_text = _clean(medhist)
+
+    obgyn_text = _clean(erp.get("menstrual_obstetric_history"))
+    if not obgyn_text and isinstance(obgyn, dict):
+        if not obgyn.get("not_applicable_or_not_mentioned"):
+            ob_parts = []
+            for k in ["lmp", "cycle_regularity", "cycle_length", "flow", "dysmenorrhea", "pregnancy_status", "menopause_status"]:
+                val = _clean(obgyn.get(k))
+                if val and val.lower() != "unknown":
+                    ob_parts.append(f"{k.replace('_', ' ').title()}: {val}")
+            if obgyn.get("obstetric_history"):
+                ob_parts.append(f"Obstetric History: {_clean(obgyn.get('obstetric_history'))}")
+            if ob_parts:
+                obgyn_text = "\n".join(ob_parts)
+    elif not obgyn_text and obgyn:
+        obgyn_text = _clean(obgyn)
 
     allopathic_from_treat = _format_medicines_from_current(treat.get("current_medications") if isinstance(treat, dict) else [])
-    allopathic_from_medhist = _format_medicines_from_current(medhist.get("current_medicines") if isinstance(medhist, dict) else [], system_filter="allopathic")
-    allopathic_medicines = "\n".join(x for x in [allopathic_from_treat, allopathic_from_medhist] if x)
+    allopathic_from_plan = _join(plan.get("medications") if isinstance(plan, dict) else [], sep="\n")
+    allopathic_medicines = "\n".join(x for x in [allopathic_from_treat, allopathic_from_plan] if x)
 
     sgp_rx = _format_sgp_rx(ayur)
 
@@ -900,27 +1011,68 @@ def _map_draft_to_encounter(
     if not ros_text and isinstance(ros, dict):
         ros_text = _join([f"{key}: {_clean(val)}" for key, val in ros.items() if val and key != "needs_doctor_confirmation"], sep="\n")
 
+    gen_text = _clean(erp.get("general_examination"))
+    if not gen_text and isinstance(genex, dict) and _clean(genex):
+        gen_text = _format_exam_dict(genex)
+    elif not gen_text and genex:
+        gen_text = _clean(genex)
+
     sysex_text = _clean(sysex.get("summary")) if isinstance(sysex, dict) else _clean(sysex)
     if not sysex_text and isinstance(sysex, dict):
         sysex_text = _format_exam_dict(sysex)
-    if isinstance(genex, dict) and _clean(genex):
-        gen_str = _format_exam_dict(genex, "General")
-        if gen_str:
-            sysex_text = (sysex_text + "\n\n" if sysex_text else "") + gen_str
     if isinstance(local, dict) and _clean(local):
-        loc_str = _format_exam_dict(local, "Local")
+        loc_str = _format_exam_dict(local, "Local Exam")
         if loc_str:
             sysex_text = (sysex_text + "\n\n" if sysex_text else "") + loc_str
 
+    inv_reports_text = _clean(erp.get("investigation_reports"))
+    if not inv_reports_text and isinstance(inv, dict):
+        inv_items = []
+        for lab in _as_list(inv.get("lab_results") or []):
+            if isinstance(lab, dict):
+                inv_items.append(f"Lab - {lab.get('test_name')}: {lab.get('value')} {lab.get('unit') or ''} ({lab.get('date') or ''})".strip())
+        for img in _as_list(inv.get("imaging_reports") or []):
+            if isinstance(img, dict):
+                inv_items.append(f"Imaging - {img.get('modality') or 'Report'} ({img.get('body_region') or ''}): {img.get('impression') or _join(img.get('findings'))}".strip())
+        inv_reports_text = "\n".join(inv_items)
+    elif not inv_reports_text and inv:
+        inv_reports_text = _clean(inv)
+
+    detox_text = _clean(erp.get("detox_procedures"))
+    if not detox_text and isinstance(detox, dict):
+        d_items = []
+        for d in _as_list(detox.get("detox_items") or []):
+            if isinstance(d, dict):
+                parts = [p for p in [_clean(d.get("name")), _clean(d.get("quantity")), _clean(d.get("frequency")), _clean(d.get("timing")), _clean(d.get("instructions"))] if p]
+                d_items.append(" — ".join(parts))
+        detox_text = "\n".join(d_items)
+    elif not detox_text and detox:
+        detox_text = _clean(detox)
+
+    exercises_text = _clean(erp.get("exercises_yoga"))
+    if not exercises_text and isinstance(ex_yoga, dict):
+        e_items = []
+        for e in _as_list(ex_yoga.get("exercises") or []):
+            if isinstance(e, dict):
+                parts = [p for p in [_clean(e.get("name")), _clean(e.get("frequency")), f"{e.get('duration_minutes')} mins" if e.get("duration_minutes") else "", _clean(e.get("remarks"))] if p]
+                e_items.append(" — ".join(parts))
+        exercises_text = "\n".join(e_items)
+    elif not exercises_text and ex_yoga:
+        exercises_text = _clean(ex_yoga)
+
     fup_text = _join([v for v in [fup.get("daily"), fup.get("weekly"), fup.get("monthly"), fup.get("next_visit")] if v], sep=" | ") if isinstance(fup, dict) else ""
-    if not fup_text and isinstance(draft.get("followup_details"), dict):
-        fup_details = draft.get("followup_details") or {}
+    if not fup_text and isinstance(fup_details, dict):
         fup_parts = [
-            f"Assigned Doc: {_clean(fup_details.get('assigned_doc'))}" if fup_details.get("assigned_doc") else "",
-            f"Next Visit: {_clean(fup_details.get('next_visit_duration') or fup_details.get('next_visit_date'))}" if (fup_details.get('next_visit_duration') or fup_details.get('next_visit_date')) else "",
+            f"Next Visit: {_clean(fup_details.get('next_visit_duration') or fup_details.get('next_visit_date'))}" if (fup_details.get("next_visit_duration") or fup_details.get("next_visit_date")) else "",
             _clean(fup_details.get("followup_instructions"))
         ]
         fup_text = " | ".join(p for p in fup_parts if p)
+
+    fup_doc_text = _clean(erp.get("followup_doc"))
+    if not fup_doc_text and isinstance(fup_details, dict):
+        doc_name = _clean(fup_details.get("followup_doc_name") or fup_details.get("assigned_doc"))
+        doc_contact = _clean(fup_details.get("followup_doc_contact"))
+        fup_doc_text = f"{doc_name} ({doc_contact})" if (doc_name and doc_contact) else (doc_name or doc_contact)
 
     investigations_text = _join(plan.get("investigations") if isinstance(plan, dict) else [])
     if isinstance(inv, dict):
@@ -930,6 +1082,24 @@ def _map_draft_to_encounter(
 
     synth_rx = _synthesize_prescription_sheet(draft)
     norm_supp = _normalize_supplements_weeks(draft.get("ayurvedic_supplements"))
+
+    rx_quick_str = _clean(erp.get("rx_quick_summary"))
+    if not rx_quick_str and isinstance(synth_rx.get("quick_summary"), dict):
+        qs_parts = []
+        for k, label in [("allopathy_medicines", "Medicines"), ("panchakarma", "Panchakarma"), ("tests_to_be_done", "Tests Advised"), ("others", "Other Instructions")]:
+            val = _clean(synth_rx["quick_summary"].get(k))
+            if val:
+                qs_parts.append(f"[{label}]\n{val}")
+        rx_quick_str = "\n\n".join(qs_parts)
+
+    rx_regimen_str = _clean(erp.get("rx_daily_regimen"))
+    if not rx_regimen_str and isinstance(synth_rx.get("daily_regimen"), dict):
+        dr_parts = []
+        for k, label in [("oil_applications", "Oil Applications"), ("detox_procedures", "Detox Procedures"), ("home_remedies", "Home Remedies"), ("breathing_exercises", "Breathing & Pranayama")]:
+            val = _clean(synth_rx["daily_regimen"].get(k))
+            if val:
+                dr_parts.append(f"[{label}]\n{val}")
+        rx_regimen_str = "\n\n".join(dr_parts)
 
     full_notes_payload = {
         **draft,
@@ -992,5 +1162,16 @@ def _map_draft_to_encounter(
         "follow_up": _clean(erp.get("follow_up")) or fup_text,
         "prognosis": _clean(erp.get("prognosis")) or _clean(ap.get("prognosis") if isinstance(ap, dict) else None),
         "notes": _clean(erp.get("notes")) or _json.dumps(full_notes_payload, ensure_ascii=False, indent=2, default=str),
+
+        "medication_history": _clean(erp.get("medication_history")) or medhist_text,
+        "surgical_history": _clean(erp.get("surgical_history")) or surg_text,
+        "menstrual_obstetric_history": _clean(erp.get("menstrual_obstetric_history")) or obgyn_text,
+        "general_examination": _clean(erp.get("general_examination")) or gen_text,
+        "investigation_reports": _clean(erp.get("investigation_reports")) or inv_reports_text,
+        "detox_procedures": _clean(erp.get("detox_procedures")) or detox_text,
+        "exercises_yoga": _clean(erp.get("exercises_yoga")) or exercises_text,
+        "rx_quick_summary": rx_quick_str,
+        "rx_daily_regimen": rx_regimen_str,
+        "followup_doc": _clean(erp.get("followup_doc")) or fup_doc_text,
     }
 

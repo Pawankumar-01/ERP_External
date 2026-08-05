@@ -32,6 +32,7 @@ from app.casesheet.prompts import (
     SECTION_MAX_TOKENS,
     GLOBAL_MEDICAL_INSTRUCTION,
 )
+from app.casesheet.protocols import enrich_section_data
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -83,12 +84,13 @@ class LLMService:
             },
         ]
 
-        return await self._safe_json_call(
+        raw_result = await self._safe_json_call(
             messages=messages,
             label=f"section:{section}",
             fallback={"_raw": transcript},
             max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
         )
+        return enrich_section_data(section, raw_result)
 
     async def compose_from_draft(
         self,
