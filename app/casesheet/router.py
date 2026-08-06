@@ -1161,6 +1161,25 @@ def _map_draft_to_encounter(
         "general_examination": _clean(erp.get("general_examination")) or gen_text,
         "systemic_examination": _clean(erp.get("systemic_examination")) or sysex_text,
 
+        "sgp_supplements_table": [
+            {
+                "supplement_name": _clean(s.get("name") or "") or "Unknown",
+                "quantity_mg": _clean(s.get("quantity_mg")) or "1000mg",
+                "start_week": str(s.get("start_week") or "1"),
+                "w1": str((s.get("weeks") or [""] * 8)[0] or ""),
+                "w2": str((s.get("weeks") or [""] * 8)[1] or ""),
+                "w3": str((s.get("weeks") or [""] * 8)[2] or ""),
+                "w4": str((s.get("weeks") or [""] * 8)[3] or ""),
+                "w5": str((s.get("weeks") or [""] * 8)[4] or ""),
+                "w6": str((s.get("weeks") or [""] * 8)[5] or ""),
+                "w7": str((s.get("weeks") or [""] * 8)[6] or ""),
+                "w8": str((s.get("weeks") or [""] * 8)[7] or ""),
+                "frequency": _clean(s.get("frequency")) or "BID",
+                "remarks_instructions": _clean(s.get("timing")) or _clean(s.get("remarks")) or _clean(s.get("indication")) or ""
+            }
+            for s in (norm_supp if isinstance(norm_supp, list) else [])
+            if isinstance(s, dict) and s.get("name")
+        ],
         "sgp_rx": _clean(erp.get("sgp_rx")) or sgp_rx,
         "allopathic_medicines": _clean(erp.get("allopathic_medicines")) or allopathic_medicines,
         "panchakarma": _clean(erp.get("panchakarma")) or _format_panchakarma(panca),

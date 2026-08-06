@@ -519,22 +519,36 @@ Schema:
 Extract Ayurvedic supplements and SGP proprietary medicines prescribed or currently used.
 
 Rules:
-- APPLY the SGP MEDICINE CANONICAL NAME CORRECTION TABLE above to fix any misspelled medicine names.
+- APPLY the SGP MEDICINE CANONICAL NAME CORRECTION TABLE above to fix any misspelled medicine names (e.g., NETROLYZIN -> ATHEROLYZIN, NEEROTROPIN -> NEUROTROPIN).
 - When the doctor says a name that matches a known SGP canonical name (or variant), output the canonical name.
 - CRITICAL DOSAGE FRACTION NORMALIZATION: Always convert spoken fractions or raw STT numeric strings into clean standard mathematical fractions:
   * "one fourth" / "1 4th" / "1 by 4th" / "quarter" -> "1/4"
   * "half" / "one half" -> "1/2"
   * "three fourths" / "3 4th" / "3 by 4th" -> "3/4"
-  * "one eighth" / "1 8th" -> "1/8"
-  * "one ninth" / "1 9th" -> "1/9"
-- DOSAGE SEQUENCE & TITRATION: When multiple doses or fractions are spoken in a series for a medicine (e.g., "1 4th, half, and 3 by 4th" or "1/4, 1/2, 3/4"), format them cleanly as a step-up progression: "1/4 -> 1/2 -> 3/4" in the appropriate dose field (or in both dose_morning / dose_evening if BID is indicated). Do NOT leave messy STT phrases like "1 4th half".
-- MULTI-WEEK DOSAGE MATRIX (8 WEEKS): When week-by-week dosages are dictated (e.g. "1st week 1/4, 2nd week 1/2, from 3rd week onwards 1 tablet"), extract an explicit array of 8 strings corresponding to week 1 through week 8 dosing in the "weeks" field (e.g., ["1/4", "1/2", "1", "1", "1", "1", "1", "1"]).
-- QUANTITY / BASE WEIGHT: Extract the exact quantity, strength, or weight (e.g., "500mg", "250mg", "10 ml", "2 tablets") as specified by the doctor in "quantity_mg". Do NOT default to "1000mg" or hallucinate quantities if not stated or if another strength is spoken. If not mentioned, output null or empty string.
-- GLOBAL FREQUENCY PROPAGATION: If a trailing or overarching command is spoken such as "all twice daily morning and evening", "take all BID", or "on an empty stomach", apply that frequency ("BID") and timing ("morning and evening") to ALL medicines in the extracted list unless specifically overridden for an individual item.
+- MANDATORY 8-WEEK DOSAGE MATRIX ("weeks" field):
+  * For EVERY medicine or supplement, you MUST output an explicit 8-element array of strings corresponding to Week 1 through Week 8 in the "weeks" field. NEVER set "weeks" to null!
+  * SGP TITRATION PROTOCOLS ("quarter half one titration" / "1/4 1/2 1 titration" / "quarter half one dosage"):
+    This specific clinical shorthand defines a 3-stage dose escalation over consecutive weeks:
+    - 1st active week of taking the medicine: dose is "1/4"
+    - 2nd active week of taking the medicine: dose is "1/2"
+    - 3rd active week onwards (until week 8): dose is "1"
+  * EFFECT OF START WEEK ("starting week X"):
+    Any week BEFORE the start_week must be marked as "--" (inactive/not started yet). The titration schedule begins strictly on the specified start_week!
+    - Example 1 ("APD starting week 1 at quarter half 1 titration"): start_week="1", weeks=["1/4", "1/2", "1", "1", "1", "1", "1", "1"]
+    - Example 2 ("ATHEROLYZIN starting week 2 at quarter half 1 titration"): start_week="2", weeks=["--", "1/4", "1/2", "1", "1", "1", "1", "1"] (Notice Week 1 is "--", Week 2 is "1/4", Week 3 is "1/2", Weeks 4-8 are "1")
+    - Example 3 ("SYNGEN starting in week 3 at half to 1 tablet titration"): start_week="3", weeks=["--", "--", "1/2", "1", "1", "1", "1", "1"]
+    - Example 4 ("BIOTIN starting week 2 twice daily" without titration): start_week="2", weeks=["--", "1", "1", "1", "1", "1", "1", "1"]
+  * RESERVE / SOS MEDICATIONS:
+    If a medicine is ordered "to be kept on reserve" or "SOS" (e.g. NEUROTROPIN twice daily to be kept on reserve for acute nerve flare ups):
+    - Do NOT assign numbers like "1/4" or "1" across the weeks!
+    - Set weeks=["Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve"], frequency="SOS (Reserve)", remarks="To be kept on reserve for acute nerve flare ups".
+  * FOODS / NUTS PROTOCOLS (e.g. CAG Nuts):
+    If starting week 1: weeks=["1", "1", "1", "1", "1", "1", "1", "1"] (or appropriate weekly status), and put preparation/soaking instructions in "timing" or "remarks".
+- QUANTITY / BASE WEIGHT: Extract the exact quantity, strength, or weight (e.g., "500mg", "250mg", "10 ml", "2 tablets") as specified by the doctor in "quantity_mg". Do NOT default to "1000mg" or hallucinate quantities if not stated. If not mentioned, output null or empty string.
+- GLOBAL FREQUENCY PROPAGATION: If a trailing or overarching command is spoken such as "all twice daily morning and evening", "take all BID", "6 to 8 am and 6 to 8 pm on empty stomach", apply that frequency ("BID") and timing/instructions to ALL medicines in the extracted list unless specifically overridden for an individual item.
 - SGP dose sequence when spoken as four values: morning / afternoon / evening / night.
-- start_week: capture which week the medicine starts (e.g. "1st week", "2nd week").
+- start_week: capture the number of the starting week (e.g. "1", "2", "3").
 - Do not interpret or translate the clinical meaning of SGP codes.
-- Capture standard Ayurvedic medicines with their classical names.
 - Do NOT mix allopathic medicines here; put them in treatment_and_background.
 
 Schema:
@@ -543,7 +557,7 @@ Schema:
     "name": "string",
     "medicine_category": "SGP proprietary | Ayurvedic classical | Ayurvedic supplement | herb | unknown | null",
     "quantity_mg": "string | null",
-    "weeks": ["string"],
+    "weeks": ["string", "string", "string", "string", "string", "string", "string", "string"],
     "start_week": "string | null",
     "dose_morning": "string | null",
     "dose_afternoon": "string | null",
