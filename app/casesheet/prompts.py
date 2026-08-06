@@ -242,6 +242,7 @@ ANTI-HALLUCINATION RULES (CRITICAL — NEVER VIOLATE):
 - The needs_doctor_confirmation field is for INTERNAL USE ONLY. Its values must never be rendered
   as clinical text in any other field.
 - If the same field could be filled from the transcript OR from a schema example, use ONLY the transcript.
+- QUALITY GATE / UNRELATED AUDIO DETECTION: If the transcribed text appears to be background chatter, random conversation, non-clinical speech, or acoustic hallucination without valid clinical instructions for this section, you MUST return ONLY an error object: {"_reprompt": {"required": true, "reason": "Detected irrelevant conversational audio or background chatter without valid clinical instructions."}}.
 """
 
 GLOBAL_MEDICAL_INSTRUCTION = """\
@@ -1229,6 +1230,7 @@ Return JSON schema:
     "pulse_diagnosis": "string",
     "ayurvedic_diagnosis": "string",
     "allopathic_diagnosis": "string",
+    "general_examination": "string",
     "systemic_examination": "string",
     "sgp_rx": "string",
     "allopathic_medicines": "string",
@@ -1351,6 +1353,7 @@ Return JSON schema:
   "pulse_diagnosis": "string",
   "ayurvedic_diagnosis": "string",
   "allopathic_diagnosis": "string",
+  "general_examination": "string",
   "systemic_examination": "string",
   "sgp_rx": "string",
   "allopathic_medicines": "string",
@@ -1468,6 +1471,7 @@ ERP_FIELD_MAPPING_RULES: dict[str, str] = {
     "pulse_diagnosis": "Summarize pulse_diagnosis.systems (each system row: system code, vata/pitta/kapha severity) and overall_vpk.",
     "ayurvedic_diagnosis": "Use assessment_and_plan.ayurvedic_diagnosis or ayurvedic_assessment_extended.ayurvedic_diagnosis.",
     "allopathic_diagnosis": "Join assessment_and_plan.allopathic_diagnosis.",
+    "general_examination": "Compact summary of general_examination findings (built, nourishment, orientation, clinical signs).",
     "systemic_examination": "Compact summary of systemic_examination fields only. Do not include needs_doctor_confirmation text.",
     "sgp_rx": "Summarize ayurvedic_supplements: each medicine name with start_week, dose, frequency.",
     "allopathic_medicines": "Summarize treatment_and_background.current_medications and medication_history allopathic medicines.",

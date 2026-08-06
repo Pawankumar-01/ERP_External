@@ -1158,6 +1158,7 @@ def _map_draft_to_encounter(
         "ayurvedic_diagnosis": _clean(erp.get("ayurvedic_diagnosis")) or _clean(ap.get("ayurvedic_diagnosis") if isinstance(ap, dict) else None) or _clean(ayu_ext.get("ayurvedic_diagnosis") if isinstance(ayu_ext, dict) else None),
         "allopathic_diagnosis": _clean(erp.get("allopathic_diagnosis")) or _join(ap.get("allopathic_diagnosis") if isinstance(ap, dict) else []),
         "review_of_systems": _clean(erp.get("review_of_systems")) or ros_text,
+        "general_examination": _clean(erp.get("general_examination")) or gen_text,
         "systemic_examination": _clean(erp.get("systemic_examination")) or sysex_text,
 
         "sgp_rx": _clean(erp.get("sgp_rx")) or sgp_rx,
