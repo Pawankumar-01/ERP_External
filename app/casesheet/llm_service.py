@@ -42,7 +42,10 @@ PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemma-4-31b
 _raw_candidates = [
     PRIMARY_MODEL,
     "google/gemma-4-31b-it:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "qwen/qwen-2.5-7b-instruct:free",
     "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-2-9b-it:free",
     "microsoft/phi-4:free",
     "mistralai/mistral-7b-instruct:free",
     "google/gemma-4-26b-a4b-it:free",
@@ -58,6 +61,10 @@ DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS_DEFAULT", "2000"))
 
 class LLMService:
     """Async service for extraction, quality checks and full case-sheet composition."""
+
+    def __init__(self):
+        # Serialize LLM calls to prevent OpenRouter free tier concurrency 429 errors
+        self._semaphore = asyncio.Semaphore(1)
 
     async def extract_section(self, section: str, transcript: str) -> Dict[str, Any]:
         """
@@ -209,23 +216,37 @@ class LLMService:
             "X-Title": "SGP Clinical AI",
         }
 
-        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-            for model in MODEL_CANDIDATES:
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": 0.1,
-                    "max_tokens": int(max_tokens),
-                }
-                response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-                if response.status_code in (400, 404, 429, 502, 503, 504):
-                    logger.warning("OpenRouter error %s for model %s: %s. Trying fallback.", response.status_code, model, response.text)
-                    if response.status_code == 429:
-                        await asyncio.sleep(0.5)
-                    continue
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"]
+        async with self._semaphore:
+            async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+                for pass_num in (1, 2):
+                    for model in MODEL_CANDIDATES:
+                        payload = {
+                            "model": model,
+                            "messages": messages,
+                            "temperature": 0.1,
+                            "max_tokens": int(max_tokens),
+                        }
+                        try:
+                            response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+                            if response.status_code in (400, 404, 429, 502, 503, 504):
+                                logger.warning("OpenRouter %s error (pass %s) for model %s: %s", response.status_code, pass_num, model, response.text)
+                                if response.status_code == 429:
+                                    # Longer backoff to let OpenRouter's token bucket reset
+                                    await asyncio.sleep(2.5)
+                                elif response.status_code in (502, 503, 504):
+                                    await asyncio.sleep(1.0)
+                                continue
+                            response.raise_for_status()
+                            data = response.json()
+                            return data["choices"][0]["message"]["content"]
+                        except httpx.HTTPError as err:
+                            logger.warning("HTTP error on model %s (pass %s): %s", model, pass_num, err)
+                            await asyncio.sleep(1.0)
+                            continue
+
+                    if pass_num == 1:
+                        logger.warning("Pass 1 through all OpenRouter free models exhausted. Waiting 4s before Pass 2...")
+                        await asyncio.sleep(4.0)
 
         raise RuntimeError(f"All configured OpenRouter models ({', '.join(MODEL_CANDIDATES)}) failed or were rate-limited (429/5xx).")
 
