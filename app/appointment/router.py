@@ -255,34 +255,31 @@ async def _get_or_create_patient(
 ) -> str:
     """
     Find existing Patient linked to this lead, or create one.
+    Delegates to erp_bridge_service with safe fallback handling first_name and sex fields.
     Returns ERPNext Patient document name.
     """
-    # Search for existing patient linked to this lead
-    existing = await erp_bridge_service._request(
-        "GET",
-        "/api/resource/Patient",
-        params={
-            "filters": f'[["custom_sgp_lead","=","{lead_id}"]]',
-            "fields":  '["name","patient_name"]',
-            "limit":   "1",
-        },
-    )
+    # Prefer robust bridge service which handles full Lead attribute mapping & idempotency
+    patient_id = await erp_bridge_service.get_or_create_patient(lead_id)
+    if patient_id:
+        return patient_id
 
-    if existing and isinstance(existing, list) and len(existing) > 0:
-        patient_name = existing[0].get("name")
-        logger.info(f"Existing patient {patient_name} found for lead {lead_id}")
-        return patient_name
+    # Fallback: Create new Patient directly if bridge service lookup needed explicit local params
+    name_parts = (lead_name or "Walk-in Patient").strip().split(maxsplit=1)
+    first_name = name_parts[0]
+    last_name  = name_parts[1] if len(name_parts) > 1 else ""
 
-    # Create new Patient from lead data
     new_patient = await erp_bridge_service._request(
         "POST",
         "/api/resource/Patient",
         data={
-            "patient_name": lead_name,
-            "mobile":       mobile,
-            "email":        email,
-            "custom_sgp_lead":     lead_id,
-            "status":       "Active",
+            "first_name":      first_name,
+            "last_name":       last_name,
+            "patient_name":    lead_name or "Walk-in Patient",
+            "sex":             "Prefer not to say",
+            "mobile":          mobile,
+            "email":           email,
+            "custom_sgp_lead": lead_id,
+            "status":          "Active",
         },
     )
 
@@ -293,7 +290,7 @@ async def _get_or_create_patient(
         )
 
     patient_name = new_patient.get("name")
-    logger.info(f"Patient {patient_name} created from lead {lead_id}")
+    logger.info(f"Patient {patient_name} created from lead {lead_id} via explicit fallback")
     return patient_name
 
 
