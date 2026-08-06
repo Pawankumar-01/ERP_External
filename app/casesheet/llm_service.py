@@ -38,6 +38,8 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemma-4-31b-it:free")
 _raw_candidates = [
     PRIMARY_MODEL,
@@ -205,19 +207,53 @@ class LLMService:
             return {**fallback, "_error": str(exc)}
 
     async def _call_llm(self, messages: list, max_tokens: int) -> str:
+        groq_key = getattr(settings, "GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
         openrouter_key = settings.OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY", "")
-        if not openrouter_key:
-            raise RuntimeError("OPENROUTER_API_KEY not set in .env")
-
-        headers = {
-            "Authorization": f"Bearer {openrouter_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://sgp.clinic",
-            "X-Title": "SGP Clinical AI",
-        }
+        if not groq_key and not openrouter_key:
+            raise RuntimeError("Neither GROQ_API_KEY nor OPENROUTER_API_KEY is set in .env")
 
         async with self._semaphore:
             async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+                # ── Primary Engine: Groq (Ultra-fast & Free for current testing) ──
+                if groq_key:
+                    groq_headers = {
+                        "Authorization": f"Bearer {groq_key}",
+                        "Content-Type": "application/json",
+                    }
+                    for model in GROQ_MODELS:
+                        payload = {
+                            "model": model,
+                            "messages": messages,
+                            "temperature": 0.1,
+                            "max_tokens": int(max_tokens),
+                        }
+                        try:
+                            response = await client.post(GROQ_URL, headers=groq_headers, json=payload)
+                            if response.status_code in (400, 404, 429, 500, 502, 503, 504):
+                                logger.warning("Groq error %s for model %s: %s", response.status_code, model, response.text)
+                                if response.status_code == 429:
+                                    await asyncio.sleep(1.0)
+                                continue
+                            response.raise_for_status()
+                            data = response.json()
+                            logger.info("LLM extraction succeeded via Groq (%s)", model)
+                            return data["choices"][0]["message"]["content"]
+                        except httpx.HTTPError as err:
+                            logger.warning("HTTP error on Groq model %s: %s", model, err)
+                            continue
+                    logger.warning("All Groq models failed. Falling back to OpenRouter...")
+
+                # ── Secondary Engine / Future Paid Tier: OpenRouter ──
+                if not openrouter_key:
+                    raise RuntimeError("Groq extraction failed and OPENROUTER_API_KEY not set.")
+
+                headers = {
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://sgp.clinic",
+                    "X-Title": "SGP Clinical AI",
+                }
+
                 for pass_num in (1, 2):
                     for model in MODEL_CANDIDATES:
                         payload = {
@@ -248,7 +284,7 @@ class LLMService:
                         logger.warning("Pass 1 through all OpenRouter free models exhausted. Waiting 4s before Pass 2...")
                         await asyncio.sleep(4.0)
 
-        raise RuntimeError(f"All configured OpenRouter models ({', '.join(MODEL_CANDIDATES)}) failed or were rate-limited (429/5xx).")
+        raise RuntimeError(f"All configured AI models (Groq & OpenRouter: {', '.join(GROQ_MODELS + MODEL_CANDIDATES)}) failed or were rate-limited.")
 
     def _parse_json(self, raw: str) -> Optional[Any]:
         cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip()
