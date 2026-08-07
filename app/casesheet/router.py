@@ -1099,7 +1099,7 @@ def _map_draft_to_encounter(
     rx_quick_str = _clean(erp.get("rx_quick_summary"))
     if not rx_quick_str and isinstance(synth_rx.get("quick_summary"), dict):
         qs_parts = []
-        for k, label in [("allopathy_medicines", "Medicines"), ("panchakarma", "Panchakarma"), ("tests_to_be_done", "Tests Advised"), ("others", "Other Instructions")]:
+        for k, label in [("tests_to_be_done", "Tests Advised"), ("others", "Other Instructions")]:
             val = _clean(synth_rx["quick_summary"].get(k))
             if val:
                 qs_parts.append(f"[{label}]\n{val}")
@@ -1108,7 +1108,7 @@ def _map_draft_to_encounter(
     rx_regimen_str = _clean(erp.get("rx_daily_regimen"))
     if not rx_regimen_str and isinstance(synth_rx.get("daily_regimen"), dict):
         dr_parts = []
-        for k, label in [("oil_applications", "Oil Applications"), ("detox_procedures", "Detox Procedures"), ("home_remedies", "Home Remedies"), ("breathing_exercises", "Breathing & Pranayama")]:
+        for k, label in [("oil_applications", "Oil Applications"), ("breathing_exercises", "Breathing & Pranayama")]:
             val = _clean(synth_rx["daily_regimen"].get(k))
             if val:
                 dr_parts.append(f"[{label}]\n{val}")
