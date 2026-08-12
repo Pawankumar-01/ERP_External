@@ -1056,7 +1056,11 @@ def _map_draft_to_encounter(
         d_items = []
         for d in _as_list(detox.get("detox_items") or []):
             if isinstance(d, dict):
-                parts = [p for p in [_clean(d.get("name")), _clean(d.get("quantity")), _clean(d.get("frequency")), _clean(d.get("timing")), _clean(d.get("instructions"))] if p]
+                name = _clean(d.get("name")) or ""
+                # Skip oil applications from detox_text as they are handled in oil_applications
+                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail"]):
+                    continue
+                parts = [p for p in [name, _clean(d.get("quantity")), _clean(d.get("frequency")), _clean(d.get("timing")), _clean(d.get("instructions"))] if p]
                 d_items.append(" — ".join(parts))
         detox_text = "\n".join(d_items)
     elif not detox_text and detox:
