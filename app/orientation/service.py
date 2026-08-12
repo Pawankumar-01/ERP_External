@@ -508,21 +508,21 @@ class OrientationService:
         session: OrientationSession,
     ) -> None:
         """
-        Called when a participant crosses the attendance threshold.
+        Called when a participant crosses the attendance threshold (70%).
 
-        Flow:
+        Flow (attendance-only — patient creation is deferred to post-assessment):
           1. Create SGP Orientation Attendance in ERPNext.
           2. Update SGP Lead status → ORIENTATION_ATTENDED in ERPNext.
-          3. Auto-promote Lead → Patient in ERPNext (get_or_create_patient).
-          4. Emit orientation_completed event.
+          3. Emit orientation_completed event.
 
-        NOTE:
-          - lead_service.mark_orientation_attended() does NOT take a db session.
-            It talks to ERPNext directly via ERP Bridge.
-          - get_or_create_patient() is idempotent — calling it again from the
-            assessment submission or appointment scheduling is always safe.
-          - All ERP calls are wrapped in try/except — a failing ERP call must
-            never prevent local attendance data from being saved.
+        NOTE: Patient creation (get_or_create_patient) is intentionally NOT done
+        here. It is triggered in assessment/router.py after the MCQ quiz is
+        submitted. This ensures:
+          - "Orientation Completed" is only marked after the patient actively
+            finishes the assessment, not just by sitting in the call.
+          - Patient record is always paired with a completed quiz submission.
+          - get_or_create_patient() in assessment/router.py is idempotent, so
+            re-runs from scheduled appointments are always safe.
         """
         from app.leads.service import lead_service
         from app.erp_bridge.service import erp_bridge_service
@@ -542,65 +542,36 @@ class OrientationService:
                 f"ERP attendance creation failed for lead {participant.lead_id}: {e}"
             )
 
-        # 2. Update lead status + orientation fields in ERPNext
+        # 2. Update lead status in ERPNext (marks ORIENTATION_ATTENDED so team knows
+        #    the patient attended but may still need to complete the assessment).
         try:
-            # Pass session ERP name for orientation_session field linkage
             await lead_service.mark_orientation_attended(
                 participant.lead_id,
-                session_erp_name=session.id,  # ERPNext uses room_name stored as session_id
+                session_erp_name=session.id,
             )
         except Exception as e:
             logger.error(
                 f"ERPNext lead status update failed for {participant.lead_id}: {e}"
             )
 
-        # 3. Auto-promote lead → Patient in ERPNext
-        try:
-            patient_id = await erp_bridge_service.get_or_create_patient(participant.lead_id)
-            if patient_id:
-                logger.info(
-                    f"✅ Patient '{patient_id}' created/verified in ERPNext "
-                    f"for lead {participant.lead_id}"
-                )
-                await event_logger.log(
-                    entity_type="patient",
-                    entity_id=patient_id,
-                    event_type=EventType.PATIENT_CREATED,
-                    payload={
-                        "lead_id":    participant.lead_id,
-                        "session_id": session.id,
-                        "source":     "orientation_completion",
-                    },
-                    triggered_by="system",
-                )
-            else:
-                logger.warning(
-                    f"Patient auto-creation returned None for lead {participant.lead_id} "
-                    "(ERP placeholder mode or lead not found — will retry at scheduling)"
-                )
-        except Exception as e:
-            logger.error(
-                f"Patient auto-creation failed for lead {participant.lead_id} "
-                f"(non-critical — appointment flow will retry): {e}"
-            )
-
-        # 4. Emit domain event
+        # 3. Emit domain event
         await event_logger.log(
             entity_type="orientation_participant",
             entity_id=participant.id,
             event_type=EventType.ORIENTATION_COMPLETED,
             payload={
-                "lead_id":            participant.lead_id,
-                "session_id":         session.id,
-                "watch_seconds":      participant.watch_seconds,
-                "watch_percentage":   round(participant.watch_percentage * 100, 1),
-                "appointment_eligible": True,
+                "lead_id":              participant.lead_id,
+                "session_id":           session.id,
+                "watch_seconds":        participant.watch_seconds,
+                "watch_percentage":     round(participant.watch_percentage * 100, 1),
+                "appointment_eligible": False,  # Will become True after assessment submit
             },
             triggered_by="system",
         )
         logger.info(
-            f"✅ Orientation COMPLETED for lead {participant.lead_id} "
-            f"({participant.watch_percentage * 100:.1f}% attended)"
+            f"✅ Orientation ATTENDED for lead {participant.lead_id} "
+            f"({participant.watch_percentage * 100:.1f}% watched). "
+            "Awaiting assessment completion to create Patient record."
         )
 
     # ── Private: Query helpers ────────────────────────────────────────────────

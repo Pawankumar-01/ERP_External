@@ -161,6 +161,7 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
     .on(RoomEvent.TrackSubscribed,         onTrackSubscribed)
     .on(RoomEvent.TrackUnsubscribed,       onTrackUnsubscribed)
     .on(RoomEvent.DataReceived,            onDataReceived)
+    .on(RoomEvent.LocalTrackPublished,     onLocalTrackPublished)
     .on(RoomEvent.Disconnected,            onRoomDisconnected);
 
   await room.connect(livekitUrl, token);
@@ -292,6 +293,14 @@ function onTrackUnsubscribed(track, publication, participant) {
   }
 }
 
+// Handles our own screen share track once it's published to the room
+function onLocalTrackPublished(publication) {
+  const { Track } = LivekitClient;
+  if (publication.source === Track.Source.ScreenShare && publication.track) {
+    publication.track.attach(document.getElementById('local-video'));
+  }
+}
+
 async function onDataReceived(data) {
   try {
     const msg = JSON.parse(new TextDecoder().decode(data));
@@ -311,7 +320,13 @@ async function onDataReceived(data) {
 
 async function onRoomDisconnected() {
   clearInterval(timerInterval);
-  await loadAndShowQuiz();
+  // Only show the assessment quiz if the HOST intentionally ended the session.
+  // If the patient clicked "Leave" voluntarily, go back to the join screen.
+  if (sessionEndedByHost) {
+    await loadAndShowQuiz();
+  } else {
+    showScreen('join-screen');
+  }
 }
 
 // ── Participant tiles ─────────────────────────────────────────────────────────
@@ -362,7 +377,10 @@ async function toggleCam() {
 async function leaveSession() {
   if (!confirm('Are you sure you want to leave? The session is still in progress.')) return;
   clearInterval(timerInterval);
+  // Ensure flag is NOT set so onRoomDisconnected goes back to join screen, not quiz
+  sessionEndedByHost = false;
   if (room) { try { await room.disconnect(); } catch (_) {} room = null; }
+  // onRoomDisconnected handles navigation, but room is already null so call directly
   showScreen('join-screen');
 }
 

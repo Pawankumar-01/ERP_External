@@ -27,8 +27,11 @@ class WhatsAppService:
 
         date_time = scheduled_at or "To be confirmed"
 
-        # Join URL — frontend orientation page
-        join_url = f"{settings.FRONTEND_BASE_URL}/meet/index.html?session={session_id}"
+        # Join URL — /meet/ frontend page.
+        # Strip any accidental trailing slash from FRONTEND_BASE_URL so we never
+        # produce URLs like http://host/:8001/meet/... when the env var has a slash.
+        base = settings.FRONTEND_BASE_URL.rstrip("/")
+        join_url = f"{base}/meet/index.html?session={session_id}&lead={patient_id}"
 
         payload = {
             "messaging_product": "whatsapp",

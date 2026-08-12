@@ -32,6 +32,27 @@ window.addEventListener('DOMContentLoaded', () => {
     ?.addEventListener('keydown', e => { if (e.key === 'Enter') joinHost(); });
   document.getElementById('input-name')
     ?.addEventListener('keydown', e => { if (e.key === 'Enter') joinHost(); });
+
+  // Warn immediately if browser won't allow camera/mic/screen share.
+  // navigator.mediaDevices is ONLY available on HTTPS or localhost.
+  // Plain HTTP (e.g. http://122.x.x.x:8001) will make it undefined.
+  if (!window.isSecureContext || !navigator.mediaDevices) {
+    const warn = document.createElement('div');
+    warn.style.cssText = `
+      position:fixed; bottom:0; left:0; right:0; z-index:99999;
+      background:#3a1010; color:#f87171; padding:12px 20px;
+      font-size:13px; font-weight:500; text-align:center;
+      border-top:2px solid #ef4444;
+    `;
+    warn.innerHTML = `
+      ⚠️ <strong>Camera, microphone and screen sharing are blocked.</strong>
+      This page is served over plain HTTP — browsers only allow media access on
+      <strong>HTTPS or localhost</strong>.
+      Please access this page via HTTPS or ask your administrator to enable HTTPS
+      (e.g. using nginx + SSL certificate or a Cloudflare tunnel).
+    `;
+    document.body.appendChild(warn);
+  }
 });
 
 // ── Screen management ─────────────────────────────────────────────────────────
@@ -146,6 +167,7 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
     .on(RoomEvent.ParticipantConnected,    onPatientJoined)
     .on(RoomEvent.ParticipantDisconnected, onPatientLeft)
     .on(RoomEvent.TrackSubscribed,         onTrackSubscribed)
+    .on(RoomEvent.LocalTrackPublished,     onLocalTrackPublished)
     .on(RoomEvent.TrackUnsubscribed, (track, pub, p) => {
       track.detach();
       if (track.kind === LivekitClient.Track.Kind.Audio) {
@@ -157,11 +179,20 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
   await room.connect(livekitUrl, token);
 
   // Enable camera + mic
-  try {
-    await room.localParticipant.enableCameraAndMicrophone();
-  } catch (e) {
-    console.warn('Camera/mic not available:', e.message);
-    try { await room.localParticipant.setMicrophoneEnabled(true); } catch (_) {}
+  // navigator.mediaDevices is only available on HTTPS/localhost.
+  // On plain HTTP it will be undefined — show a clear message instead of crashing.
+  if (!navigator.mediaDevices) {
+    showHostBanner(
+      '⚠️ Camera & mic blocked — page must be served over HTTPS. You are still connected as host.',
+      'warn'
+    );
+  } else {
+    try {
+      await room.localParticipant.enableCameraAndMicrophone();
+    } catch (e) {
+      console.warn('Camera/mic not available:', e.message);
+      try { await room.localParticipant.setMicrophoneEnabled(true); } catch (_) {}
+    }
   }
 
   // Attach host self-view
@@ -283,13 +314,26 @@ async function toggleScreenShare() {
     setTimeout(hideHostBanner, 3000);
     return;
   }
+
+  // Screen sharing requires a secure context (HTTPS or localhost).
+  // On plain HTTP, navigator.mediaDevices is undefined and getDisplayMedia will crash.
+  if (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia) {
+    showHostBanner(
+      '⚠️ Screen sharing requires HTTPS. ' +
+      'Ask your administrator to enable SSL (e.g. nginx + SSL cert or Cloudflare tunnel).',
+      'warn'
+    );
+    setTimeout(hideHostBanner, 8000);
+    return;
+  }
+
   const btn = document.getElementById('btn-screen');
   btn.disabled = true;
   try {
     if (!screenSharing) {
       try {
         await room.localParticipant.setScreenShareEnabled(true, {
-          audio: true,   // capture system audio when sharing a browser tab
+          audio: true,
           video: { frameRate: 15, width: 1280, height: 720 },
         });
       } catch (audioErr) {
@@ -298,7 +342,7 @@ async function toggleScreenShare() {
           audio: false,
           video: { frameRate: 15, width: 1280, height: 720 },
         });
-        showHostBanner('💡 Screen shared without audio (Select a Browser Tab to share system audio)', 'info');
+        showHostBanner('💡 Screen shared without audio (select a browser tab to include system audio)', 'info');
         setTimeout(hideHostBanner, 6000);
       }
       screenSharing = true;
@@ -306,13 +350,7 @@ async function toggleScreenShare() {
       btn.querySelector('.ctrl-icon').textContent  = 'SCR';
       btn.querySelector('.ctrl-label').textContent = 'Stop Share';
       document.getElementById('screen-share-indicator')?.classList.remove('hidden');
-      
-      const screenPub = room.localParticipant.getTrackPublications()
-        .find(p => p.source === LivekitClient.Track.Source.ScreenShare || p.source === 'screen_share');
-      if (screenPub?.track) {
-        screenPub.track.attach(document.getElementById('host-screen-video'));
-        document.getElementById('host-screen-card')?.classList.remove('hidden');
-      }
+      // Track attached via onLocalTrackPublished once LiveKit confirms it's published
     } else {
       await room.localParticipant.setScreenShareEnabled(false);
       screenSharing = false;
@@ -323,15 +361,27 @@ async function toggleScreenShare() {
       document.getElementById('host-screen-card')?.classList.add('hidden');
     }
   } catch (e) {
-    console.warn('Screen share cancelled or failed:', e.message);
-    showHostBanner('⚠️ Screen share cancelled or permission denied', 'warn');
-    setTimeout(hideHostBanner, 4000);
+    const msg = e.name === 'NotAllowedError'
+      ? '⚠️ Screen share permission denied by browser.'
+      : `⚠️ Screen share failed: ${e.message}`;
+    console.warn('Screen share error:', e);
+    showHostBanner(msg, 'warn');
+    setTimeout(hideHostBanner, 5000);
     screenSharing = false;
     btn.className = 'ctrl-btn';
     btn.querySelector('.ctrl-label').textContent = 'Share Screen';
     document.getElementById('host-screen-card')?.classList.add('hidden');
   } finally {
     btn.disabled = false;
+  }
+}
+
+// Attach our own screen share track once it's confirmed published to the room
+function onLocalTrackPublished(publication) {
+  const { Track } = LivekitClient;
+  if (publication.source === Track.Source.ScreenShare && publication.track) {
+    publication.track.attach(document.getElementById('host-screen-video'));
+    document.getElementById('host-screen-card')?.classList.remove('hidden');
   }
 }
 

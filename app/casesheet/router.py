@@ -1106,13 +1106,9 @@ def _map_draft_to_encounter(
         rx_quick_str = "\n\n".join(qs_parts)
 
     rx_regimen_str = _clean(erp.get("rx_daily_regimen"))
-    if not rx_regimen_str and isinstance(synth_rx.get("daily_regimen"), dict):
-        dr_parts = []
-        for k, label in [("oil_applications", "Oil Applications"), ("breathing_exercises", "Breathing & Pranayama")]:
-            val = _clean(synth_rx["daily_regimen"].get(k))
-            if val:
-                dr_parts.append(f"[{label}]\n{val}")
-        rx_regimen_str = "\n\n".join(dr_parts)
+    # We no longer synthesize rx_daily_regimen automatically.
+    # By leaving it empty, the print format will cleanly render the granular
+    # oil_applications, detox_procedures, and breathing_exercises fields in a beautiful grid.
 
     full_notes_payload = {
         **draft,
@@ -1161,6 +1157,26 @@ def _map_draft_to_encounter(
         "general_examination": _clean(erp.get("general_examination")) or gen_text,
         "systemic_examination": _clean(erp.get("systemic_examination")) or sysex_text,
 
+        "sgp_pulse_table": [
+            {
+                "system": _clean(p.get("system")),
+                "vata": _clean(p.get("vata")),
+                "pitta": _clean(p.get("pitta")),
+                "kapha": _clean(p.get("kapha")),
+            }
+            for p in (pulse if isinstance(pulse, list) else [])
+            if isinstance(p, dict) and p.get("system")
+        ],
+        "sgp_diet_weeks": [
+            {
+                "week_range": _clean(dw.get("week_range") or f"Week {dw.get('no_of_weeks', '')}"),
+                "diet_type": _clean(dw.get("diet_type") or dw.get("diet_item") or "Rice Diet"),
+                "diet_items": _clean(dw.get("diet_items") or dw.get("instructions") or ""),
+                "notes": _clean(dw.get("notes") or ""),
+            }
+            for dw in (diet_plan_weeks if isinstance(diet_plan_weeks, list) else [])
+            if isinstance(dw, dict)
+        ],
         "sgp_supplements_table": [
             {
                 "supplement_name": _clean(s.get("name") or "") or "Unknown",
@@ -1205,7 +1221,9 @@ def _map_draft_to_encounter(
         "menstrual_obstetric_history": _clean(erp.get("menstrual_obstetric_history")) or obgyn_text,
         "general_examination": _clean(erp.get("general_examination")) or gen_text,
         "investigation_reports": _clean(erp.get("investigation_reports")) or inv_reports_text,
-        "detox_procedures": _clean(erp.get("detox_procedures")) or detox_text,
+        "detox_procedures": _clean(erp.get("detox_procedures")) or _clean(synth_rx.get("daily_regimen", {}).get("detox_procedures")) or detox_text,
+        "oil_applications": _clean(erp.get("oil_applications")) or _clean(synth_rx.get("daily_regimen", {}).get("oil_applications")),
+        "breathing_exercises": _clean(erp.get("breathing_exercises")) or _clean(synth_rx.get("daily_regimen", {}).get("breathing_exercises")),
         "exercises_yoga": _clean(erp.get("exercises_yoga")) or exercises_text,
         "rx_quick_summary": rx_quick_str,
         "rx_daily_regimen": rx_regimen_str,
