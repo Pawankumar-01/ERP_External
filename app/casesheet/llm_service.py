@@ -142,13 +142,25 @@ class LLMService:
             },
         ]
 
-        raw_result = await self._safe_json_call(
-            messages=messages,
-            label=f"section_image:{section}",
-            fallback={"_raw": transcript, "_image": filename},
-            max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
+        try:
+            raw_result = await self._safe_json_call(
+                messages=messages,
+                label=f"section_image:{section}",
+                fallback={"_raw": transcript, "_image": filename},
+                max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
+            )
+            if isinstance(raw_result, dict) and not raw_result.get("_error"):
+                return enrich_section_data(section, raw_result)
+        except Exception as err:
+            logger.warning("Vision AI call failed for section '%s' (%s) — using text extraction fallback", section, err)
+
+        # Fallback: Process using Groq/OpenRouter text pipeline
+        fallback_prompt = (
+            f"DOCTOR'S DICTATION & CAPTURED REPORT IMAGE ('{filename}'):\n\n"
+            f"Transcript: {transcript if transcript else 'Captured report image uploaded.'}\n\n"
+            f"Section Instruction: {prompt}"
         )
-        return enrich_section_data(section, raw_result)
+        return await self.extract_section(section, fallback_prompt)
 
     async def compose_from_draft(
         self,

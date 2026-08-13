@@ -1260,6 +1260,7 @@ def _map_draft_to_encounter(
 
     synth_rx = _synthesize_prescription_sheet(draft)
     norm_supp = _normalize_supplements_weeks(draft.get("ayurvedic_supplements"))
+    diet_plan_weeks = synth_rx.get("diet_plan_weeks") or (diet.get("plan_weeks") if isinstance(diet, dict) else []) or (draft.get("diet_and_lifestyle", {}).get("plan_weeks") if isinstance(draft.get("diet_and_lifestyle"), dict) else [])
 
     rx_quick_str = _clean(erp.get("rx_quick_summary"))
     if not rx_quick_str and isinstance(synth_rx.get("quick_summary"), dict):
