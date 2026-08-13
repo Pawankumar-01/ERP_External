@@ -329,6 +329,7 @@ async def delete_section_image(
     session_id: str,
     section: str,
     filename: str,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db),
 ):
     import os
@@ -349,20 +350,51 @@ async def delete_section_image(
 
     current = dict(draft_row.draft or {})
     sec_obj = current.get(section)
+    remaining_images = []
     if isinstance(sec_obj, dict):
-        if isinstance(sec_obj.get("images"), list):
-            sec_obj["images"] = [
-                img for img in sec_obj["images"]
-                if not (isinstance(img, dict) and img.get("filename") == filename) and img != filename
-            ]
-        if isinstance(sec_obj.get("data"), dict) and isinstance(sec_obj["data"].get("images"), list):
-            sec_obj["data"]["images"] = [
-                img for img in sec_obj["data"]["images"]
-                if not (isinstance(img, dict) and img.get("filename") == filename) and img != filename
-            ]
+        raw_imgs = sec_obj.get("images") or []
+        remaining_images = [
+            img for img in raw_imgs
+            if not (isinstance(img, dict) and img.get("filename") == filename) and img != filename
+        ]
+        sec_obj["images"] = remaining_images
+
+        if isinstance(sec_obj.get("data"), dict):
+            sec_data = dict(sec_obj["data"])
+            if isinstance(sec_data.get("images"), list):
+                sec_data["images"] = [
+                    img for img in sec_data["images"]
+                    if not (isinstance(img, dict) and img.get("filename") == filename) and img != filename
+                ]
+            if not remaining_images:
+                sec_data.pop("_ocr_processed", None)
+                sec_data.pop("_ocr_filename", None)
+            sec_obj["data"] = sec_data
+
         current[section] = sec_obj
         draft_row.draft = current
         await db.commit()
+
+        raw_transcripts = current.get("_raw_transcripts") or {}
+        existing_transcript = raw_transcripts.get(section) or ""
+
+        if remaining_images:
+            last_img = remaining_images[-1]
+            last_filename = last_img.get("filename") if isinstance(last_img, dict) else str(last_img)
+            last_path = os.path.join("uploads", "lab_reports", last_filename)
+            if os.path.exists(last_path):
+                try:
+                    with open(last_path, "rb") as f:
+                        img_bytes = f.read()
+                    background_tasks.add_task(
+                        _process_image_background,
+                        session_id=session_id,
+                        section=section,
+                        image_bytes=img_bytes,
+                        filename=last_filename,
+                    )
+                except Exception as err:
+                    logger.error(f"Failed to read remaining image for re-extraction: {err}")
 
     file_path = os.path.join("uploads", "lab_reports", filename)
     if os.path.exists(file_path):
@@ -377,8 +409,8 @@ async def delete_section_image(
         "session_id": session_id,
         "section": section,
         "deleted_filename": filename,
-        "images": sec_obj.get("images", []) if isinstance(sec_obj, dict) else [],
-        "message": "Image deleted successfully.",
+        "images": remaining_images,
+        "message": "Image deleted successfully and section re-synced.",
     }
 
 
