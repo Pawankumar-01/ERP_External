@@ -49,9 +49,6 @@ _raw_candidates = [
     "meta-llama/llama-3.1-8b-instruct:free",
     "qwen/qwen-2.5-7b-instruct:free",
     "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-2-9b-it:free",
-    "microsoft/phi-4:free",
-    "mistralai/mistral-7b-instruct:free",
     "google/gemma-4-26b-a4b-it:free",
 ]
 MODEL_CANDIDATES = []

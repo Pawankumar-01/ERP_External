@@ -1378,8 +1378,8 @@ def _map_draft_to_encounter(
         "family_history": _clean(erp.get("family_history")) or family_text,
         "allergies": _clean(erp.get("allergies")) or _join(allergies),
 
-        "follow_up": _clean(erp.get("follow_up")) or fup_text or _clean(rx.get("review_after")),
-        "review_after": _clean(erp.get("review_after")) or _clean(rx.get("review_after")) or fup_text,
+        "follow_up": _clean(erp.get("follow_up")) or fup_text or _clean(synth_rx.get("review_after")),
+        "review_after": _clean(erp.get("review_after")) or _clean(synth_rx.get("review_after")) or fup_text,
         "prognosis": _clean(erp.get("prognosis")) or _clean(ap.get("prognosis") if isinstance(ap, dict) else None),
         "notes": _clean(erp.get("notes")) or _json.dumps(full_notes_payload, ensure_ascii=False, indent=2, default=str),
 
