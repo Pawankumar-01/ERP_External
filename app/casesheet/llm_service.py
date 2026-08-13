@@ -43,6 +43,8 @@ GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemma-4-31b-it:free")
 _raw_candidates = [
     PRIMARY_MODEL,
+    "google/gemini-2.0-flash-001",
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
     "google/gemma-4-31b-it:free",
     "meta-llama/llama-3.1-8b-instruct:free",
     "qwen/qwen-2.5-7b-instruct:free",
@@ -97,6 +99,53 @@ class LLMService:
             messages=messages,
             label=f"section:{section}",
             fallback={"_raw": transcript},
+            max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
+        )
+        return enrich_section_data(section, raw_result)
+
+    async def extract_section_with_image(
+        self,
+        section: str,
+        transcript: str,
+        image_bytes: bytes,
+        filename: str = "image.jpg",
+    ) -> Dict[str, Any]:
+        """
+        Process both audio transcript AND captured image for a clinical section.
+        Extracts lab values, diagnostic findings, and visual observations from the image,
+        combines them with the audio dictation, and summarizes into structured JSON.
+        """
+        import base64
+        base64_img = base64.b64encode(image_bytes).decode("utf-8")
+        data_url = f"data:image/jpeg;base64,{base64_img}"
+
+        prompt = SECTION_PROMPTS.get(section) or GLOBAL_MEDICAL_INSTRUCTION
+
+        text_prompt = (
+            f"CLINICAL INPUT FOR SECTION '{section}':\n\n"
+            f"AUDIO DICTATION TRANSCRIPT:\n<<<\n{transcript.strip() if transcript else 'No audio dictation provided.'}\n>>>\n\n"
+            f"CAPTURED CLINICAL IMAGE / REPORT / SCAN ('{filename}'):\n"
+            "Extract all text, lab test parameters, numerical values, reference ranges, abnormal flags, "
+            "and visual clinical findings visible in this attached photograph/document.\n\n"
+            f"{prompt}\n\n"
+            "IMPORTANT: Combine both the dictation and image contents into a single accurate JSON response. Respond with ONLY valid JSON."
+        )
+
+        messages = [
+            {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text_prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            },
+        ]
+
+        raw_result = await self._safe_json_call(
+            messages=messages,
+            label=f"section_image:{section}",
+            fallback={"_raw": transcript, "_image": filename},
             max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
         )
         return enrich_section_data(section, raw_result)

@@ -519,6 +519,47 @@ class ERPBridgeService:
             data={"status": status},
         )
 
+    async def upload_file_to_encounter(
+        self,
+        encounter_id: str,
+        filename: str,
+        file_bytes: bytes,
+        is_private: int = 0,
+    ) -> Optional[Dict]:
+        """
+        Upload a file attachment to an SGP Encounter doc in Frappe/ERPNext via /api/method/upload_file.
+        """
+        if not self.is_configured:
+            logger.warning(
+                f"[ERP BRIDGE] Placeholder mode — skipping file upload '{filename}' to encounter '{encounter_id}'"
+            )
+            return {"file_url": f"/files/{filename}", "_placeholder": True}
+
+        url = self._url("/api/method/upload_file")
+        headers = {
+            "Authorization": f"token {settings.ERPNEXT_API_KEY}:{settings.ERPNEXT_API_SECRET}"
+        }
+        data = aiohttp.FormData()
+        data.add_field("file", file_bytes, filename=filename, content_type="image/jpeg")
+        data.add_field("doctype", DOCTYPE_ENCOUNTER)
+        data.add_field("docname", encounter_id)
+        data.add_field("is_private", str(is_private))
+
+        timeout = aiohttp.ClientTimeout(total=30)
+        try:
+            async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+                async with session.post(url, data=data) as resp:
+                    body = await resp.json(content_type=None)
+                    if resp.status in (200, 201):
+                        logger.info(f"[ERP] Successfully attached file '{filename}' to SGP Encounter '{encounter_id}'")
+                        return body.get("message", body)
+                    else:
+                        logger.error(f"[ERP] File upload failed ({resp.status}): {body}")
+                        return None
+        except Exception as e:
+            logger.error(f"[ERP] Exception during file upload to encounter: {e}")
+            return None
+
     async def get_appointment(self, appointment_id: str) -> Optional[Dict]:
         """GET /api/resource/Patient Appointment/{id}"""
         return await self._request(

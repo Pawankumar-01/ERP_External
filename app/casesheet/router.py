@@ -241,6 +241,88 @@ async def upload_audio(
     return {"status": "processing", "session_id": session_id, "section": section, "message": "Audio received. Processing in background."}
 
 
+@router.post("/{session_id}/sections/{section}/images", status_code=200)
+@router.post("/{session_id}/sections/{section}/image", status_code=200)
+async def upload_section_image(
+    session_id: str,
+    section: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    import os
+    if section not in VALID_SECTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid section '{section}'. Valid: {', '.join(sorted(VALID_SECTIONS))}"
+        )
+
+    session = await _get_session(db, session_id)
+    if session.status == SessionStatus.FINALIZED:
+        raise HTTPException(status_code=409, detail="Session already finalized")
+
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Empty image file received")
+
+    ext = os.path.splitext(file.filename or "image.jpg")[1] or ".jpg"
+    unique_filename = f"{section}_{uuid.uuid4().hex[:8]}{ext}"
+    save_dir = os.path.join("uploads", "lab_reports")
+    os.makedirs(save_dir, exist_ok=True)
+    file_path = os.path.join(save_dir, unique_filename)
+
+    with open(file_path, "wb") as f:
+        f.write(image_bytes)
+
+    image_url = f"/uploads/lab_reports/{unique_filename}"
+    img_meta = {
+        "filename": unique_filename,
+        "url": image_url,
+        "uploaded_at": datetime.utcnow().isoformat(),
+    }
+
+    result = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
+    draft_row = result.scalar_one_or_none()
+    current = dict(draft_row.draft or {}) if draft_row else {}
+
+    sec_obj = current.get(section)
+    if not isinstance(sec_obj, dict):
+        sec_obj = {"status": "processing", "data": {}, "images": []}
+    elif "images" not in sec_obj or not isinstance(sec_obj["images"], list):
+        sec_obj["images"] = []
+
+    sec_obj["images"].append(img_meta)
+    if isinstance(sec_obj.get("data"), dict):
+        if "images" not in sec_obj["data"] or not isinstance(sec_obj["data"]["images"], list):
+            sec_obj["data"]["images"] = []
+        sec_obj["data"]["images"].append(img_meta)
+
+    current[section] = sec_obj
+    if draft_row:
+        draft_row.draft = current
+        await db.commit()
+
+    logger.info(f"Image uploaded for section '{section}' in session '{session_id}': {unique_filename}")
+
+    background_tasks.add_task(
+        _process_image_background,
+        session_id=session_id,
+        section=section,
+        image_bytes=image_bytes,
+        filename=unique_filename,
+    )
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "section": section,
+        "filename": unique_filename,
+        "url": image_url,
+        "images": sec_obj["images"],
+        "message": "Image uploaded successfully. OCR & AI summarization running in background.",
+    }
+
+
 @router.get("/{session_id}/draft")
 async def get_draft(session_id: str, db: AsyncSession = Depends(get_db)):
     session = await _get_session(db, session_id)
@@ -373,6 +455,12 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
     session.erp_encounter_id = encounter_id
     await db.commit()
 
+    # Automatically attach captured image files to the SGP Encounter in Frappe/ERPNext
+    try:
+        await _attach_draft_images_to_encounter(encounter_id, draft_data)
+    except Exception as e:
+        logger.error(f"Error attaching images to encounter '{encounter_id}': {e}")
+
     appointment_closed = False
     payment_linked     = False
 
@@ -396,6 +484,81 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
 
 
 # ── Background tasks ──────────────────────────────────────────────────────────
+
+async def _attach_draft_images_to_encounter(encounter_id: str, draft: dict):
+    if not encounter_id or encounter_id == "PLACEHOLDER":
+        return
+    import os
+    image_names = set()
+    for sec_key, sec_val in draft.items():
+        if not isinstance(sec_val, dict):
+            continue
+        raw_imgs = sec_val.get("images") or []
+        if not raw_imgs and isinstance(sec_val.get("data"), dict):
+            raw_imgs = sec_val["data"].get("images") or []
+        if isinstance(raw_imgs, list):
+            for img in raw_imgs:
+                if isinstance(img, dict) and img.get("filename"):
+                    image_names.add(img["filename"])
+
+    for filename in image_names:
+        file_path = os.path.join("uploads", "lab_reports", filename)
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "rb") as f:
+                    file_bytes = f.read()
+                await erp_bridge_service.upload_file_to_encounter(
+                    encounter_id=encounter_id,
+                    filename=filename,
+                    file_bytes=file_bytes,
+                )
+                logger.info(f"Attached image '{filename}' to SGP Encounter '{encounter_id}'")
+            except Exception as e:
+                logger.error(f"Failed to attach image '{filename}' to encounter '{encounter_id}': {e}")
+
+
+async def _process_image_background(
+    session_id: str,
+    section: str,
+    image_bytes: bytes,
+    filename: str,
+):
+    from app.config.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
+            draft_row = result.scalar_one_or_none()
+            if not draft_row:
+                return
+
+            current = dict(draft_row.draft or {})
+            raw_transcripts = current.get("_raw_transcripts") or {}
+            existing_transcript = raw_transcripts.get(section) or ""
+
+            extracted = await llm_service.extract_section_with_image(
+                section=section,
+                transcript=existing_transcript,
+                image_bytes=image_bytes,
+                filename=filename,
+            )
+
+            sec_images = (current.get(section) or {}).get("images") or []
+            if isinstance(extracted, dict):
+                extracted["images"] = sec_images
+
+            current[section] = {
+                "status": "completed",
+                "data": extracted,
+                "images": sec_images,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+
+            draft_row.draft = current
+            await db.commit()
+            logger.info(f"Image background OCR/AI processing completed for section '{section}' in session '{session_id}'")
+        except Exception as e:
+            logger.error(f"Image background processing failed for section '{section}' in session '{session_id}': {e}")
+
 
 async def _process_audio_background(session_id: str, section: str, audio_bytes: bytes, language: Optional[str]) -> None:
     from app.config.database import AsyncSessionLocal

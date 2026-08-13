@@ -70,6 +70,10 @@ app.include_router(appointment_router, prefix="/api/v1/appointments", tags=["App
 app.include_router(casesheet_router,   prefix="/api/v1/casesheet",    tags=["Case Sheet V2"])
 app.include_router(whatsapp_router, prefix="/api/v1/whatsapp", tags=["WhatsApp"])
 
+import os
+os.makedirs("uploads/lab_reports", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 # ─── Static files (frontend) ─────────────────────────────────────────────────
 app.mount("/meet", StaticFiles(directory="frontend/orientation_meet", html=True), name="meet")
 
