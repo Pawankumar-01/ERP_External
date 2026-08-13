@@ -39,17 +39,19 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.2-11b-vision-preview",
+    "llama-3.2-90b-vision-preview",
+    "llama-3.1-8b-instant",
+]
 PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemma-4-31b-it:free")
 _raw_candidates = [
     PRIMARY_MODEL,
-    "google/gemini-2.0-flash-001",
-    "meta-llama/llama-3.2-11b-vision-instruct:free",
+    "google/gemini-2.0-flash-lite-001",
+    "meta-llama/llama-3.3-70b-instruct",
+    "deepseek/deepseek-r1-distill-llama-70b",
     "google/gemma-4-31b-it:free",
-    "meta-llama/llama-3.1-8b-instruct:free",
-    "qwen/qwen-2.5-7b-instruct:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-4-26b-a4b-it:free",
 ]
 MODEL_CANDIDATES = []
 for m in _raw_candidates:
@@ -264,6 +266,25 @@ class LLMService:
             logger.error("LLM call failed for %s: %s", label, exc)
             return {**fallback, "_error": str(exc)}
 
+    def _prepare_messages_for_model(self, messages: list, model: str) -> list:
+        is_vision = any(v in model.lower() for v in ["vision", "gemini", "gpt-4-vision", "claude-3"])
+        norm = []
+        for msg in messages:
+            c = msg.get("content")
+            if isinstance(c, list):
+                if is_vision:
+                    norm.append(msg)
+                else:
+                    text_parts = [
+                        item.get("text", "")
+                        for item in c
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    ]
+                    norm.append({**msg, "content": "\n".join(t for t in text_parts if t)})
+            else:
+                norm.append(msg)
+        return norm
+
     async def _call_llm(self, messages: list, max_tokens: int) -> str:
         groq_key = getattr(settings, "GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
         openrouter_key = settings.OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY", "")
@@ -281,7 +302,7 @@ class LLMService:
                     for model in GROQ_MODELS:
                         payload = {
                             "model": model,
-                            "messages": messages,
+                            "messages": self._prepare_messages_for_model(messages, model),
                             "temperature": 0.1,
                             "max_tokens": int(max_tokens),
                         }
@@ -316,7 +337,7 @@ class LLMService:
                     for model in MODEL_CANDIDATES:
                         payload = {
                             "model": model,
-                            "messages": messages,
+                            "messages": self._prepare_messages_for_model(messages, model),
                             "temperature": 0.1,
                             "max_tokens": int(max_tokens),
                         }
