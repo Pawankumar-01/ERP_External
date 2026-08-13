@@ -604,6 +604,8 @@ async def _process_image_background(
             sec_images = (current.get(section) or {}).get("images") or []
             if isinstance(extracted, dict):
                 extracted["images"] = sec_images
+                extracted["_ocr_processed"] = True
+                extracted["_ocr_filename"] = filename
 
             current[section] = {
                 "status": "completed",
@@ -614,6 +616,10 @@ async def _process_image_background(
 
             draft_row.draft = current
             await db.commit()
+            logger.info(
+                f"📸 [OCR AI COMPLETED] Section '{section}' image '{filename}' for session '{session_id}'. "
+                f"Extracted clinical data: {extracted}"
+            )
             logger.info(f"Image background OCR/AI processing completed for section '{section}' in session '{session_id}'")
         except Exception as e:
             logger.error(f"Image background processing failed for section '{section}' in session '{session_id}': {e}")
