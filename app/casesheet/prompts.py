@@ -322,8 +322,6 @@ Schema:
   "age": "number | null",
   "age_unit": "years | months | days | null",
   "gender": "male | female | other | unknown | null",
-  "doctor_name": "string | null",
-  "doctor_id": "string | null",
   "appointment_id": "string | null",
   "visit_type": "new | follow_up | emergency | walk_in | teleconsultation | null",
   "language_detected": "string | null",
