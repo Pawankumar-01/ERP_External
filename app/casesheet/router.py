@@ -1433,7 +1433,7 @@ def _map_draft_to_encounter(
         "sgp_diet_weeks": [
             {
                 "week_range": _clean(dw.get("week_range") or f"Week {dw.get('no_of_weeks', '')}"),
-                "diet_type": _clean(dw.get("diet_type") or dw.get("diet_item") or "Rice Diet"),
+                "diet_type": _clean(dw.get("diet_type") or dw.get("diet_item") or "VPD"),
                 "diet_items": _clean(dw.get("diet_items") or dw.get("instructions") or ""),
                 "notes": _clean(dw.get("notes") or ""),
             }
