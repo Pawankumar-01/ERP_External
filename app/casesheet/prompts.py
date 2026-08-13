@@ -948,13 +948,32 @@ Schema:
 """ + _SECTION_FOOTER,
 
     "assessment_and_plan": BASE_RULES + """\
-Extract the clinician's assessment and plan for this visit.
+Extract the clinician's Assessment and Plan matching the UI voice dictation structure.
 
-Rules:
-- Capture diagnoses only if explicitly dictated.
-- Capture medications, therapies, investigations, home remedies, diet, lifestyle, referral and follow-up only if dictated.
-- Do not create new recommendations.
-- Separate allopathic diagnosis, Ayurvedic diagnosis and integrated clinical impression.
+SPEAKING INSTRUCTION FORMAT EXPECTED IN VOICE TRANSCRIPT:
+"Assessments: Allopathic and Ayurvedic diagnoses. Plan: medicines, therapies, panchakarma, investigations advised, home remedies, diet include/exclude (foods to eat and avoid), lifestyle advice, and follow-up schedule."
+
+EXTRACTION RULES:
+1. ASSESSMENTS:
+   - Extract allopathic diagnoses into "allopathic_diagnosis" array.
+   - Extract Ayurvedic diagnoses into "ayurvedic_diagnosis" string.
+   - Extract integrated impression or provisional diagnoses if spoken.
+2. PLAN:
+   - "medications": List all prescribed medicines, SGP supplements, doses, and schedules.
+   - "therapies": External therapies (e.g. Abhyanga, Lepanam, Kashaya Dhara).
+   - "panchakarma": Specific Panchakarma procedures prescribed (e.g. Vamana, Virechana, Basti, Nasyam).
+   - "procedures": Minor clinical procedures.
+   - "investigations": Lab tests, blood tests, X-rays, MRI, CT, USG scans advised.
+   - "home_remedies": Home preparations, teas, decoctions, warm compresses spoken in plan.
+   - "diet_advice":
+     - "include": Foods, soups, grains, or drinks explicitly recommended to eat/drink (e.g. barley soup, warm water, green gram).
+     - "exclude": Foods, drinks, or habits explicitly restricted/avoided (e.g. curd, cold water, fried food, nightshades).
+     - "general": General dietary rules spoken.
+   - "lifestyle_advice": Ergonomic advice, posture, habits, or exercise instructions.
+   - "follow_up":
+     - Extract follow-up duration or next visit date (e.g. "after 2 weeks", "next month", "daily", "weekly").
+
+STRICT RULE: Extract every single item dictated by the doctor without missing any points. Do NOT invent recommendations not present in the transcript.
 
 Schema:
 {
