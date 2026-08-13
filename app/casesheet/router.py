@@ -323,6 +323,65 @@ async def upload_section_image(
     }
 
 
+@router.delete("/{session_id}/sections/{section}/images/{filename}", status_code=200)
+@router.delete("/{session_id}/sections/{section}/image/{filename}", status_code=200)
+async def delete_section_image(
+    session_id: str,
+    section: str,
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+):
+    import os
+    if section not in VALID_SECTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid section '{section}'."
+        )
+
+    session = await _get_session(db, session_id)
+    if session.status == SessionStatus.FINALIZED:
+        raise HTTPException(status_code=409, detail="Session already finalized")
+
+    result = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
+    draft_row = result.scalar_one_or_none()
+    if not draft_row:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    current = dict(draft_row.draft or {})
+    sec_obj = current.get(section)
+    if isinstance(sec_obj, dict):
+        if isinstance(sec_obj.get("images"), list):
+            sec_obj["images"] = [
+                img for img in sec_obj["images"]
+                if not (isinstance(img, dict) and img.get("filename") == filename) and img != filename
+            ]
+        if isinstance(sec_obj.get("data"), dict) and isinstance(sec_obj["data"].get("images"), list):
+            sec_obj["data"]["images"] = [
+                img for img in sec_obj["data"]["images"]
+                if not (isinstance(img, dict) and img.get("filename") == filename) and img != filename
+            ]
+        current[section] = sec_obj
+        draft_row.draft = current
+        await db.commit()
+
+    file_path = os.path.join("uploads", "lab_reports", filename)
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            logger.info(f"Deleted image file '{filename}' from disk for session '{session_id}'")
+        except Exception as e:
+            logger.error(f"Error deleting image file '{filename}': {e}")
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "section": section,
+        "deleted_filename": filename,
+        "images": sec_obj.get("images", []) if isinstance(sec_obj, dict) else [],
+        "message": "Image deleted successfully.",
+    }
+
+
 @router.get("/{session_id}/draft")
 async def get_draft(session_id: str, db: AsyncSession = Depends(get_db)):
     session = await _get_session(db, session_id)
