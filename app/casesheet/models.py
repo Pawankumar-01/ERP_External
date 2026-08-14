@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import String, DateTime, JSON, ForeignKey, func
+from sqlalchemy import String, DateTime, JSON, Text, Index, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config.database import Base
@@ -30,15 +30,20 @@ class CasesheetSession(Base):
     Linked to ERPNext: patient, appointment, doctor.
     """
     __tablename__ = "casesheet_sessions"
+    __table_args__ = (
+        Index("ix_session_doctor_status", "doctor_id", "status"),
+    )
 
     id:             Mapped[str] = mapped_column(String(36), primary_key=True,
                                                 default=lambda: str(uuid.uuid4()))
     patient_id:     Mapped[str] = mapped_column(String(100), nullable=False)  # ERPNext Patient name
+    patient_name:   Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # cached display name
     doctor_id:      Mapped[str] = mapped_column(String(100), nullable=False)  # ERPNext Practitioner name
     appointment_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     lead_id:        Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     status:         Mapped[str] = mapped_column(String(20), default=SessionStatus.ACTIVE)
     erp_encounter_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    last_error:     Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # stores finalization failure reason
     created_at:     Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at:     Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                                       server_default=func.now(), onupdate=func.now())

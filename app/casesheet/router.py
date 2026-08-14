@@ -9,6 +9,7 @@ Endpoints:
   POST   /{session_id}/retranscribe/{section} → re-process corrected transcript
   POST   /{session_id}/finalize    → push final draft to ERPNext Patient Encounter
   GET    /                         → list sessions (paginated, filter by doctor/patient)
+  GET    /pending                  → list unsubmitted drafts for a practitioner dashboard
 
 Architecture:
   - Audio processing (Whisper + LLM) runs in BackgroundTasks — never blocks event loop
@@ -24,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select, desc
+from sqlalchemy import or_, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
@@ -66,6 +67,20 @@ class SessionListItem(BaseModel):
     erp_encounter_id: Optional[str]
     created_at:       str
     model_config = {"from_attributes": True}
+
+
+class PendingSessionItem(BaseModel):
+    """Enriched session info for the practitioner draft dashboard."""
+    session_id:              str
+    patient_id:              str
+    patient_name:            Optional[str]
+    doctor_id:               str
+    status:                  str
+    last_error:              Optional[str]
+    completed_sections_count: int
+    total_sections:          int
+    created_at:              str
+    updated_at:              str
 
 
 class DraftPatchRequest(BaseModel):
@@ -116,6 +131,53 @@ async def list_sessions(
         )
         for s in sessions
     ]
+
+
+@router.get("/pending", response_model=List[PendingSessionItem])
+async def list_pending_sessions(
+    doctor_id: str = Query(..., description="Practitioner ID to fetch unsubmitted drafts for"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all non-finalized sessions for a practitioner, enriched with section progress."""
+    query = (
+        select(CasesheetSession)
+        .where(CasesheetSession.doctor_id == doctor_id)
+        .where(or_(
+            CasesheetSession.status == SessionStatus.ACTIVE,
+            CasesheetSession.status == SessionStatus.PAUSED,
+            CasesheetSession.status == SessionStatus.FAILED,
+        ))
+        .order_by(desc(CasesheetSession.updated_at))
+        .limit(100)
+    )
+    result = await db.execute(query)
+    sessions = result.scalars().all()
+
+    total_sections = len(VALID_SECTIONS)
+    items: List[PendingSessionItem] = []
+    for s in sessions:
+        # Count how many clinical sections have data in the draft
+        draft_data = {}
+        if s.draft:
+            draft_data = s.draft.draft or {}
+        filled = sum(
+            1 for k, v in draft_data.items()
+            if k in VALID_SECTIONS and isinstance(v, dict) and v.get("status") == "completed"
+        )
+        items.append(PendingSessionItem(
+            session_id=s.id,
+            patient_id=s.patient_id,
+            patient_name=s.patient_name,
+            doctor_id=s.doctor_id,
+            status=s.status,
+            last_error=s.last_error,
+            completed_sections_count=filled,
+            total_sections=total_sections,
+            created_at=s.created_at.isoformat(),
+            updated_at=s.updated_at.isoformat(),
+        ))
+
+    return items
 
 
 @router.get("/patient-lookup")
@@ -176,6 +238,7 @@ async def start_session(
     session = CasesheetSession(
         id=str(uuid.uuid4()),
         patient_id=patient_id,
+        patient_name=patient_name,
         doctor_id=doctor_id,
         appointment_id=None,
         lead_id=patient.get("custom_sgp_lead"),
@@ -534,16 +597,28 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
         lead_id=session.lead_id,
         )
 
-    encounter = await erp_bridge_service.create_encounter(encounter_payload)
+    # ── Resilient ERPNext submission — capture error, never lose draft ─────
+    try:
+        encounter = await erp_bridge_service.create_encounter(encounter_payload)
+    except Exception as exc:
+        error_msg = f"ERPNext encounter creation error: {exc}"
+        logger.error(f"Session {session_id}: {error_msg}")
+        session.status     = SessionStatus.FAILED
+        session.last_error = error_msg[:2000]  # truncate to avoid oversized field
+        await db.commit()
+        raise HTTPException(status_code=502, detail=error_msg)
 
     if not encounter:
-        session.status = SessionStatus.FAILED
+        error_msg = "Failed to create encounter in ERPNext — empty response received."
+        session.status     = SessionStatus.FAILED
+        session.last_error = error_msg
         await db.commit()
-        raise HTTPException(status_code=502, detail="Failed to create encounter in ERPNext. Draft preserved — retry /finalize.")
+        raise HTTPException(status_code=502, detail=f"{error_msg} Draft preserved — retry /finalize.")
 
     encounter_id             = encounter.get("name")                                
     session.status           = SessionStatus.FINALIZED
     session.erp_encounter_id = encounter_id
+    session.last_error       = None  # clear any previous failure reason
     await db.commit()
 
     # Automatically attach captured image files to the SGP Encounter in Frappe/ERPNext
