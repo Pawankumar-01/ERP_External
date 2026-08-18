@@ -503,16 +503,27 @@ class ERPBridgeService:
         GET /api/resource/Healthcare Practitioner
         Fetch registered healthcare practitioners from ERPNext.
         """
+        # Standard ERPNext Healthcare Practitioner fields
         params = {
-            "fields": '["name", "practitioner_name", "first_name", "last_name", "title", "department", "designation", "mobile"]',
+            "fields": '["name", "practitioner_name", "department", "designation", "mobile_phone", "user_id"]',
             "limit_page_length": 200,
         }
         try:
             res = await self._request("GET", "/api/resource/Healthcare Practitioner", params=params)
-            return res if isinstance(res, list) else []
+            if isinstance(res, list):
+                return res
         except Exception as err:
-            logger.warning(f"Failed to fetch Healthcare Practitioners from ERPNext: {err}")
-            return []
+            logger.warning(f"Failed to fetch Healthcare Practitioners with field spec: {err}")
+
+        # Fallback: query without strict fields filter
+        try:
+            res = await self._request("GET", "/api/resource/Healthcare Practitioner", params={"limit_page_length": 200})
+            if isinstance(res, list):
+                return res
+        except Exception as err:
+            logger.error(f"Failed fallback fetch for Healthcare Practitioner: {err}")
+
+        return []
 
     async def create_encounter(self, encounter_data: Dict) -> Optional[Dict]:
         """

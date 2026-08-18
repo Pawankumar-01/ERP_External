@@ -136,22 +136,19 @@ async def list_sessions(
 @router.get("/practitioners")
 async def list_practitioners(db: AsyncSession = Depends(get_db)):
     """
-    Return all available Healthcare Practitioners from ERPNext and active session records.
+    Return all available Healthcare Practitioners directly from ERPNext DocType.
     Returns a deduplicated list of practitioner objects with `id`, `name`, `department`, `designation`.
     """
     practitioners: List[Dict[str, Any]] = []
     seen_ids = set()
 
-    # 1. Fetch live practitioners from ERPNext
+    # 1. Fetch live practitioners directly from ERPNext Healthcare Practitioner DocType
     try:
         erp_list = await erp_bridge_service.get_practitioners()
         for doc in erp_list:
             if isinstance(doc, dict):
                 p_id = str(doc.get("name") or "").strip()
-                first = str(doc.get("first_name") or "").strip()
-                last = str(doc.get("last_name") or "").strip()
-                combined = f"{first} {last}".strip()
-                p_name = str(doc.get("practitioner_name") or combined or doc.get("title") or p_id).strip()
+                p_name = str(doc.get("practitioner_name") or doc.get("title") or p_id).strip()
 
                 if p_id and p_id not in seen_ids:
                     seen_ids.add(p_id)
@@ -164,30 +161,30 @@ async def list_practitioners(db: AsyncSession = Depends(get_db)):
     except Exception as err:
         logger.warning(f"Error fetching ERPNext practitioners: {err}")
 
-    # 2. Include unique valid doctor_ids from local session history (filter out junk test entries)
-    try:
-        result = await db.execute(select(CasesheetSession.doctor_id).distinct())
-        local_ids = result.scalars().all()
-        for doc_id in local_ids:
-            doc_id_str = str(doc_id or "").strip()
-            if not doc_id_str or doc_id_str in seen_ids:
-                continue
-            # Filter out purely numeric or short random test strings like 737373, snnnds, ir8r84
-            is_junk = (
-                doc_id_str.isdigit()
-                or len(doc_id_str) < 4
-                or doc_id_str.lower() in {"snnnds", "usuueueu", "ir8r84", "4748", "63773", "8483", "doc"}
-            )
-            if not is_junk:
-                seen_ids.add(doc_id_str)
-                practitioners.append({
-                    "id": doc_id_str,
-                    "name": doc_id_str,
-                    "department": "",
-                    "designation": "Practitioner",
-                })
-    except Exception as err:
-        logger.warning(f"Error querying local doctor_ids: {err}")
+    # 2. Fallback to local database doctor_ids ONLY if ERPNext returned nothing
+    if not practitioners:
+        try:
+            result = await db.execute(select(CasesheetSession.doctor_id).distinct())
+            local_ids = result.scalars().all()
+            for doc_id in local_ids:
+                doc_id_str = str(doc_id or "").strip()
+                if not doc_id_str or doc_id_str in seen_ids:
+                    continue
+                is_junk = (
+                    doc_id_str.isdigit()
+                    or len(doc_id_str) < 4
+                    or doc_id_str.lower() in {"snnnds", "usuueueu", "ir8r84", "4748", "63773", "8483", "doc"}
+                )
+                if not is_junk:
+                    seen_ids.add(doc_id_str)
+                    practitioners.append({
+                        "id": doc_id_str,
+                        "name": doc_id_str,
+                        "department": "",
+                        "designation": "Practitioner",
+                    })
+        except Exception as err:
+            logger.warning(f"Error querying local doctor_ids: {err}")
 
     return practitioners
 
