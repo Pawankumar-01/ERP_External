@@ -496,7 +496,23 @@ class ERPBridgeService:
             "POST", f"/api/resource/{DOCTYPE_APPOINTMENT}", data=payload
         )
 
-    # ── Encounter operations ──────────────────────────────────────────────────
+    # ── Encounter & Practitioner operations ───────────────────────────────────
+
+    async def get_practitioners(self) -> List[Dict[str, Any]]:
+        """
+        GET /api/resource/Healthcare Practitioner
+        Fetch registered healthcare practitioners from ERPNext.
+        """
+        params = {
+            "fields": '["name", "practitioner_name", "department", "designation", "mobile"]',
+            "limit_page_length": 200,
+        }
+        try:
+            res = await self._request("GET", "/api/resource/Healthcare Practitioner", params=params)
+            return res if isinstance(res, list) else []
+        except Exception as err:
+            logger.warning(f"Failed to fetch Healthcare Practitioners from ERPNext: {err}")
+            return []
 
     async def create_encounter(self, encounter_data: Dict) -> Optional[Dict]:
         """

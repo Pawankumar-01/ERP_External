@@ -133,6 +133,53 @@ async def list_sessions(
     ]
 
 
+@router.get("/practitioners")
+async def list_practitioners(db: AsyncSession = Depends(get_db)):
+    """
+    Return all available Healthcare Practitioners from ERPNext and active session records.
+    Returns a deduplicated list of practitioner objects with `id`, `name`, `department`, `designation`.
+    """
+    practitioners: List[Dict[str, Any]] = []
+    seen_ids = set()
+
+    # 1. Fetch live practitioners from ERPNext
+    try:
+        erp_list = await erp_bridge_service.get_practitioners()
+        for doc in erp_list:
+            if isinstance(doc, dict):
+                p_id = str(doc.get("name") or "").strip()
+                p_name = str(doc.get("practitioner_name") or p_id).strip()
+                if p_id and p_id not in seen_ids:
+                    seen_ids.add(p_id)
+                    practitioners.append({
+                        "id": p_id,
+                        "name": p_name,
+                        "department": doc.get("department") or "",
+                        "designation": doc.get("designation") or "",
+                    })
+    except Exception as err:
+        logger.warning(f"Error fetching ERPNext practitioners: {err}")
+
+    # 2. Include unique doctor_ids from local session history
+    try:
+        result = await db.execute(select(CasesheetSession.doctor_id).distinct())
+        local_ids = result.scalars().all()
+        for doc_id in local_ids:
+            doc_id_str = str(doc_id or "").strip()
+            if doc_id_str and doc_id_str not in seen_ids:
+                seen_ids.add(doc_id_str)
+                practitioners.append({
+                    "id": doc_id_str,
+                    "name": doc_id_str,
+                    "department": "",
+                    "designation": "Local Practitioner",
+                })
+    except Exception as err:
+        logger.warning(f"Error querying local doctor_ids: {err}")
+
+    return practitioners
+
+
 @router.get("/pending", response_model=List[PendingSessionItem])
 async def list_pending_sessions(
     doctor_id: str = Query(..., description="Practitioner ID to fetch unsubmitted drafts for"),
@@ -1478,6 +1525,7 @@ def _map_draft_to_encounter(
         "gender": pat_gender,
         "mobile": pat_mobile,
         "doctor": doctor_id,
+        "practitioner": doctor_id,
         "appointment": appointment_id,
         "lead": lead_id,
         "encounter_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
