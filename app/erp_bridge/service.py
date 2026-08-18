@@ -132,10 +132,13 @@ class ERPBridgeService:
                         if resp.status in (400, 403, 404, 409, 417, 422):
                             # Non-retryable client errors — raise so caller gets the real reason
                             await self._emit_failure(method, path, resp.status, err_msg)
-                            raise Exception(
-                                f"ERPNext {resp.status} error on {method} {path}: {err_msg}"
+                            raise RuntimeError(
+                                f"ERPNext {resp.status} error: {err_msg}"
                             )
 
+            except RuntimeError:
+                # Re-raise explicit ERPNext errors directly to caller
+                raise
             except asyncio.TimeoutError:
                 last_exc = asyncio.TimeoutError(f"Timeout on {method} {path}")
                 logger.warning(
@@ -155,7 +158,7 @@ class ERPBridgeService:
                 await asyncio.sleep(RETRY_DELAY * attempt)
 
         await self._emit_failure(method, path, 0, str(last_exc))
-        return None
+        raise RuntimeError(f"ERPNext request failed on {method} {path}: {last_exc}")
 
     async def _emit_success(self, method: str, path: str, status: int) -> None:
         await event_logger.log(
