@@ -504,7 +504,7 @@ class ERPBridgeService:
         Fetch registered healthcare practitioners from ERPNext.
         """
         params = {
-            "fields": '["name", "practitioner_name", "department", "designation", "mobile"]',
+            "fields": '["name", "practitioner_name", "first_name", "last_name", "title", "department", "designation", "mobile"]',
             "limit_page_length": 200,
         }
         try:
