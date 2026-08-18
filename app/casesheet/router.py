@@ -162,7 +162,19 @@ async def list_pending_sessions(
             draft_data = s.draft.draft or {}
         filled = sum(
             1 for k, v in draft_data.items()
-            if k in VALID_SECTIONS and isinstance(v, dict) and v.get("status") == "completed"
+            if k in VALID_SECTIONS
+            and isinstance(v, dict)
+            and not v.get("_error")           # exclude failed extractions
+            and (
+                v.get("status") == "completed"  # image-processed sections have wrapper
+                or (                            # audio sections stored as flat dicts
+                    "status" not in v
+                    and any(
+                        val is not None and val != "" and val != [] and val != {}
+                        for val in v.values()
+                    )
+                )
+            )
         )
         items.append(PendingSessionItem(
             session_id=s.id,

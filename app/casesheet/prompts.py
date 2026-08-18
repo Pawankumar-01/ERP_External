@@ -149,7 +149,8 @@ WHISPER_INITIAL_PROMPTS: dict[str, str] = {
     ),
     "pulse_diagnosis": _AYU_BASE + (
         "Nadi Pariksha pulse diagnosis. System codes CVS GIT IS PAN KUB PRO RT LB GB LIV SS LSCS LISI RB OBG. "
-        "Dosha codes V P K VP VK PK VPK. Severity Mild Very Mild Mild Moderate Moderate Severe."
+        "Dosha codes V P K. Compound codes PV VP VK VK PK KP VPK meaning Pitta-Vata Vata-Kapha Pitta-Kapha all three. "
+        "Spoken aliases: Liver=LIV KB=KUB Pro=PRO. Severity Mild Very Mild Mild Moderate Moderate Severe."
     ),
     "ayurvedic_assessment_extended": _AYU_BASE + (
         "Prakriti Vikriti VPK dominance Ama Agni Koshta Ojas Bala Srotas Dhatu Mala Mutra Jihva Nidana Samprapti Ayurvedic diagnosis."
@@ -443,13 +444,44 @@ Rules for overall VPK:
 - Normalize: PV->VP, KV->VK, KP->PK.
 - Extract Prakriti, Vikriti, notes, dominance ONLY if explicitly stated.
 
+COMPOUND DOSHA SHORTHAND EXPANSION (CRITICAL — Apply before all other rules):
+Doctors commonly speak in abbreviated compound dosha codes. Each letter in the compound means a separate dosha, ALL receiving the stated severity.
+- "PV" or "VP" = Pitta AND Vata — set BOTH pitta and vata to the stated severity
+- "VK" or "KV" = Vata AND Kapha — set BOTH vata and kapha to the stated severity
+- "PK" or "KP" = Pitta AND Kapha — set BOTH pitta and kapha to the stated severity
+- "VPK" = Vata AND Pitta AND Kapha — set ALL THREE to the stated severity
+- Single "V" = only Vata; Single "P" = only Pitta; Single "K" = only Kapha
+Examples:
+  "LISI Mild PV"     → LISI: vata=mild, pitta=mild, kapha=null
+  "CVS Moderate VK"  → CVS: vata=moderate, pitta=null, kapha=moderate
+  "GIT Mild PV"      → GIT: vata=mild, pitta=mild, kapha=null
+  "PAN IS VK Moderate" → PAN: vata=moderate, kapha=moderate; IS: vata=moderate, kapha=moderate
+  "RT MLP Moderate K" → RT: kapha=moderate (MLP is not a valid system code — ignore it)
+
+SPOKEN SYSTEM CODE ALIASES (map these to valid codes):
+- "Liver" or "Liv" → LIV
+- "KB" or "KUB" → KUB
+- "Pro" → PRO
+- "SS" or "Skeletal" → SS
+- "GB" → GB
+- "LB" or "Lower Back" → LB
+- "LSCS" → LSCS
+- "LISI" → LISI
+- "RB" → RB
+- "OBG" → OBG
+- "IS" → IS
+- "GIT" → GIT
+- "CVS" → CVS
+- "PAN" → PAN
+- "RT" → RT
+
 Rules for system-wise pulse:
 - Valid system codes ONLY (do not invent codes):
   CVS (cardiovascular), GIT (gastrointestinal), IS (immune system), PAN (pancreas),
   KUB (kidney ureter bladder), PRO (prostate), RT (respiratory tract), LB (lower back),
   GB (gallbladder), LIV (liver), SS (skeletal system), LSCS (lumbo sacro cranial system),
   LISI (large intestine small intestine), RB (reproductive bladder), OBG (obstetrics gynecology).
-- Doshas: V=Vata, P=Pitta, K=Kapha. VP=Vata+Pitta, VK=Vata+Kapha, PK=Pitta+Kapha, VPK=all three.
+- If a spoken term does not match any valid system code or alias above, DO NOT create a system entry for it. Log it in needs_doctor_confirmation instead.
 - Severity normalization (map spoken terms):
   "very mild", "very-mild" -> "very_mild"
   "mild" -> "mild"
@@ -485,6 +517,7 @@ Schema:
   "needs_doctor_confirmation": ["string"]
 }
 """ + _SECTION_FOOTER,
+
 
     "ayurvedic_assessment_extended": BASE_RULES + """\
 Extract extended Ayurvedic assessment.

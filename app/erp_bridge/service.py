@@ -130,9 +130,11 @@ class ERPBridgeService:
                             f"attempt {attempt}/{MAX_RETRIES} | {err_msg}"
                         )
                         if resp.status in (400, 403, 404, 409, 417, 422):
-                            # Non-retryable client errors
+                            # Non-retryable client errors — raise so caller gets the real reason
                             await self._emit_failure(method, path, resp.status, err_msg)
-                            return None
+                            raise Exception(
+                                f"ERPNext {resp.status} error on {method} {path}: {err_msg}"
+                            )
 
             except asyncio.TimeoutError:
                 last_exc = asyncio.TimeoutError(f"Timeout on {method} {path}")
