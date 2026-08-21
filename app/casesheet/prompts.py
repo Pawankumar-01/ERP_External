@@ -214,6 +214,42 @@ WHISPER_INITIAL_PROMPTS: dict[str, str] = {
     ),
 }
 
+# Full-consultation Whisper prompt used for ambient/monologue recording mode.
+# Combines all domain vocabulary into a single initial_prompt to give Whisper
+# the widest possible context when transcribing an entire consultation.
+WHISPER_AMBIENT_PROMPT = (
+    _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + _PANCHAKARMA_BASE +
+    "Full clinical consultation. Doctor dictating patient identity, chief complaint, "
+    "history of present illness, past medical surgical family personal menstrual history, "
+    "vitals, general and systemic examination, investigation reports, pulse diagnosis nadi pariksha, "
+    "Ayurvedic assessment, SGP supplements medicines doses, Panchakarma procedures, detox decoctions, "
+    "exercises yoga, treatment plan, assessment and plan, prescription sheet. "
+    "System codes CVS GIT IS PAN KUB PRO RT LB GB LIV SS LSCS LISI RB OBG. "
+    "SGP medicines: APD ATHEROLYZIN MIGRANONE IMUMODULIN BIOTIN ALLOWYN SYNGEN D-TOX NEUROTROPIN "
+    "CAG Nuts RESERVE CISSUES QUADRANGULARIES."
+)
+
+# Section groups for parallel extraction from a full consultation transcript.
+# Each group is processed as one LLM call, extracting multiple related sections.
+AMBIENT_SECTION_GROUPS = [
+    # Group A: Patient demographics & encounter setup
+    ["patient_identity", "encounter_context", "followup_details"],
+    # Group B: Primary complaint and history of present illness
+    ["chief_complaint", "anamnesis"],
+    # Group C: Past histories & medication
+    ["past_medical_history", "surgical_history", "medication_history", "allergy_history"],
+    # Group D: Family, personal & gender-specific history
+    ["family_history_detailed", "personal_history", "menstrual_obstetric_history"],
+    # Group E: Clinical examination & investigations
+    ["vitals_anthropometry", "general_examination", "systemic_examination", "investigation_reports"],
+    # Group F: Ayurvedic diagnostics
+    ["pulse_diagnosis", "ayurvedic_assessment_extended"],
+    # Group G: Ayurvedic treatment protocols
+    ["ayurvedic_supplements", "panchakarma", "detox_procedures", "exercises_yoga"],
+    # Group H: Final assessment & prescription
+    ["treatment_and_background", "assessment_and_plan", "prescription_sheet"],
+]
+
 # -----------------------------------------------------------------------------
 # Shared LLM instruction rules
 # -----------------------------------------------------------------------------

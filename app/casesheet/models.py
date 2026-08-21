@@ -18,10 +18,11 @@ from app.config.database import Base
 
 
 class SessionStatus(str, Enum):
-    ACTIVE    = "ACTIVE"     # doctor is currently dictating
-    PAUSED    = "PAUSED"     # doctor paused mid-session
-    FINALIZED = "FINALIZED"  # pushed to ERPNext encounter
-    FAILED    = "FAILED"     # finalization failed
+    ACTIVE     = "ACTIVE"      # doctor is currently dictating
+    PAUSED     = "PAUSED"      # doctor paused mid-session
+    PROCESSING = "PROCESSING"  # ambient audio being transcribed + extracted
+    FINALIZED  = "FINALIZED"   # pushed to ERPNext encounter
+    FAILED     = "FAILED"      # finalization failed
 
 
 class CasesheetSession(Base):
@@ -44,6 +45,7 @@ class CasesheetSession(Base):
     status:         Mapped[str] = mapped_column(String(20), default=SessionStatus.ACTIVE)
     erp_encounter_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     last_error:     Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # stores finalization failure reason
+    processing_progress: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)  # tracks ambient processing state
     created_at:     Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at:     Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                                       server_default=func.now(), onupdate=func.now())

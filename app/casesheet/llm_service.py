@@ -31,6 +31,7 @@ from app.casesheet.prompts import (
     QUALITY_PROMPTS,
     SECTION_MAX_TOKENS,
     GLOBAL_MEDICAL_INSTRUCTION,
+    AMBIENT_SECTION_GROUPS,
 )
 from app.casesheet.protocols import enrich_section_data
 from app.config.settings import settings
@@ -66,8 +67,9 @@ class LLMService:
     """Async service for extraction, quality checks and full case-sheet composition."""
 
     def __init__(self):
-        # Serialize LLM calls to prevent OpenRouter free tier concurrency 429 errors
-        self._semaphore = asyncio.Semaphore(1)
+        # Allow 2 concurrent LLM calls — safe for Groq free tier rate limits.
+        # Ambient pipeline processes section groups sequentially in pairs.
+        self._semaphore = asyncio.Semaphore(2)
 
     async def extract_section(self, section: str, transcript: str) -> Dict[str, Any]:
         """
@@ -101,6 +103,94 @@ class LLMService:
             max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
         )
         return enrich_section_data(section, raw_result)
+
+    async def extract_sections_from_full_transcript(
+        self,
+        transcript: str,
+        on_section_done: Any = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Extract all 24 clinical sections from a single full-consultation transcript.
+
+        Uses AMBIENT_SECTION_GROUPS to process related sections together.
+        Each group runs sequentially (to respect Groq free tier rate limits),
+        but sections within each group share the same transcript context.
+
+        Args:
+            transcript:      Full consultation transcript text.
+            on_section_done: Optional async callback(section_key, data) called
+                             after each section is extracted, allowing real-time
+                             progress updates to the database.
+
+        Returns:
+            Dict mapping section_key -> extracted JSON data for all sections.
+        """
+        if not transcript.strip():
+            return {}
+
+        all_results: Dict[str, Dict[str, Any]] = {}
+
+        for group_idx, group_sections in enumerate(AMBIENT_SECTION_GROUPS):
+            logger.info(
+                f"Ambient extraction: processing group {group_idx + 1}/{len(AMBIENT_SECTION_GROUPS)} "
+                f"({', '.join(group_sections)})"
+            )
+
+            # Process each section in the group sequentially to stay within
+            # Groq free tier rate limits. Each call gets the FULL transcript
+            # but is prompted to extract only the relevant section.
+            for section_key in group_sections:
+                prompt = SECTION_PROMPTS.get(section_key)
+                if not prompt:
+                    logger.warning(f"No prompt for ambient section: {section_key}")
+                    continue
+
+                ambient_instruction = (
+                    f"FULL CONSULTATION TRANSCRIPT:\n<<<\n{transcript}\n>>>\n\n"
+                    f"TASK: From the above full consultation transcript, extract ONLY "
+                    f"the information relevant to the section '{section_key}'.\n"
+                    f"If no relevant information is found for this section in the transcript, "
+                    f"return an empty JSON object {{}}.\n\n"
+                    f"{prompt}\n\n"
+                    "IMPORTANT: Respond with ONLY valid JSON. No markdown, no explanation."
+                )
+
+                messages = [
+                    {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
+                    {"role": "user", "content": ambient_instruction},
+                ]
+
+                try:
+                    raw_result = await self._safe_json_call(
+                        messages=messages,
+                        label=f"ambient:{section_key}",
+                        fallback={"_raw": ""},
+                        max_tokens=SECTION_MAX_TOKENS.get(section_key, DEFAULT_MAX_TOKENS),
+                    )
+                    result = enrich_section_data(section_key, raw_result)
+
+                    # Skip empty or error-only results
+                    has_real_data = any(
+                        k for k in result.keys()
+                        if not k.startswith("_") and result[k] not in (None, "", [], {})
+                    )
+                    if has_real_data:
+                        all_results[section_key] = result
+
+                    if on_section_done:
+                        await on_section_done(section_key, result if has_real_data else None)
+
+                except Exception as exc:
+                    logger.error(f"Ambient extraction failed for {section_key}: {exc}")
+                    all_results[section_key] = {"_error": str(exc)}
+                    if on_section_done:
+                        await on_section_done(section_key, None)
+
+            # Small delay between groups to avoid Groq rate limiting
+            if group_idx < len(AMBIENT_SECTION_GROUPS) - 1:
+                await asyncio.sleep(0.5)
+
+        return all_results
 
     async def extract_section_with_image(
         self,

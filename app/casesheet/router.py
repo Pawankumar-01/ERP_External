@@ -32,7 +32,7 @@ from app.config.database import get_db
 from app.casesheet.models import CasesheetSession, CasesheetDraft, SessionStatus
 from app.casesheet.transcription import transcribe_audio
 from app.casesheet.llm_service import llm_service
-from app.casesheet.prompts import VALID_SECTIONS, WHISPER_INITIAL_PROMPTS
+from app.casesheet.prompts import VALID_SECTIONS, WHISPER_INITIAL_PROMPTS, WHISPER_AMBIENT_PROMPT
 from app.erp_bridge.service import erp_bridge_service
 from app.events.logger import event_logger, EventType
 
@@ -370,6 +370,88 @@ async def upload_audio(
     )
 
     return {"status": "processing", "session_id": session_id, "section": section, "message": "Audio received. Processing in background."}
+
+
+@router.post("/{session_id}/process-full-audio", status_code=202)
+async def process_full_consultation_audio(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    language: Optional[str] = Form(None),
+    mode: Optional[str] = Form("ambient"),  # "ambient" (during visit) or "monologue" (post-visit dictation)
+    audio: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ambient Continuous Consultation Recording Endpoint (V2 Workflow).
+
+    Receives a single audio file covering the entire patient consultation or doctor monologue.
+    Transcribes the entire audio once, then extracts data for all 24 sections in parallel.
+    """
+    session = await _get_session(db, session_id)
+    if session.status == SessionStatus.FINALIZED:
+        raise HTTPException(status_code=409, detail="Session already finalized")
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file received")
+
+    logger.info(
+        f"Ambient full audio received: session={session_id} mode={mode} "
+        f"size={len(audio_bytes)} bytes lang={language}"
+    )
+
+    # Immediately mark session as PROCESSING with initial progress state
+    session.status = SessionStatus.PROCESSING
+    session.processing_progress = {
+        "status": "transcribing",
+        "mode": mode,
+        "sections_done": 0,
+        "total_sections": 24,
+        "transcript_length": 0,
+        "error": None,
+    }
+    await db.commit()
+
+    background_tasks.add_task(
+        _process_full_audio_background,
+        session_id=session_id,
+        audio_bytes=audio_bytes,
+        language=language,
+        mode=mode or "ambient",
+    )
+
+    return {
+        "status": "processing",
+        "session_id": session_id,
+        "mode": mode,
+        "message": "Full consultation audio received. Ambient extraction in progress.",
+    }
+
+
+@router.get("/{session_id}/processing-status")
+async def get_processing_status(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Poll processing progress for ambient full-consultation extraction.
+    Returns status ('transcribing', 'extracting', 'completed', 'failed') and section progress count.
+    """
+    session = await _get_session(db, session_id)
+    progress = session.processing_progress or {
+        "status": "idle",
+        "sections_done": 0,
+        "total_sections": 24,
+        "transcript_length": 0,
+        "error": None,
+    }
+
+    return {
+        "session_id": session_id,
+        "session_status": session.status,
+        "progress": progress,
+    }
+
 
 
 @router.post("/{session_id}/sections/{section}/images", status_code=200)
@@ -849,6 +931,140 @@ async def _reprocess_transcript_background(session_id: str, section: str, transc
                 await db.commit()
         except Exception as e:
             logger.error(f"Retranscribe failed: session={session_id} section={section} error={e}")
+
+
+async def _process_full_audio_background(
+    session_id: str,
+    audio_bytes: bytes,
+    language: Optional[str] = None,
+    mode: str = "ambient",
+) -> None:
+    """
+    Background worker for full consultation audio processing.
+    1. Transcribes full audio using faster-whisper with WHISPER_AMBIENT_PROMPT.
+    2. Runs extract_sections_from_full_transcript to populate draft JSON.
+    3. Updates processing_progress and session status in DB progressively.
+    """
+    from app.config.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        try:
+            # 1. Update progress -> transcribing
+            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+            session = sess_res.scalar_one_or_none()
+            if session:
+                session.status = SessionStatus.PROCESSING
+                session.processing_progress = {
+                    "status": "transcribing",
+                    "mode": mode,
+                    "sections_done": 0,
+                    "total_sections": 24,
+                    "transcript_length": 0,
+                    "error": None,
+                }
+                await db.commit()
+
+            # 2. Transcribe full audio
+            logger.info(
+                f"Ambient background: starting STT for session={session_id} "
+                f"audio_size={len(audio_bytes)} mode={mode}"
+            )
+            transcript = await transcribe_audio(
+                audio_bytes,
+                language=language,
+                initial_prompt=WHISPER_AMBIENT_PROMPT,
+            )
+            logger.info(f"Ambient STT complete for session={session_id}: transcript len={len(transcript)}")
+
+            # Update progress -> extracting
+            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+            session = sess_res.scalar_one_or_none()
+            if session:
+                session.processing_progress = {
+                    "status": "extracting",
+                    "mode": mode,
+                    "sections_done": 0,
+                    "total_sections": 24,
+                    "transcript_length": len(transcript),
+                    "raw_transcript": transcript,
+                    "error": None,
+                }
+                await db.commit()
+
+            # Callback to update draft and progress as each section finishes
+            sections_completed = 0
+            async def on_section_done(section_key: str, section_data: Optional[dict]):
+                nonlocal sections_completed
+                sections_completed += 1
+                try:
+                    async with AsyncSessionLocal() as inner_db:
+                        # Update draft
+                        d_res = await inner_db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
+                        draft_row = d_res.scalar_one_or_none()
+                        if draft_row and section_data:
+                            current = dict(draft_row.draft or {})
+                            current[section_key] = section_data
+                            if "_raw_transcripts" not in current:
+                                current["_raw_transcripts"] = {}
+                            current["_raw_transcripts"][section_key] = f"[Ambient {mode.upper()}] {transcript[:300]}..."
+                            draft_row.draft = current
+
+                        # Update progress
+                        s_res = await inner_db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+                        sess_row = s_res.scalar_one_or_none()
+                        if sess_row and sess_row.processing_progress:
+                            prog = dict(sess_row.processing_progress)
+                            prog["sections_done"] = sections_completed
+                            sess_row.processing_progress = prog
+
+                        await inner_db.commit()
+                except Exception as inner_err:
+                    logger.warning(f"Error in on_section_done callback for {section_key}: {inner_err}")
+
+            # 3. Parallel section extraction
+            extracted = await llm_service.extract_sections_from_full_transcript(
+                transcript=transcript,
+                on_section_done=on_section_done,
+            )
+
+            # 4. Mark session completed & active for doctor review
+            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+            session = sess_res.scalar_one_or_none()
+            if session:
+                session.status = SessionStatus.ACTIVE
+                session.processing_progress = {
+                    "status": "completed",
+                    "mode": mode,
+                    "sections_done": len(extracted),
+                    "total_sections": 24,
+                    "transcript_length": len(transcript),
+                    "raw_transcript": transcript,
+                    "error": None,
+                }
+                await db.commit()
+            logger.info(
+                f"Ambient processing finished successfully for session={session_id}, "
+                f"extracted {len(extracted)} sections"
+            )
+
+        except Exception as e:
+            logger.error(f"Ambient background processing failed for session={session_id}: {e}")
+            try:
+                sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+                session = sess_res.scalar_one_or_none()
+                if session:
+                    session.status = SessionStatus.ACTIVE
+                    session.processing_progress = {
+                        "status": "failed",
+                        "mode": mode,
+                        "sections_done": 0,
+                        "total_sections": 24,
+                        "transcript_length": 0,
+                        "error": str(e),
+                    }
+                    await db.commit()
+            except Exception:
+                pass
+
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
