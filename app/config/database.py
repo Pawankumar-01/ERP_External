@@ -3,7 +3,15 @@ Database Connection Pool
 Uses SQLAlchemy async engine backed by asyncpg for PostgreSQL.
 """
 
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+try:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+except ImportError:
+    from sqlalchemy.orm import sessionmaker
+    def async_sessionmaker(*args, **kwargs):
+        kwargs['class_'] = AsyncSession
+        return sessionmaker(*args, **kwargs)
+
 from sqlalchemy.orm import DeclarativeBase
 from app.config.settings import settings
 
