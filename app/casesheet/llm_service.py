@@ -133,6 +133,7 @@ class LLMService:
                 clean_p = sec_prompt.replace(BASE_RULES, "").replace(_SECTION_FOOTER, "").strip()
                 group_prompts.append(f"=== SECTION: '{sec_key}' ===\n{clean_p}")
 
+            joined_prompts = "\n\n".join(group_prompts)
             group_instruction = (
                 f"{BASE_RULES}\n\n"
                 f"FULL CLINICAL CONSULTATION TRANSCRIPT:\n<<<\n{transcript}\n>>>\n\n"
@@ -140,7 +141,7 @@ class LLMService:
                 f"Extract all facts explicitly dictated in the transcript using each section's schema.\n"
                 f"If a section has no relevant information in the transcript, return an empty object {{}} for that section key.\n"
                 f"CRITICAL: Do NOT return reprompt or quality gate errors for omitted sections. Just extract dictated facts into valid section JSON.\n\n"
-                f"{'\n\n'.join(group_prompts)}\n\n"
+                f"{joined_prompts}\n\n"
                 f"CRITICAL OUTPUT FORMAT: Return ONLY a single valid JSON object whose top-level keys are EXACTLY: "
                 f"{json.dumps(group_sections)}.\n"
                 f"No markdown backticks, no explanatory text."
