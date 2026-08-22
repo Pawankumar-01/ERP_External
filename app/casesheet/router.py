@@ -997,7 +997,6 @@ async def _process_full_audio_background(
                 sections_completed += 1
                 try:
                     async with AsyncSessionLocal() as inner_db:
-                        # Update draft
                         d_res = await inner_db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
                         draft_row = d_res.scalar_one_or_none()
                         if draft_row and section_data:
@@ -1005,10 +1004,9 @@ async def _process_full_audio_background(
                             current[section_key] = section_data
                             if "_raw_transcripts" not in current:
                                 current["_raw_transcripts"] = {}
-                            current["_raw_transcripts"][section_key] = f"[Ambient {mode.upper()}] {transcript[:300]}..."
+                            current["_raw_transcripts"][section_key] = transcript
                             draft_row.draft = current
 
-                        # Update progress
                         s_res = await inner_db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
                         sess_row = s_res.scalar_one_or_none()
                         if sess_row and sess_row.processing_progress:
@@ -1026,7 +1024,24 @@ async def _process_full_audio_background(
                 on_section_done=on_section_done,
             )
 
-            # 4. Mark session completed & active for doctor review
+            # 4. Final bulk merge and synthesize prescription sheet
+            d_res = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
+            draft_row = d_res.scalar_one_or_none()
+            if draft_row:
+                current = dict(draft_row.draft or {})
+                for k, v in extracted.items():
+                    if v:
+                        current[k] = v
+                if "_raw_transcripts" not in current:
+                    current["_raw_transcripts"] = {}
+                for k in extracted.keys():
+                    current["_raw_transcripts"][k] = transcript
+
+                # Synthesize prescription sheet summary
+                current["prescription_sheet"] = _synthesize_prescription_sheet(current)
+                draft_row.draft = current
+
+            # Mark session completed & active for doctor review
             sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
             session = sess_res.scalar_one_or_none()
             if session:
@@ -1040,7 +1055,7 @@ async def _process_full_audio_background(
                     "raw_transcript": transcript,
                     "error": None,
                 }
-                await db.commit()
+            await db.commit()
             logger.info(
                 f"Ambient processing finished successfully for session={session_id}, "
                 f"extracted {len(extracted)} sections"

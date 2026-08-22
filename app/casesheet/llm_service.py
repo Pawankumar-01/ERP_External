@@ -42,9 +42,8 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS = [
     "llama-3.3-70b-versatile",
-    "llama-3.2-11b-vision-preview",
-    "llama-3.2-90b-vision-preview",
     "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
 ]
 PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "google/gemma-4-31b-it:free")
 _raw_candidates = [
@@ -113,17 +112,6 @@ class LLMService:
         Extract all 24 clinical sections from a single full-consultation transcript.
 
         Uses AMBIENT_SECTION_GROUPS to process related sections together.
-        Each group runs sequentially (to respect Groq free tier rate limits),
-        but sections within each group share the same transcript context.
-
-        Args:
-            transcript:      Full consultation transcript text.
-            on_section_done: Optional async callback(section_key, data) called
-                             after each section is extracted, allowing real-time
-                             progress updates to the database.
-
-        Returns:
-            Dict mapping section_key -> extracted JSON data for all sections.
         """
         if not transcript.strip():
             return {}
@@ -136,9 +124,6 @@ class LLMService:
                 f"({', '.join(group_sections)})"
             )
 
-            # Process each section in the group sequentially to stay within
-            # Groq free tier rate limits. Each call gets the FULL transcript
-            # but is prompted to extract only the relevant section.
             for section_key in group_sections:
                 prompt = SECTION_PROMPTS.get(section_key)
                 if not prompt:
@@ -169,26 +154,22 @@ class LLMService:
                     )
                     result = enrich_section_data(section_key, raw_result)
 
-                    # Skip empty or error-only results
-                    has_real_data = any(
-                        k for k in result.keys()
-                        if not k.startswith("_") and result[k] not in (None, "", [], {})
-                    )
-                    if has_real_data:
-                        all_results[section_key] = result
+                    # Always record result so section card gets populated
+                    all_results[section_key] = result
 
                     if on_section_done:
-                        await on_section_done(section_key, result if has_real_data else None)
+                        await on_section_done(section_key, result)
 
                 except Exception as exc:
                     logger.error(f"Ambient extraction failed for {section_key}: {exc}")
-                    all_results[section_key] = {"_error": str(exc)}
+                    err_result = {"_error": str(exc), "_raw": transcript[:200]}
+                    all_results[section_key] = err_result
                     if on_section_done:
-                        await on_section_done(section_key, None)
+                        await on_section_done(section_key, err_result)
 
             # Small delay between groups to avoid Groq rate limiting
             if group_idx < len(AMBIENT_SECTION_GROUPS) - 1:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
         return all_results
 
