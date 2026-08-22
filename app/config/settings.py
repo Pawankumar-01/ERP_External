@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     # ─── AI Casesheet ─────────────────────────────────────────────────────────────
     OPENROUTER_API_KEY: str = ""
     GROQ_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
     LLM_MODEL: str = "google/gemma-4-31b-it:free"
 
 

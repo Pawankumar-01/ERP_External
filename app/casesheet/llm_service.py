@@ -42,6 +42,11 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+GEMINI_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
 GROQ_MODELS = [
     "groq/compound",
     "openai/gpt-oss-20b",
@@ -381,14 +386,47 @@ class LLMService:
         return norm
 
     async def _call_llm(self, messages: list, max_tokens: int) -> str:
+        gemini_key = getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
         openrouter_key = settings.OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY", "")
         groq_key = getattr(settings, "GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
-        if not groq_key and not openrouter_key:
-            raise RuntimeError("Neither GROQ_API_KEY nor OPENROUTER_API_KEY is set in .env")
+        if not gemini_key and not groq_key and not openrouter_key:
+            raise RuntimeError("No API key set (GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY) in .env")
 
         async with self._semaphore:
             async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-                # ── Primary Engine: Groq ──
+                # ── Tier 1 Primary: Google Gemini API (1,000,000 TPM Free Limit) ──
+                if gemini_key:
+                    gemini_headers = {
+                        "Authorization": f"Bearer {gemini_key}",
+                        "Content-Type": "application/json",
+                    }
+                    for model in GEMINI_MODELS:
+                        payload = {
+                            "model": model,
+                            "messages": self._prepare_messages_for_model(messages, model),
+                            "temperature": 0.1,
+                            "max_tokens": int(max_tokens),
+                        }
+                        try:
+                            response = await client.post(GEMINI_URL, headers=gemini_headers, json=payload)
+                            if response.status_code in (400, 404, 429, 500, 502, 503, 504):
+                                logger.warning("Gemini error %s for model %s: %s", response.status_code, model, response.text[:100])
+                                continue
+                            response.raise_for_status()
+                            data = response.json()
+                            choice_msg = data.get("choices", [{}])[0].get("message", {})
+                            content = choice_msg.get("content") or choice_msg.get("reasoning") or ""
+                            if content:
+                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                            if content:
+                                logger.info("LLM extraction succeeded via Gemini (%s)", model)
+                                return content
+                        except httpx.HTTPError as err:
+                            logger.warning("HTTP error on Gemini model %s: %s", model, err)
+                            continue
+                    logger.warning("All Gemini models failed. Falling back to Groq...")
+
+                # ── Tier 2 Engine: Groq ──
                 if groq_key:
                     groq_headers = {
                         "Authorization": f"Bearer {groq_key}",
@@ -428,7 +466,7 @@ class LLMService:
                             continue
                     logger.warning("All Groq models failed. Falling back to OpenRouter...")
 
-                # ── Secondary Engine: OpenRouter ──
+                # ── Tier 3 Engine: OpenRouter ──
                 if openrouter_key:
                     headers = {
                         "Authorization": f"Bearer {openrouter_key}",
@@ -460,7 +498,7 @@ class LLMService:
                         except httpx.HTTPError as err:
                             logger.warning("HTTP error on OpenRouter model %s: %s", model, err)
                             continue
-        raise RuntimeError(f"All configured AI models (Groq & OpenRouter: {', '.join(GROQ_MODELS + MODEL_CANDIDATES)}) failed or were rate-limited.")
+        raise RuntimeError(f"All configured AI models (Gemini, Groq & OpenRouter) failed or were rate-limited.")
 
     def _parse_json(self, raw: str) -> Optional[Any]:
         if not raw:
