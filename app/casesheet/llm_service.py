@@ -410,6 +410,7 @@ class LLMService:
                             "messages": self._prepare_messages_for_model(messages, model),
                             "temperature": 0.1,
                             "max_tokens": int(max_tokens),
+                            "response_format": {"type": "json_object"},
                         }
                         try:
                             response = await client.post(GEMINI_URL, headers=gemini_headers, json=payload)
@@ -525,6 +526,11 @@ class LLMService:
                 fixed_str = re.sub(r",\s*([\}\]])", r"\1", json_str)
                 try:
                     return json.loads(fixed_str)
+                except Exception:
+                    pass
+                cleaned_ctl = re.sub(r"[\x00-\x1F\x7F]", " ", json_str)
+                try:
+                    return json.loads(cleaned_ctl)
                 except Exception:
                     pass
 
