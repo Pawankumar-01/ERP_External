@@ -1212,8 +1212,7 @@ async def _process_batch_audio_background(
                 except Exception as poll_err:
                     logger.debug(f"Progress update callback error: {poll_err}")
 
-            llm = LLMService()
-            batch_results = await llm.extract_batch_transcript(batch_index, transcript, on_section_done=_on_sec_done)
+            batch_results = await llm_service.extract_batch_transcript(batch_index, transcript, on_section_done=_on_sec_done)
 
             # Update DB draft with deep merging (preserving prior batch outputs)
             d_res = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
