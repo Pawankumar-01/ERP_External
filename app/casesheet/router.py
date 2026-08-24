@@ -1149,8 +1149,12 @@ async def _process_batch_audio_background(
 ) -> None:
     """
     Background worker for single domain batch monologue audio processing.
+    Ensures non-destructive deep-merging into CasesheetDraft and accurate per-batch progress.
     """
     from app.config.database import AsyncSessionLocal
+
+    batch_total = 12 if batch_index == 1 else (6 if batch_index in (2, 3) else 24)
+
     async with AsyncSessionLocal() as db:
         try:
             sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
@@ -1162,7 +1166,7 @@ async def _process_batch_audio_background(
                     "batch_index": batch_index,
                     "mode": mode,
                     "sections_done": 0,
-                    "total_sections": 24,
+                    "total_sections": batch_total,
                     "transcript_length": 0,
                     "error": None,
                 }
@@ -1183,29 +1187,48 @@ async def _process_batch_audio_background(
                     "batch_index": batch_index,
                     "mode": mode,
                     "sections_done": 0,
-                    "total_sections": 24,
+                    "total_sections": batch_total,
                     "transcript_length": len(transcript),
                     "raw_transcript": transcript,
                     "error": None,
                 }
                 await db.commit()
 
-            llm = LLMService()
-            batch_results = await llm.extract_batch_transcript(batch_index, transcript)
+            sections_done_counter = 0
 
-            # Update DB draft
+            async def _on_sec_done(sec_key: str, sec_data: Dict[str, Any]):
+                nonlocal sections_done_counter
+                sections_done_counter += 1
+                try:
+                    async with AsyncSessionLocal() as sub_db:
+                        s_res = await sub_db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+                        s_obj = s_res.scalar_one_or_none()
+                        if s_obj:
+                            prog = dict(s_obj.processing_progress or {})
+                            prog["sections_done"] = sections_done_counter
+                            prog["current_section"] = sec_key
+                            s_obj.processing_progress = prog
+                            await sub_db.commit()
+                except Exception as poll_err:
+                    logger.debug(f"Progress update callback error: {poll_err}")
+
+            llm = LLMService()
+            batch_results = await llm.extract_batch_transcript(batch_index, transcript, on_section_done=_on_sec_done)
+
+            # Update DB draft with deep merging (preserving prior batch outputs)
             d_res = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
             draft_row = d_res.scalar_one_or_none()
             if draft_row:
                 current = dict(draft_row.draft or {})
-                if "_raw_transcripts" not in current:
+                if "_raw_transcripts" not in current or not isinstance(current["_raw_transcripts"], dict):
                     current["_raw_transcripts"] = {}
+
                 for k, v in batch_results.items():
                     current[k] = v
                     current["_raw_transcripts"][k] = transcript
 
-                # Synthesize prescription sheet summary if batch 3
-                if batch_index == 3:
+                # Synthesize prescription sheet summary if batch 3 or remedies present
+                if batch_index == 3 or "ayurvedic_supplements" in current:
                     current["prescription_sheet"] = _synthesize_prescription_sheet(current)
 
                 draft_row.draft = current
@@ -1219,12 +1242,12 @@ async def _process_batch_audio_background(
                     "batch_index": batch_index,
                     "mode": mode,
                     "sections_done": len(batch_results),
-                    "total_sections": 24,
+                    "total_sections": batch_total,
                     "transcript_length": len(transcript),
                     "error": None,
                 }
             await db.commit()
-            logger.info(f"Batch {batch_index} extraction completed for session={session_id}")
+            logger.info(f"Batch {batch_index} extraction completed for session={session_id}: {len(batch_results)} sections merged")
 
         except Exception as exc:
             logger.error(f"Batch {batch_index} processing failed for session={session_id}: {exc}", exc_info=True)
