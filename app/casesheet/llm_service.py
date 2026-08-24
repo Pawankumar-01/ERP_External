@@ -32,6 +32,8 @@ from app.casesheet.prompts import (
     SECTION_MAX_TOKENS,
     GLOBAL_MEDICAL_INSTRUCTION,
     AMBIENT_SECTION_GROUPS,
+    AMBIENT_BATCH_PROMPTS,
+    AMBIENT_BATCH_GROUPS,
     BASE_RULES,
     _SECTION_FOOTER,
 )
@@ -44,17 +46,23 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 GEMINI_MODELS = [
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-3-flash-preview",
     "gemini-2.5-pro",
     "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
 ]
 GROQ_MODELS = [
-    "groq/compound",
-    "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "groq/compound-mini",
+    "groq/compound",
 ]
 PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "nvidia/nemotron-3.5-lightning:free")
 _raw_candidates = [
@@ -113,98 +121,85 @@ class LLMService:
         )
         return enrich_section_data(section, raw_result)
 
+    async def extract_batch_transcript(
+        self,
+        batch_index: int,
+        transcript: str,
+        on_section_done: Any = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Extract clinical data for a specific 1-indexed domain batch (1, 2, or 3).
+        Batch 1: Demographics & History (12 sections)
+        Batch 2: Examination, Vitals & Pulse Diagnosis (6 sections)
+        Batch 3: Ayurvedic Protocols, Remedies & Plan (6 sections)
+        """
+        if not transcript.strip():
+            return {}
+
+        batch_prompt = AMBIENT_BATCH_PROMPTS.get(batch_index)
+        batch_sections = AMBIENT_BATCH_GROUPS.get(batch_index, [])
+        if not batch_prompt:
+            logger.warning("Invalid batch_index: %s", batch_index)
+            return {}
+
+        messages = [
+            {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
+            {
+                "role": "user",
+                "content": f"{batch_prompt}\n\nDOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{transcript}\n>>>",
+            },
+        ]
+
+        batch_res = await self._safe_json_call(
+            messages=messages,
+            label=f"monologue_batch:{batch_index}",
+            fallback={},
+            max_tokens=4000,
+        )
+
+        results: Dict[str, Dict[str, Any]] = {}
+        if isinstance(batch_res, dict):
+            for sec_key in batch_sections:
+                sec_data = batch_res.get(sec_key)
+                if sec_data is None:
+                    sec_data = {}
+                enriched = enrich_section_data(sec_key, sec_data)
+                results[sec_key] = enriched
+                if on_section_done:
+                    await on_section_done(sec_key, enriched)
+
+        return results
+
     async def extract_sections_from_full_transcript(
         self,
         transcript: str,
         on_section_done: Any = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Extract all 24 clinical sections from a single full-consultation transcript.
-
-        Uses group-level batch extraction: 1 LLM call per section group.
-        This reduces HTTP calls from 24 to 8, preventing rate limits and ensuring
-        100% of dictated clinical findings are extracted across all sections.
+        Extract all 24 clinical sections from a single full consultation monologue transcript
+        by running 3 domain batch extractors in parallel via asyncio.gather().
         """
         if not transcript.strip():
             return {}
 
-        all_results: Dict[str, Dict[str, Any]] = {}
+        logger.info("Starting parallel 3-domain batch monologue extraction...")
 
-        for group_idx, group_sections in enumerate(AMBIENT_SECTION_GROUPS):
-            logger.info(
-                f"Ambient group extraction {group_idx + 1}/{len(AMBIENT_SECTION_GROUPS)}: "
-                f"sections [{', '.join(group_sections)}]"
-            )
+        tasks = [
+            self.extract_batch_transcript(1, transcript, on_section_done),
+            self.extract_batch_transcript(2, transcript, on_section_done),
+            self.extract_batch_transcript(3, transcript, on_section_done),
+        ]
 
-            group_prompts = []
-            for sec_key in group_sections:
-                sec_prompt = SECTION_PROMPTS.get(sec_key, "")
-                clean_p = sec_prompt.replace(BASE_RULES, "").replace(_SECTION_FOOTER, "").strip()
-                group_prompts.append(f"=== SECTION: '{sec_key}' ===\n{clean_p}")
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            joined_prompts = "\n\n".join(group_prompts)
-            group_instruction = (
-                f"{BASE_RULES}\n\n"
-                f"FULL CLINICAL CONSULTATION TRANSCRIPT:\n<<<\n{transcript}\n>>>\n\n"
-                f"TASK: Extract structured clinical data from the transcript for the following sections: {', '.join(group_sections)}.\n"
-                f"Extract all facts explicitly dictated in the transcript using each section's schema.\n"
-                f"If a section has no relevant information in the transcript, return an empty object {{}} for that section key.\n"
-                f"CRITICAL: Do NOT return reprompt or quality gate errors for omitted sections. Just extract dictated facts into valid section JSON.\n\n"
-                f"{joined_prompts}\n\n"
-                f"CRITICAL OUTPUT FORMAT: Return ONLY a single valid JSON object whose top-level keys are EXACTLY: "
-                f"{json.dumps(group_sections)}.\n"
-                f"No markdown backticks, no explanatory text."
-            )
+        combined_results: Dict[str, Dict[str, Any]] = {}
+        for idx, res in enumerate(batch_results):
+            if isinstance(res, dict):
+                combined_results.update(res)
+            else:
+                logger.error("Batch %d extraction failed: %s", idx + 1, res)
 
-            messages = [
-                {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
-                {"role": "user", "content": group_instruction},
-            ]
-
-            try:
-                # Calculate combined max tokens for the group
-                max_tokens = sum(SECTION_MAX_TOKENS.get(s, DEFAULT_MAX_TOKENS) for s in group_sections)
-                max_tokens = min(max_tokens, 2000)
-
-                group_res = await self._safe_json_call(
-                    messages=messages,
-                    label=f"ambient_group:{group_idx+1}",
-                    fallback={},
-                    max_tokens=max_tokens,
-                )
-
-                # Process each section from the group response
-                for sec_key in group_sections:
-                    sec_data = group_res.get(sec_key) if isinstance(group_res, dict) else None
-                    if sec_data is None:
-                        sec_data = {}
-                    
-                    enriched = enrich_section_data(sec_key, sec_data)
-                    all_results[sec_key] = enriched
-
-                    if on_section_done:
-                        await on_section_done(sec_key, enriched)
-
-            except Exception as exc:
-                logger.error(f"Group extraction failed for group {group_sections}: {exc}")
-                # Fallback: process missing sections individually if needed
-                for sec_key in group_sections:
-                    try:
-                        ind_res = await self.extract_section(sec_key, transcript)
-                        all_results[sec_key] = ind_res
-                        if on_section_done:
-                            await on_section_done(sec_key, ind_res)
-                    except Exception as ind_exc:
-                        err_res = {"_error": str(ind_exc), "_raw": transcript[:200]}
-                        all_results[sec_key] = err_res
-                        if on_section_done:
-                            await on_section_done(sec_key, err_res)
-
-            # Pause between groups to let Groq rate limit bucket reset
-            if group_idx < len(AMBIENT_SECTION_GROUPS) - 1:
-                await asyncio.sleep(4.0)
-
-        return all_results
+        return combined_results
 
     async def extract_section_with_image(
         self,
@@ -443,6 +438,7 @@ class LLMService:
                             "messages": self._prepare_messages_for_model(messages, model),
                             "temperature": 0.1,
                             "max_tokens": int(max_tokens),
+                            "response_format": {"type": "json_object"},
                         }
                         try:
                             response = await client.post(GROQ_URL, headers=groq_headers, json=payload)

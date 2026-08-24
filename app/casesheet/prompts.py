@@ -1593,3 +1593,148 @@ ERP_FIELD_MAPPING_RULES: dict[str, str] = {
     "prognosis": "Use assessment_and_plan.prognosis.",
     "notes": "Store final_case_sheet.case_sheet_markdown plus full JSON backup.",
 }
+
+
+# -----------------------------------------------------------------------------
+# 3-Domain Monologue Dictation Batch Definitions & Prompts
+# -----------------------------------------------------------------------------
+
+AMBIENT_BATCH_GROUPS: dict[int, list[str]] = {
+    1: [
+        "patient_identity",
+        "encounter_context",
+        "chief_complaint",
+        "anamnesis",
+        "past_medical_history",
+        "surgical_history",
+        "medication_history",
+        "allergy_history",
+        "family_history_detailed",
+        "personal_history",
+        "menstrual_obstetric_history",
+        "followup_details",
+    ],
+    2: [
+        "vitals_anthropometry",
+        "general_examination",
+        "systemic_examination",
+        "investigation_reports",
+        "pulse_diagnosis",
+        "ayurvedic_assessment_extended",
+    ],
+    3: [
+        "ayurvedic_supplements",
+        "panchakarma",
+        "detox_procedures",
+        "exercises_yoga",
+        "treatment_and_background",
+        "assessment_and_plan",
+        "prescription_sheet",
+    ],
+}
+
+AMBIENT_BATCH_PROMPTS: dict[int, str] = {
+    1: f"""\
+You are an expert clinical documentation AI for SGP Integrative Medicine.
+The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Patient Identity, Complaints, and Medical History.
+
+{_SGP_MEDICINE_KNOWLEDGE}
+
+TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
+Return ONLY a valid JSON object whose top-level keys are EXACTLY:
+- "patient_identity": {{"patient_name": string|null, "age": number|null, "gender": string|null}}
+- "chief_complaint": {{"summary": string|null, "complaints": [{{"complaint": string, "ayurvedic_name": string|null, "duration": string|null, "site": string|null, "laterality": string|null}}]}}
+- "anamnesis": {{"progression": string|null, "associated_symptoms": [string], "patient_reported_concerns": [string]}}
+- "past_medical_history": {{"medical": [string], "surgical": [string], "negative_history": [string]}}
+- "medication_history": {{"current_medicines": [{{"name": string, "system": string, "dose": string|null, "raw_phrase": string}}]}}
+- "allergy_history": {{"no_known_allergies": boolean|null, "allergies": [string]}}
+- "personal_history": {{"diet": string|null, "bowel_habits": string|null, "sleep_quality": string|null, "addictions": [string]}}
+- "family_history_detailed": {{"family_conditions": [string]}}
+- "followup_details": {{"next_visit_date": string|null, "followup_doc_name": string|null}}
+
+Rules:
+- Extract all dictated facts accurately. If a section has no dictated information, return an empty object {{}} or empty list [] for its fields.
+- Do NOT return reprompt errors or quality warnings. Return valid JSON only.
+""",
+    2: f"""\
+You are an expert clinical documentation AI for SGP Integrative Medicine.
+The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Physical Examination, Vitals, Diagnostics, and Nadi Pariksha (Pulse Diagnosis).
+
+TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
+Return ONLY a valid JSON object whose top-level keys are EXACTLY:
+- "vitals_anthropometry": {{"height_cm": number|null, "weight_kg": number|null, "bp": string|null, "pulse_rate": string|null, "temperature": string|null}}
+- "general_examination": {{"built": string|null, "nourishment": string|null, "pallor": string|null, "icterus": string|null, "edema": string|null, "orientation": string|null}}
+- "systemic_examination": {{"cvs": string|null, "rs": string|null, "pa": string|null, "cns": string|null, "local_examination": string|null}}
+- "investigation_reports": {{"reports_reviewed": [string], "key_findings": [string], "investigations_advised": [string]}}
+- "pulse_diagnosis": {{
+    "overall_vpk": {{"dominance": string|null, "prakriti": string|null, "vikriti": string|null}},
+    "systems": [
+      {{"system": "LISI", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "CVS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "RB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "GIT", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "IS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "PAN", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "PRO", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "LB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "GB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "RT", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "SS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}}
+    ]
+  }}
+- "ayurvedic_assessment_extended": {{"prakriti": string|null, "vikriti": string|null, "vpk_dominance": string|null, "samprapti_summary": string|null}}
+
+Rules:
+- For pulse_diagnosis, convert severity ratings like "very mild", "mild", "moderate", "severe" to lowercase strings under vata, pitta, or kapha for each organ system code (LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, RT, SS).
+- Do NOT return reprompt errors. Return valid JSON only.
+""",
+    3: f"""\
+You are an expert clinical documentation AI for SGP Integrative Medicine.
+The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Ayurvedic Supplements, Panchakarma, Detox Procedures, Exercises, and Treatment Plan.
+
+{_SGP_MEDICINE_KNOWLEDGE}
+{_SGP_PROCEDURE_KNOWLEDGE}
+
+TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
+Return ONLY a valid JSON object whose top-level keys are EXACTLY:
+- "ayurvedic_supplements": [
+    {{
+      "name": string (canonical SGP name e.g. APD, ATHEROLYZIN, MIGRANONE, IMUMODULIN, NEUROTROPIN, LITHO, D-TOX),
+      "dose": string|null (e.g. "half", "1", "1/4"),
+      "frequency": string|null (e.g. "BID", "QD", "TID"),
+      "start_week": string|null (default "1"),
+      "weeks": [string] (8-element list e.g. ["1/4", "1/2", "1", "1", "1", "1", "1", "1"] or ["half", "half", "half", "half", "half", "half", "half", "half"])
+    }}
+  ]
+- "panchakarma": {{
+    "sessions": [
+      {{"procedure": string, "session_count": number|null, "oils_or_ingredients": [string]}}
+    ]
+  }}
+- "detox_procedures": {{
+    "detox_items": [
+      {{"name": string (canonical procedure name), "quantity": string|null, "frequency": string|null, "instructions": string|null}}
+    ]
+  }}
+- "exercises_yoga": {{
+    "exercises": [
+      {{"name": string (canonical exercise name), "frequency": string|null, "remarks": string|null}}
+    ]
+  }}
+- "assessment_and_plan": {{
+    "ayurvedic_diagnosis": string|null,
+    "plan": {{"home_remedies": [string], "lifestyle_advice": [string], "follow_up": string|null}}
+  }}
+- "prescription_sheet": {{
+    "quick_summary": {{"allopathy_medicines": string|null}},
+    "daily_regimen": {{"detox_procedures": string|null, "oil_applications": string|null}},
+    "review_after": string|null
+  }}
+
+Rules:
+- Fix spoken/misspelled SGP medicine names using the canonical name table (e.g. "neurotropin" -> "NEUROTROPIN", "migranine" -> "MIGRANONE").
+- Fix spoken procedure names using the canonical procedure table (e.g. "fennel tea" -> "Fennel Tea", "anutailam" -> "Anutailam").
+- Do NOT return reprompt errors. Return valid JSON only.
+""",
+}
+

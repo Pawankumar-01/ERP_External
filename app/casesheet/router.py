@@ -428,6 +428,65 @@ async def process_full_consultation_audio(
     }
 
 
+@router.post("/{session_id}/process-batch-audio", status_code=202)
+async def process_batch_consultation_audio(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    batch_index: int = Form(1),
+    language: Optional[str] = Form(None),
+    mode: Optional[str] = Form("monologue"),
+    audio: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Batch Monologue Consultation Recording Endpoint (V2 Workflow).
+
+    Receives audio for a specific domain batch (1, 2, or 3).
+    Transcribes batch audio, extracts data for batch sections, and updates draft immediately.
+    """
+    session = await _get_session(db, session_id)
+    if session.status == SessionStatus.FINALIZED:
+        raise HTTPException(status_code=409, detail="Session already finalized")
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file received")
+
+    logger.info(
+        f"Batch audio received: session={session_id} batch_index={batch_index} "
+        f"size={len(audio_bytes)} bytes"
+    )
+
+    session.status = SessionStatus.PROCESSING
+    session.processing_progress = {
+        "status": "transcribing",
+        "batch_index": batch_index,
+        "mode": mode,
+        "sections_done": 0,
+        "total_sections": 24,
+        "transcript_length": 0,
+        "error": None,
+    }
+    await db.commit()
+
+    background_tasks.add_task(
+        _process_batch_audio_background,
+        session_id=session_id,
+        audio_bytes=audio_bytes,
+        batch_index=batch_index,
+        language=language,
+        mode=mode or "monologue",
+    )
+
+    return {
+        "status": "processing",
+        "session_id": session_id,
+        "batch_index": batch_index,
+        "message": f"Batch {batch_index} audio received. Monologue extraction in progress.",
+    }
+
+
+
 @router.get("/{session_id}/processing-status")
 async def get_processing_status(
     session_id: str,
@@ -1081,8 +1140,109 @@ async def _process_full_audio_background(
                 pass
 
 
+async def _process_batch_audio_background(
+    session_id: str,
+    audio_bytes: bytes,
+    batch_index: int,
+    language: Optional[str] = None,
+    mode: str = "monologue",
+) -> None:
+    """
+    Background worker for single domain batch monologue audio processing.
+    """
+    from app.config.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        try:
+            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+            session = sess_res.scalar_one_or_none()
+            if session:
+                session.status = SessionStatus.PROCESSING
+                session.processing_progress = {
+                    "status": "transcribing",
+                    "batch_index": batch_index,
+                    "mode": mode,
+                    "sections_done": 0,
+                    "total_sections": 24,
+                    "transcript_length": 0,
+                    "error": None,
+                }
+                await db.commit()
+
+            transcript = await transcribe_audio(
+                audio_bytes,
+                language=language,
+                initial_prompt=WHISPER_AMBIENT_PROMPT,
+            )
+            logger.info(f"Batch {batch_index} STT complete for session={session_id}: len={len(transcript)}")
+
+            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+            session = sess_res.scalar_one_or_none()
+            if session:
+                session.processing_progress = {
+                    "status": "extracting",
+                    "batch_index": batch_index,
+                    "mode": mode,
+                    "sections_done": 0,
+                    "total_sections": 24,
+                    "transcript_length": len(transcript),
+                    "raw_transcript": transcript,
+                    "error": None,
+                }
+                await db.commit()
+
+            llm = LLMService()
+            batch_results = await llm.extract_batch_transcript(batch_index, transcript)
+
+            # Update DB draft
+            d_res = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
+            draft_row = d_res.scalar_one_or_none()
+            if draft_row:
+                current = dict(draft_row.draft or {})
+                if "_raw_transcripts" not in current:
+                    current["_raw_transcripts"] = {}
+                for k, v in batch_results.items():
+                    current[k] = v
+                    current["_raw_transcripts"][k] = transcript
+
+                # Synthesize prescription sheet summary if batch 3
+                if batch_index == 3:
+                    current["prescription_sheet"] = _synthesize_prescription_sheet(current)
+
+                draft_row.draft = current
+
+            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+            session = sess_res.scalar_one_or_none()
+            if session:
+                session.status = SessionStatus.ACTIVE
+                session.processing_progress = {
+                    "status": "completed",
+                    "batch_index": batch_index,
+                    "mode": mode,
+                    "sections_done": len(batch_results),
+                    "total_sections": 24,
+                    "transcript_length": len(transcript),
+                    "error": None,
+                }
+            await db.commit()
+            logger.info(f"Batch {batch_index} extraction completed for session={session_id}")
+
+        except Exception as exc:
+            logger.error(f"Batch {batch_index} processing failed for session={session_id}: {exc}", exc_info=True)
+            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
+            session = sess_res.scalar_one_or_none()
+            if session:
+                session.status = SessionStatus.ACTIVE
+                session.processing_progress = {
+                    "status": "failed",
+                    "batch_index": batch_index,
+                    "mode": mode,
+                    "error": str(exc),
+                }
+                await db.commit()
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 async def _get_session(db: AsyncSession, session_id: str) -> CasesheetSession:
     result = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
