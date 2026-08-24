@@ -32,7 +32,7 @@ from app.config.database import get_db
 from app.casesheet.models import CasesheetSession, CasesheetDraft, SessionStatus
 from app.casesheet.transcription import transcribe_audio
 from app.casesheet.llm_service import llm_service
-from app.casesheet.prompts import VALID_SECTIONS, WHISPER_INITIAL_PROMPTS, WHISPER_AMBIENT_PROMPT
+from app.casesheet.prompts import VALID_SECTIONS, WHISPER_INITIAL_PROMPTS, WHISPER_AMBIENT_PROMPT, AMBIENT_BATCH_GROUPS
 from app.erp_bridge.service import erp_bridge_service
 from app.events.logger import event_logger, EventType
 
