@@ -1223,12 +1223,14 @@ async def _process_batch_audio_background(
                 if "_raw_transcripts" not in current or not isinstance(current["_raw_transcripts"], dict):
                     current["_raw_transcripts"] = {}
 
+                allowed_batch_keys = set(AMBIENT_BATCH_GROUPS.get(batch_index, []))
                 for k, v in batch_results.items():
-                    current[k] = v
-                    current["_raw_transcripts"][k] = transcript
+                    if k in allowed_batch_keys:
+                        current[k] = v
+                        current["_raw_transcripts"][k] = transcript
 
-                # Synthesize prescription sheet summary if batch 3 or remedies present
-                if batch_index == 3 or "ayurvedic_supplements" in current:
+                # Synthesize prescription sheet summary strictly on Batch 3 completion
+                if batch_index == 3:
                     current["prescription_sheet"] = _synthesize_prescription_sheet(current)
 
                 draft_row.draft = current
