@@ -1156,12 +1156,14 @@ async def _process_batch_audio_background(
     batch_total = 12 if batch_index == 1 else (6 if batch_index in (2, 3) else 24)
 
     async with AsyncSessionLocal() as db:
+        batch_key = f"batch_{batch_index}"
         try:
             sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
             session = sess_res.scalar_one_or_none()
             if session:
                 session.status = SessionStatus.PROCESSING
-                session.processing_progress = {
+                prog = dict(session.processing_progress or {})
+                prog[batch_key] = {
                     "status": "transcribing",
                     "batch_index": batch_index,
                     "mode": mode,
@@ -1170,6 +1172,9 @@ async def _process_batch_audio_background(
                     "transcript_length": 0,
                     "error": None,
                 }
+                prog["status"] = "transcribing"
+                prog["batch_index"] = batch_index
+                session.processing_progress = prog
                 await db.commit()
 
             transcript = await transcribe_audio(
@@ -1182,7 +1187,8 @@ async def _process_batch_audio_background(
             sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
             session = sess_res.scalar_one_or_none()
             if session:
-                session.processing_progress = {
+                prog = dict(session.processing_progress or {})
+                prog[batch_key] = {
                     "status": "extracting",
                     "batch_index": batch_index,
                     "mode": mode,
@@ -1192,6 +1198,9 @@ async def _process_batch_audio_background(
                     "raw_transcript": transcript,
                     "error": None,
                 }
+                prog["status"] = "extracting"
+                prog["batch_index"] = batch_index
+                session.processing_progress = prog
                 await db.commit()
 
             sections_done_counter = 0
@@ -1205,6 +1214,10 @@ async def _process_batch_audio_background(
                         s_obj = s_res.scalar_one_or_none()
                         if s_obj:
                             prog = dict(s_obj.processing_progress or {})
+                            b_info = dict(prog.get(batch_key) or {})
+                            b_info["sections_done"] = sections_done_counter
+                            b_info["current_section"] = sec_key
+                            prog[batch_key] = b_info
                             prog["sections_done"] = sections_done_counter
                             prog["current_section"] = sec_key
                             s_obj.processing_progress = prog
@@ -1238,7 +1251,8 @@ async def _process_batch_audio_background(
             session = sess_res.scalar_one_or_none()
             if session:
                 session.status = SessionStatus.ACTIVE
-                session.processing_progress = {
+                prog = dict(session.processing_progress or {})
+                prog[batch_key] = {
                     "status": "completed",
                     "batch_index": batch_index,
                     "mode": mode,
@@ -1247,6 +1261,9 @@ async def _process_batch_audio_background(
                     "transcript_length": len(transcript),
                     "error": None,
                 }
+                prog["status"] = "completed"
+                prog["batch_index"] = batch_index
+                session.processing_progress = prog
             await db.commit()
             logger.info(f"Batch {batch_index} extraction completed for session={session_id}: {len(batch_results)} sections merged")
 
@@ -1256,12 +1273,16 @@ async def _process_batch_audio_background(
             session = sess_res.scalar_one_or_none()
             if session:
                 session.status = SessionStatus.ACTIVE
-                session.processing_progress = {
+                prog = dict(session.processing_progress or {})
+                prog[batch_key] = {
                     "status": "failed",
                     "batch_index": batch_index,
                     "mode": mode,
                     "error": str(exc),
                 }
+                prog["status"] = "failed"
+                prog["batch_index"] = batch_index
+                session.processing_progress = prog
                 await db.commit()
 
 
