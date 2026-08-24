@@ -1640,25 +1640,50 @@ The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Patien
 
 {_SGP_MEDICINE_KNOWLEDGE}
 
+CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
+1. "patient_identity": Basic demographic information dictated by the doctor (Patient Name, Age, Gender).
+2. "encounter_context": Type of encounter (New consultation, Follow-up visit) and clinical setting context.
+3. "chief_complaint": Primary presenting symptoms that brought the patient to the clinic today (e.g. "Nocturia 3-4x/night", "Mild urinary dribbling"), with duration, site, laterality, and severity.
+4. "anamnesis": Detailed History of Present Illness (HPI) — progression timeline, symptom onset, aggravating factors, relieving factors, and patient-reported primary concerns.
+5. "past_medical_history": Long-standing chronic medical diagnoses or prior clinical conditions mentioned (e.g. "Grade 3 Prostatomegaly on USG", "Gallstones", "Hypertension", "Diabetes").
+6. "surgical_history": Past surgeries, operations, hospitalizations, or invasive medical procedures.
+7. "medication_history": Medicines the patient is currently taking prior to this visit (Allopathy, Ayurveda, or Homeopathy).
+8. "allergy_history": Documented or reported drug, food, chemical, or environmental allergies.
+9. "family_history_detailed": Hereditary or familial medical conditions in parents, siblings, or family members.
+10. "personal_history": Lifestyle habits including diet (Veg/Non-Veg), bowel habits (Constipated/Regular), sleep hours and quality, and addictions (Tobacco, Alcohol, Smoking).
+11. "menstrual_obstetric_history": Gynecological and obstetric history for female patients (LMP, cycle length, regularity, pregnancies/parity).
+12. "followup_details": Next visit date, follow-up advice, and attending doctor details.
+
 TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
 Return ONLY a valid JSON object whose top-level keys are EXACTLY:
 - "patient_identity": {{"patient_name": string|null, "age": number|null, "gender": string|null}}
-- "chief_complaint": {{"summary": string|null, "complaints": [{{"complaint": string, "ayurvedic_name": string|null, "duration": string|null, "site": string|null, "laterality": string|null}}]}}
-- "anamnesis": {{"progression": string|null, "associated_symptoms": [string], "patient_reported_concerns": [string]}}
+- "encounter_context": {{"visit_type": string|null, "notes": string|null}}
+- "chief_complaint": {{"summary": string|null, "complaints": [{{"complaint": string, "ayurvedic_name": string|null, "duration": string|null, "site": string|null, "laterality": string|null, "severity": string|null}}]}}
+- "anamnesis": {{"progression": string|null, "onset": string|null, "aggravating_factors": [string], "relieving_factors": [string], "associated_symptoms": [string], "patient_reported_concerns": [string]}}
 - "past_medical_history": {{"medical": [string], "surgical": [string], "negative_history": [string]}}
-- "medication_history": {{"current_medicines": [{{"name": string, "system": string, "dose": string|null, "raw_phrase": string}}]}}
+- "surgical_history": {{"procedures": [string]}}
+- "medication_history": {{"current_medicines": [{{"name": string, "system": string|null, "dose": string|null, "raw_phrase": string|null}}]}}
 - "allergy_history": {{"no_known_allergies": boolean|null, "allergies": [string]}}
-- "personal_history": {{"diet": string|null, "bowel_habits": string|null, "sleep_quality": string|null, "addictions": [string]}}
 - "family_history_detailed": {{"family_conditions": [string]}}
+- "personal_history": {{"diet": string|null, "bowel_habits": string|null, "sleep_quality": string|null, "addictions": [string]}}
+- "menstrual_obstetric_history": {{"lmp": string|null, "cycle_regularity": string|null, "remarks": string|null}}
 - "followup_details": {{"next_visit_date": string|null, "followup_doc_name": string|null}}
 
 Rules:
-- Extract all dictated facts accurately. If a section has no dictated information, return an empty object {{}} or empty list [] for its fields.
+- Extract all dictated facts accurately into their correct boundary section. If a section has no dictated information, return an empty object {{}} or empty list [].
 - Do NOT return reprompt errors or quality warnings. Return valid JSON only.
 """,
     2: f"""\
 You are an expert clinical documentation AI for SGP Integrative Medicine.
 The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Physical Examination, Vitals, Diagnostics, and Nadi Pariksha (Pulse Diagnosis).
+
+CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
+1. "vitals_anthropometry": Physical vital signs (Blood Pressure e.g. 120/80, Pulse Rate bpm, Temperature, Height cm, Weight kg, BMI, SpO2).
+2. "general_examination": General physical examination findings — built, nourishment, pallor, icterus, edema (e.g. "General swelling & edema of right leg"), cyanosis, clubbing, orientation.
+3. "systemic_examination": Systems examination — CVS (Heart), RS (Lungs), PA (Per Abdomen), CNS (Nervous System), and Local Examination (e.g. "Varicose veins of right leg more prominent than left").
+4. "investigation_reports": Diagnostic lab tests, USG abdomen reports reviewed (e.g. "USG shows Grade 3 Prostatomegaly and gallstones"), MRI/X-ray key findings, and new investigations advised.
+5. "pulse_diagnosis": Nadi Pariksha VPK readings (Vata, Pitta, Kapha severity ratings: "very mild", "mild", "moderate", "severe") across 11 organ system codes: LISI (Liver/Spleen), CVS (Heart), RB (Renal/Bladder), GIT (Gastrointestinal), IS (Immune System), PAN (Pancreas), PRO (Prostate/Reproductive), LB (Lungs/Bronchi), GB (Gallbladder), RT (Thyroid/Endocrine), SS (Spine/Musculoskeletal).
+6. "ayurvedic_assessment_extended": Prakriti (Body constitution), Vikriti (Current imbalance), VPK Dominance summary, and Samprapti (Pathogenesis summary).
 
 TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
 Return ONLY a valid JSON object whose top-level keys are EXACTLY:
@@ -1695,6 +1720,15 @@ The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Ayurve
 {_SGP_MEDICINE_KNOWLEDGE}
 {_SGP_PROCEDURE_KNOWLEDGE}
 
+CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
+1. "ayurvedic_supplements": SGP Canonical Herbal Medicines prescribed (APD, ATHEROLYZIN, MIGRANONE, IMUMODULIN, NEUROTROPIN, LITHO, D-TOX, etc.), dosage ("1/4", "1/2", "1"), frequency ("BID", "QD", "TID"), and 8-week titration matrix array.
+2. "panchakarma": In-clinic Ayurvedic therapies prescribed (Abhyanga, Swedana, Basti, Nasya, Virechana, Shirodhara), session counts, and medicated oils/ingredients.
+3. "detox_procedures": Home detox routines, herbal teas (Fennel Tea, Coriander Water), external oil applications, gargles (Gandusham).
+4. "exercises_yoga": Recommended physical exercises, Yogasana, Pranayama (Anulom Vilom, Bhastrika), frequency, and instructions.
+5. "treatment_and_background": Therapeutic goal summary, disease background, and patient education rationale.
+6. "assessment_and_plan": Final clinical diagnosis (Ayurvedic & Allopathic), prognosis, dietary advice (Foods to include & exclude), lifestyle recommendations, and follow-up timeline.
+7. "prescription_sheet": Synthesized quick summary of all prescribed medicines, daily regimen schedule, detox routines, and review timeline.
+
 TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
 Return ONLY a valid JSON object whose top-level keys are EXACTLY:
 - "ayurvedic_supplements": [
@@ -1721,9 +1755,15 @@ Return ONLY a valid JSON object whose top-level keys are EXACTLY:
       {{"name": string (canonical exercise name), "frequency": string|null, "remarks": string|null}}
     ]
   }}
+- "treatment_and_background": {{
+    "therapeutic_goals": [string],
+    "patient_education": string|null
+  }}
 - "assessment_and_plan": {{
     "ayurvedic_diagnosis": string|null,
-    "plan": {{"home_remedies": [string], "lifestyle_advice": [string], "follow_up": string|null}}
+    "allopathic_diagnosis": string|null,
+    "prognosis": string|null,
+    "plan": {{"home_remedies": [string], "lifestyle_advice": [string], "diet_advice": {{"include": [string], "exclude": [string]}}, "follow_up": string|null}}
   }}
 - "prescription_sheet": {{
     "quick_summary": {{"allopathy_medicines": string|null}},

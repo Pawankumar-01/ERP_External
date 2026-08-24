@@ -121,6 +121,47 @@ class LLMService:
         )
         return enrich_section_data(section, raw_result)
 
+    async def _preprocess_transcript_for_batch(self, batch_index: int, transcript: str) -> str:
+        """
+        Stage 1: Clinical Pre-Segmentation & Speech Normalizer Agent.
+        Cleans stuttering, word repetitions, and categorizes out-of-order spoken observations
+        into clear clinical domain bullet points before schema JSON extraction.
+        """
+        if len(transcript.strip()) < 30:
+            return transcript
+
+        cleaning_prompt = f"""\
+You are an expert clinical pre-processor for SGP Integrative Medicine.
+TASK: Clean and re-organize the raw monologue dictation for Batch {batch_index}.
+
+Rules:
+1. Remove speech noise, stuttering, verbatim word repetitions, and hesitation phrases (e.g. "at least for the past several years and two decades at least two decades" -> "dribbling of urine for 20 years").
+2. Re-organize out-of-order spoken observations into clear, logical clinical bullet points.
+3. Preserve ALL clinical facts, durations, severity, numbers, dosages, organ systems, and medical terms accurately.
+
+Return ONLY a JSON object: {{"cleaned_transcript": "concise bulleted clinical summary"}}
+"""
+        messages = [
+            {"role": "system", "content": "You are a clinical speech cleaner and segmenter."},
+            {"role": "user", "content": f"{cleaning_prompt}\n\nRAW TRANSCRIPT:\n<<<\n{transcript}\n>>>"},
+        ]
+
+        res = await self._safe_json_call(
+            messages=messages,
+            label=f"preprocess_batch:{batch_index}",
+            fallback={},
+            max_tokens=1500,
+        )
+
+        cleaned = res.get("cleaned_transcript")
+        if cleaned and isinstance(cleaned, str) and len(cleaned.strip()) > 10:
+            logger.info(
+                f"Stage 1 Pre-processing success for Batch {batch_index}: "
+                f"orig_len={len(transcript)} -> clean_len={len(cleaned)}"
+            )
+            return cleaned
+        return transcript
+
     async def extract_batch_transcript(
         self,
         batch_index: int,
@@ -142,11 +183,15 @@ class LLMService:
             logger.warning("Invalid batch_index: %s", batch_index)
             return {}
 
+        # Stage 1: Pre-process and clean raw monologue transcript
+        processed_transcript = await self._preprocess_transcript_for_batch(batch_index, transcript)
+
+        # Stage 2: Extract structured domain schema from cleaned transcript
         messages = [
             {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
             {
                 "role": "user",
-                "content": f"{batch_prompt}\n\nDOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{transcript}\n>>>",
+                "content": f"{batch_prompt}\n\nCLEANED DOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{processed_transcript}\n>>>",
             },
         ]
 
