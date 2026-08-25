@@ -1568,8 +1568,11 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
     # Daily regimen synthesis
     oils_list = []
     detox_list = []
-    if isinstance(detox, dict) and isinstance(detox.get("detox_items"), list):
-        for d in detox.get("detox_items", []):
+    if isinstance(detox, dict):
+        raw_items = detox.get("detox_items") or detox.get("items") or []
+        if isinstance(raw_items, str):
+            raw_items = [raw_items]
+        for d in _as_list(raw_items):
             if isinstance(d, dict):
                 name = _clean(d.get("name"))
                 if not name:
@@ -1588,6 +1591,21 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
                     oils_list.append(f"{header}: {instr}" if instr else (f"{header}: As prescribed" if "anutail" not in name.lower() else header))
                 else:
                     detox_list.append(f"{header}: {instr}" if instr else header)
+            elif isinstance(d, str) and d.strip():
+                item_str = d.strip()
+                header = f"• {item_str}"
+                if any(k in item_str.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail"]):
+                    oils_list.append(header)
+                else:
+                    detox_list.append(header)
+    elif isinstance(detox, list):
+        for d in detox:
+            if isinstance(d, str) and d.strip():
+                header = f"• {d.strip()}"
+                if any(k in d.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail"]):
+                    oils_list.append(header)
+                else:
+                    detox_list.append(header)
 
     oil_app = existing_dreg.get("oil_applications") or ("\n".join(oils_list) if oils_list else None)
     detox_proc = existing_dreg.get("detox_procedures") or ("\n".join(detox_list) if detox_list else None)
@@ -1599,11 +1617,16 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
             home_rem = "\n".join([f"• {_clean(h)}" for h in _as_list(hr_list) if _clean(h)]) or None
 
     breathing_ex = existing_dreg.get("breathing_exercises")
-    if not breathing_ex and isinstance(ex, dict) and isinstance(ex.get("exercises"), list):
+    if not breathing_ex and isinstance(ex, dict):
+        raw_ex = ex.get("exercises") or []
+        if isinstance(raw_ex, str):
+            raw_ex = [raw_ex]
         b_list = []
-        for e in ex.get("exercises", []):
+        for e in _as_list(raw_ex):
             if isinstance(e, dict) and (e.get("category") == "breathing" or any(k in (_clean(e.get("name")) or "").lower() for k in ["pranayama", "breathing", "anulom", "kapalabhati", "nostril"])):
                 b_list.append(f"• {e.get('name')}: {e.get('frequency') or ''} {e.get('duration_minutes') or ''} mins")
+            elif isinstance(e, str) and any(k in e.lower() for k in ["pranayama", "breathing", "anulom", "kapalabhati", "nostril"]):
+                b_list.append(f"• {e.strip()}")
         if b_list:
             breathing_ex = "\n".join(b_list)
 
@@ -1639,14 +1662,28 @@ def _normalize_supplements_weeks(supplements: Any) -> list:
     for seamless rendering in the ERPNext Jinja print template's 8-week grid.
     """
     if not isinstance(supplements, list):
-        return []
+        if isinstance(supplements, dict) and isinstance(supplements.get("ayurvedic_supplements"), list):
+            supplements = supplements["ayurvedic_supplements"]
+        elif isinstance(supplements, dict) and isinstance(supplements.get("supplements"), list):
+            supplements = supplements["supplements"]
+        else:
+            return []
     norm = []
     for item in supplements:
+        if isinstance(item, str) and item.strip():
+            norm.append({
+                "name": item.strip(),
+                "quantity_mg": "1000mg",
+                "weeks": ["1"] * 8,
+                "dose": "1",
+                "frequency": "QD"
+            })
+            continue
         if not isinstance(item, dict):
             continue
         new_item = dict(item)
         if not new_item.get("quantity_mg"):
-            new_item["quantity_mg"] = str(new_item.get("quantity") or new_item.get("strength") or "").strip()
+            new_item["quantity_mg"] = str(new_item.get("quantity") or new_item.get("strength") or "1000mg").strip()
         weeks = new_item.get("weeks")
         if not weeks or not isinstance(weeks, list):
             dose_val = _clean(new_item.get("dose") or new_item.get("dose_morning") or "")
