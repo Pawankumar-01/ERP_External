@@ -1534,7 +1534,22 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
     existing_rx = draft.get("prescription_sheet") if isinstance(draft.get("prescription_sheet"), dict) else {}
     existing_qs = existing_rx.get("quick_summary") if isinstance(existing_rx.get("quick_summary"), dict) else {}
     existing_dreg = existing_rx.get("daily_regimen") if isinstance(existing_rx.get("daily_regimen"), dict) else {}
-    existing_dietwk = existing_rx.get("diet_plan_weeks") if isinstance(existing_rx.get("diet_plan_weeks"), list) else []
+
+    # Collect diet_plan_weeks from prescription_sheet (new rich schema) or legacy schema
+    raw_dietwk = existing_rx.get("diet_plan_weeks") if isinstance(existing_rx.get("diet_plan_weeks"), list) else []
+
+    def _normalize_diet_week(dw: Any) -> dict:
+        """Normalize both old (diet_item/no_of_weeks) and new (week_range/diet_type/diet_items) schema."""
+        if not isinstance(dw, dict):
+            return {}
+        return {
+            "week_range": _clean(dw.get("week_range") or dw.get("no_of_weeks") or ""),
+            "diet_type": _clean(dw.get("diet_type") or dw.get("diet_item") or ""),
+            "diet_items": _clean(dw.get("diet_items") or dw.get("instructions") or ""),
+            "start_week": _clean(dw.get("start_week") or ""),
+        }
+
+    existing_dietwk = [_normalize_diet_week(dw) for dw in raw_dietwk if isinstance(dw, dict) and (dw.get("diet_type") or dw.get("diet_item"))]
 
     treat = draft.get("treatment_and_background") or {}
     medhist = draft.get("medication_history") or {}

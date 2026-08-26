@@ -494,7 +494,7 @@ Examples:
   "PAN IS VK Moderate" → PAN: vata=moderate, kapha=moderate; IS: vata=moderate, kapha=moderate
   "RT MLP Moderate K" → RT: kapha=moderate (MLP is not a valid system code — ignore it)
 
-SPOKEN SYSTEM CODE ALIASES (map these to valid codes):
+SPOKEN SYSTEM CODE ALIASES (map these to valid codes BEFORE any other processing):
 - "Liver" or "Liv" → LIV
 - "KB" or "KUB" → KUB
 - "Pro" → PRO
@@ -502,7 +502,10 @@ SPOKEN SYSTEM CODE ALIASES (map these to valid codes):
 - "GB" → GB
 - "LB" or "Lower Back" → LB
 - "LSCS" → LSCS
-- "LISI" → LISI
+- "LISI", "Large Intestine Small Intestine" → LISI
+- "LI" or "Large Intestine" → LISI   ← spoken shorthand, always expand to LISI
+- "SI" or "Small Intestine" → LISI   ← spoken shorthand, always expand to LISI
+- "LI SI" or "SI LI" (spoken together or separately for same system) → LISI
 - "RB" → RB
 - "OBG" → OBG
 - "IS" → IS
@@ -510,6 +513,13 @@ SPOKEN SYSTEM CODE ALIASES (map these to valid codes):
 - "CVS" → CVS
 - "PAN" → PAN
 - "RT" → RT
+
+SPOKEN LOW-SEVERITY ALIASES:
+- "low V", "low Vata" → vata = "very_mild" for that system
+- "low P", "low Pitta" → pitta = "very_mild" for that system
+- "low K", "low Kapha" → kapha = "very_mild" for that system
+- "low VPK" → all three = "very_mild"
+These phrases indicate the patient has a constitutionally low dosha reading — treat as severity "very_mild".
 
 Rules for system-wise pulse:
 - Valid system codes ONLY (do not invent codes):
@@ -519,7 +529,7 @@ Rules for system-wise pulse:
   LISI (large intestine small intestine), RB (reproductive bladder), OBG (obstetrics gynecology).
 - If a spoken term does not match any valid system code or alias above, DO NOT create a system entry for it. Log it in needs_doctor_confirmation instead.
 - Severity normalization (map spoken terms):
-  "very mild", "very-mild" -> "very_mild"
+  "very mild", "very-mild", "low" -> "very_mild"
   "mild" -> "mild"
   "mild moderate", "mild-moderate", "mild-mod" -> "mild_moderate"
   "moderate", "mod" -> "moderate"
@@ -590,8 +600,10 @@ Rules:
 - When the doctor says a name that matches a known SGP canonical name (or variant), output the canonical name.
 - CRITICAL DOSAGE FRACTION NORMALIZATION: Always convert spoken fractions or raw STT numeric strings into clean standard mathematical fractions:
   * "one fourth" / "1 4th" / "1 by 4th" / "quarter" -> "1/4"
-  * "half" / "one half" -> "1/2"
+  * "half" / "one half" / "half tablet" / "half tsf" / "half dose" -> "1/2"
   * "three fourths" / "3 4th" / "3 by 4th" -> "3/4"
+  * "one" / "one tablet" / "one tsf" -> "1"
+  SPECIAL: When a doctor says "half instead of one", "half of one", or "half" in the context of a standard dose, always store "1/2" — this is a common clinical shorthand. Apply this normalization to weeks[], dose, dose_morning, dose_evening fields.
 - MANDATORY 8-WEEK DOSAGE MATRIX ("weeks" field):
   * For EVERY medicine or supplement, you MUST output an explicit 8-element array of strings corresponding to Week 1 through Week 8 in the "weeks" field. NEVER set "weeks" to null!
   * SGP TITRATION PROTOCOLS ("quarter half one titration" / "1/4 1/2 1 titration" / "quarter half one dosage"):
@@ -654,6 +666,15 @@ Rules:
 - If doctor says "already done" for a procedure, set status to "completed". If prescribed, set to "prescribed".
 - status field: "prescribed" | "completed" | "ongoing" | null.
 
+STRICT BOUNDARY — NEVER INCLUDE in panchakarma (these belong ONLY in detox_procedures):
+- Gandusham / Gandusha (oil pulling / gargling — home procedure)
+- Nithya Virechana / Prathivaara Virechana (home daily/weekly purgation)
+- Anutailam (nasal drops — self-administered at home)
+- Steam Inhalations (home steam therapy)
+- Fennel Tea, Barley Soup, Rice Soup, Tapioca Soup, Raagi Soup, Jowar Soup (dietary decoctions)
+- Any decoctions, teas, soups, or home-use oil self-applications.
+If the doctor mentions any of the above items, do NOT add them to panchakarma. Leave them for detox_procedures.
+
 Schema:
 {
   "total_sessions": "number | null",
@@ -678,6 +699,7 @@ Schema:
   "overall_remarks": "string | null"
 }
 """ + _SECTION_FOOTER,
+
 
     "treatment_and_background": BASE_RULES + """\
 Extract current treatment background with focus on allopathic medications and ongoing non-drug therapies.
@@ -1175,7 +1197,17 @@ Extract or structure executive summaries for the clinical prescription sheet and
 Rules:
 - Capture quick reference summaries for allopathy medicines, panchakarma, tests to be done, and others.
 - Capture daily regimen instructions for oil applications, detox procedures, home remedies, and breathing exercises.
-- Capture duration-based diet plans (e.g. PPD 4 weeks, KPD 2 weeks).
+- Capture duration-based diet plans with full detail (e.g. "PAD 3 weeks", "KPD 4 weeks from week 1", "VPD week 1 with chillies").
+- DIET PLAN EXTRACTION RULES:
+  * Extract every diet entry the doctor mentions, even if spoken rapidly or in sequence.
+  * "week_range": The specific week number or range (e.g. "01", "3", "4-6", "Week 1"). Use the spoken week number. If no week is mentioned, leave null.
+  * "diet_type": The canonical diet code spoken (PAD = Pitta Aggravating Diet, KPD = Kapha Pacifying Diet, VPD = Vata Pacifying Diet). Map:
+    - "PAD", "pitta aggravating" → "PAD"
+    - "KPD", "kapha pacifying" → "KPD"
+    - "VPD", "vata pacifying" → "VPD"
+    - "PPD", "pitta pacifying" → "PPD"
+  * "diet_items": Any additional instructions the doctor gives for that week/diet (e.g. "with chillies", "no spice", "include barley").
+  * "start_week": The week number to start this diet (if stated).
 
 Schema:
 {
@@ -1193,8 +1225,10 @@ Schema:
   },
   "diet_plan_weeks": [
     {
-      "diet_item": "string",
-      "no_of_weeks": "string"
+      "week_range": "string | null",
+      "diet_type": "PAD | KPD | VPD | PPD | string | null",
+      "diet_items": "string | null",
+      "start_week": "string | null"
     }
   ],
   "review_after": "string | null",
@@ -1722,32 +1756,46 @@ The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Ayurve
 
 CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
 1. "ayurvedic_supplements": SGP Canonical Herbal Medicines prescribed (APD, ATHEROLYZIN, MIGRANONE, IMUMODULIN, NEUROTROPIN, LITHO, D-TOX, etc.), dosage ("1/4", "1/2", "1"), frequency ("BID", "QD", "TID"), and 8-week titration matrix array.
-2. "panchakarma": In-clinic Ayurvedic therapies prescribed (Abhyanga, Swedana, Basti, Nasya, Virechana, Shirodhara), session counts, and medicated oils/ingredients.
-3. "detox_procedures": Home detox routines, herbal teas (Fennel Tea, Coriander Water), external oil applications, gargles (Gandusham).
+   - FRACTION NORMALIZATION: When the doctor says "half" or "half instead of one" or "half tablet" as a dose, store it as "1/2" in weeks[] and dose fields.
+2. "panchakarma": ONLY in-clinic Ayurvedic physical therapy sessions performed by a therapist (Abhyanga, Swedana, Basti, Nasya, Virechana, Shirodhara, Januvasthi, Greeva Vasthi, Kati Vasthi, Pizhichil, Njavara, Udwarthana, etc.), session counts, and medicated oils/ingredients.
+   - STRICT RULE: Do NOT put Gandusham, Nithya Virechana, Prathivaara Virechana, Anutailam, Fennel Tea, herbal soups, or any home-use detox item here. Those belong ONLY in "detox_procedures".
+3. "detox_procedures": Home detox routines and self-administered procedures including: Gandusham, Nithya Virechana, Prathivaara Virechana, Anutailam, Steam Inhalations, Fennel Tea, Barley Soup, Rice Soup, Tapioca Soup (Sabu Dana), Raagi Soup, Jowar Soup, Coriander Water, oil self-applications, gargles.
+   - STRICT RULE: Do NOT duplicate items from panchakarma here. If it's an in-clinic procedure, it goes in panchakarma only.
 4. "exercises_yoga": Recommended physical exercises, Yogasana, Pranayama (Anulom Vilom, Bhastrika), frequency, and instructions.
 5. "treatment_and_background": Therapeutic goal summary, disease background, and patient education rationale.
 6. "assessment_and_plan": Final clinical diagnosis (Ayurvedic & Allopathic), prognosis, dietary advice (Foods to include & exclude), lifestyle recommendations, and follow-up timeline.
-7. "prescription_sheet": Synthesized quick summary of all prescribed medicines, daily regimen schedule, detox routines, and review timeline.
+7. "prescription_sheet": Synthesized quick summary including diet_plan_weeks. Extract every diet plan the doctor mentions (PAD, KPD, VPD, PPD) with week number, diet type, and any extra instructions.
+
+DIET PLAN EXTRACTION (prescription_sheet.diet_plan_weeks):
+- Extract EACH diet entry the doctor mentions as a separate object.
+- "week_range": The specific week number spoken (e.g. "01", "3", "4"). If the doctor says "week 3 KPD", week_range = "3".
+- "diet_type": The diet code (PAD, KPD, VPD, PPD). Map spoken phrases:
+  * "PAD", "pitta aggravating diet" → "PAD"
+  * "KPD", "kapha pacifying diet" → "KPD"
+  * "VPD", "vata pacifying diet" → "VPD"
+  * "PPD", "pitta pacifying diet" → "PPD"
+- "diet_items": Any additional instructions or food items spoken for that week (e.g. "with chillies", "no spice", "include barley").
+- "start_week": The week number to start (if stated).
 
 TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
 Return ONLY a valid JSON object whose top-level keys are EXACTLY:
 - "ayurvedic_supplements": [
     {{
       "name": string (canonical SGP name e.g. APD, ATHEROLYZIN, MIGRANONE, IMUMODULIN, NEUROTROPIN, LITHO, D-TOX),
-      "dose": string|null (e.g. "half", "1", "1/4"),
+      "dose": string|null (ALWAYS convert spoken fractions: "half"→"1/2", "quarter"→"1/4", "one"→"1"),
       "frequency": string|null (e.g. "BID", "QD", "TID"),
       "start_week": string|null (default "1"),
-      "weeks": [string] (8-element list e.g. ["1/4", "1/2", "1", "1", "1", "1", "1", "1"] or ["half", "half", "half", "half", "half", "half", "half", "half"])
+      "weeks": [string] (8-element list with normalized fractions e.g. ["1/4", "1/2", "1", "1", "1", "1", "1", "1"])
     }}
   ]
 - "panchakarma": {{
     "sessions": [
-      {{"procedure": string, "session_count": number|null, "oils_or_ingredients": [string]}}
+      {{"procedure": string (in-clinic therapist procedures ONLY — NOT detox home procedures), "session_count": number|null, "oils_or_ingredients": [string]}}
     ]
   }}
 - "detox_procedures": {{
     "detox_items": [
-      {{"name": string (canonical procedure name), "quantity": string|null, "frequency": string|null, "instructions": string|null}}
+      {{"name": string (canonical detox/home procedure name), "quantity": string|null, "frequency": string|null, "instructions": string|null}}
     ]
   }}
 - "exercises_yoga": {{
@@ -1768,12 +1816,16 @@ Return ONLY a valid JSON object whose top-level keys are EXACTLY:
 - "prescription_sheet": {{
     "quick_summary": {{"allopathy_medicines": string|null}},
     "daily_regimen": {{"detox_procedures": string|null, "oil_applications": string|null}},
+    "diet_plan_weeks": [
+      {{"week_range": string|null, "diet_type": "PAD | KPD | VPD | PPD | string | null", "diet_items": string|null, "start_week": string|null}}
+    ],
     "review_after": string|null
   }}
 
 Rules:
 - Fix spoken/misspelled SGP medicine names using the canonical name table (e.g. "neurotropin" -> "NEUROTROPIN", "migranine" -> "MIGRANONE").
 - Fix spoken procedure names using the canonical procedure table (e.g. "fennel tea" -> "Fennel Tea", "anutailam" -> "Anutailam").
+- Strictly separate panchakarma (in-clinic) from detox_procedures (home/self-administered). Never put the same item in both.
 - Do NOT return reprompt errors. Return valid JSON only.
 """,
 }
