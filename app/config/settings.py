@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     #Whatsapp
     WHATSAPP_TOKEN: str
     WHATSAPP_PHONE_ID: int
+    WHATSAPP_VERIFY_TOKEN: str = "sgp_whatsapp_verify_token_2026"
     FRONTEND_BASE_URL: str = "http://localhost:8001"
 
     # ─── CORS ─────────────────────────────────────────────────────────────────

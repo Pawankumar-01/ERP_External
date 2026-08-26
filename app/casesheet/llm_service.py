@@ -198,6 +198,16 @@ Return ONLY a JSON object: {{"cleaned_transcript": "concise bulleted clinical su
             max_tokens=4000,
         )
 
+        # Guard: if LLM failed (rate limit, timeout, parse error), return empty dict
+        # so the caller (_process_batch_audio_background) preserves the existing draft
+        # data instead of overwriting it with empty enriched shells.
+        if isinstance(batch_res, dict) and batch_res.get("_error"):
+            logger.warning(
+                "LLM extraction failed for batch %s (error=%s) — caller will preserve existing draft.",
+                batch_index, batch_res.get("_error")
+            )
+            return {}
+
         results: Dict[str, Dict[str, Any]] = {}
         if isinstance(batch_res, dict):
             for sec_key in batch_sections:

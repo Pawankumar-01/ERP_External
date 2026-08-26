@@ -5,10 +5,12 @@ POST /api/v1/whatsapp/notify-orientation → send join links to leads
 
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
+from app.config.settings import settings
 from app.whatsapp.service import whatsapp_service
+from app.whatsapp.bot_engine import bot_engine
 from app.erp_bridge.service import erp_bridge_service
 
 router = APIRouter()
@@ -72,3 +74,36 @@ async def notify_orientation(req: OrientationNotifyRequest):
         "failed_lead_ids": failed,
         "total":  len(req.lead_ids),
     }
+
+
+@router.get("/webhook")
+async def verify_webhook(
+    hub_mode: Optional[str] = Query(None, alias="hub.mode"),
+    hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
+    hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
+):
+    """
+    Meta Webhook verification endpoint.
+    Meta sends GET request to verify domain ownership and secret token.
+    """
+    if hub_mode == "subscribe" and hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN:
+        logger.info("[WHATSAPP WEBHOOK] Domain & token verified successfully!")
+        return Response(content=hub_challenge, media_type="text/plain")
+    else:
+        logger.warning(f"[WHATSAPP WEBHOOK] Verification failed. Token mismatch: {hub_verify_token}")
+        raise HTTPException(status_code=403, detail="Verification token mismatch")
+
+
+@router.post("/webhook")
+async def receive_webhook(request: Request):
+    """
+    Meta Webhook payload listener.
+    Receives incoming WhatsApp messages, quick-reply button taps, and list selections.
+    """
+    try:
+        payload = await request.json()
+        await bot_engine.handle_webhook_payload(payload)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"[WHATSAPP WEBHOOK] Failed to process payload: {e}")
+        return {"status": "error", "message": str(e)}

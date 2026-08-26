@@ -457,16 +457,26 @@ async def process_batch_consultation_audio(
         f"size={len(audio_bytes)} bytes"
     )
 
-    session.status = SessionStatus.PROCESSING
-    session.processing_progress = {
+    batch_total = 12 if batch_index == 1 else (6 if batch_index in (2, 3) else 24)
+
+    # Merge into existing progress — preserves completed/processing state of OTHER batches.
+    # Replacing the entire dict would wipe sibling batch_X keys which the Flutter
+    # polling uses to drive its state machine.
+    existing_prog = dict(session.processing_progress or {})
+    existing_prog[f"batch_{batch_index}"] = {
         "status": "transcribing",
         "batch_index": batch_index,
         "mode": mode,
         "sections_done": 0,
-        "total_sections": 24,
+        "total_sections": batch_total,
         "transcript_length": 0,
         "error": None,
     }
+    existing_prog["status"] = "transcribing"
+    existing_prog["batch_index"] = batch_index
+
+    session.status = SessionStatus.PROCESSING
+    session.processing_progress = existing_prog
     await db.commit()
 
     background_tasks.add_task(
