@@ -34,6 +34,7 @@ from app.casesheet.prompts import (
     AMBIENT_SECTION_GROUPS,
     AMBIENT_BATCH_PROMPTS,
     AMBIENT_BATCH_GROUPS,
+    MIDDLEWARE_SEGMENTER_PROMPTS,
     BASE_RULES,
     _SECTION_FOOTER,
 )
@@ -46,25 +47,24 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 GEMINI_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
     "gemini-2.5-pro",
-    "gemini-3.7-flash",
+    "gemini-1.5-pro",
 ]
 GROQ_MODELS = [
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-    "groq/compound-mini",
-    "groq/compound",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
 ]
-PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "nvidia/nemotron-3.5-lightning:free")
+PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 _raw_candidates = [
     PRIMARY_MODEL,
-    "nvidia/nemotron-3.5-lightning:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "deepseek/deepseek-r1:free",
     "openrouter/free",
 ]
 MODEL_CANDIDATES = []
@@ -117,46 +117,43 @@ class LLMService:
         )
         return enrich_section_data(section, raw_result)
 
-    async def _preprocess_transcript_for_batch(self, batch_index: int, transcript: str) -> str:
+    async def _preprocess_and_segment_batch_transcript(
+        self,
+        batch_index: int,
+        transcript: str,
+    ) -> Dict[str, Any]:
         """
-        Stage 1: Clinical Pre-Segmentation & Speech Normalizer Agent.
-        Cleans stuttering, word repetitions, and categorizes out-of-order spoken observations
-        into clear clinical domain bullet points before schema JSON extraction.
+        Stage 1: Middleware Clinical Normalizer & Section Segmenter.
+        1. Corrects ASR phonetic errors (e.g. 'finite mg' -> '500mg', 'LSI' -> 'LISI', 'LV' -> 'LB').
+        2. Normalizes stuttering, word repetitions, and out-of-order spoken observations.
+        3. Segments the transcript into section-specific targeted snippets for the batch sections.
         """
-        if len(transcript.strip()) < 30:
-            return transcript
+        if len(transcript.strip()) < 20:
+            return {}
 
-        cleaning_prompt = f"""\
-You are an expert clinical pre-processor for SGP Integrative Medicine.
-TASK: Clean and re-organize the raw monologue dictation for Batch {batch_index}.
+        prompt = MIDDLEWARE_SEGMENTER_PROMPTS.get(batch_index)
+        if not prompt:
+            return {}
 
-Rules:
-1. Remove speech noise, stuttering, verbatim word repetitions, and hesitation phrases (e.g. "at least for the past several years and two decades at least two decades" -> "dribbling of urine for 20 years").
-2. Re-organize out-of-order spoken observations into clear, logical clinical bullet points.
-3. Preserve ALL clinical facts, durations, severity, numbers, dosages, organ systems, and medical terms accurately.
-
-Return ONLY a JSON object: {{"cleaned_transcript": "concise bulleted clinical summary"}}
-"""
         messages = [
-            {"role": "system", "content": "You are a clinical speech cleaner and segmenter."},
-            {"role": "user", "content": f"{cleaning_prompt}\n\nRAW TRANSCRIPT:\n<<<\n{transcript}\n>>>"},
+            {"role": "system", "content": "You are a clinical speech cleaner, medical spell corrector, and section segmenter."},
+            {"role": "user", "content": f"{prompt}\n\nRAW DOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{transcript}\n>>>"},
         ]
 
         res = await self._safe_json_call(
             messages=messages,
-            label=f"preprocess_batch:{batch_index}",
+            label=f"middleware_segmenter_batch:{batch_index}",
             fallback={},
-            max_tokens=1500,
+            max_tokens=2500,
         )
 
-        cleaned = res.get("cleaned_transcript")
-        if cleaned and isinstance(cleaned, str) and len(cleaned.strip()) > 10:
+        if isinstance(res, dict) and not res.get("_error"):
             logger.info(
-                f"Stage 1 Pre-processing success for Batch {batch_index}: "
-                f"orig_len={len(transcript)} -> clean_len={len(cleaned)}"
+                f"Stage 1 Middleware Segmenter success for Batch {batch_index}: "
+                f"segmented keys={[k for k, v in res.items() if v]}"
             )
-            return cleaned
-        return transcript
+            return res
+        return {}
 
     async def extract_batch_transcript(
         self,
@@ -179,15 +176,16 @@ Return ONLY a JSON object: {{"cleaned_transcript": "concise bulleted clinical su
             logger.warning("Invalid batch_index: %s", batch_index)
             return {}
 
-        # Stage 1: Pre-process and clean raw monologue transcript
-        processed_transcript = await self._preprocess_transcript_for_batch(batch_index, transcript)
+        # Stage 1: Middleware Normalizer & Section Segmenter
+        segmented_map = await self._preprocess_and_segment_batch_transcript(batch_index, transcript)
+        full_cleaned = segmented_map.get("full_cleaned_transcript") or transcript
 
-        # Stage 2: Extract structured domain schema from cleaned transcript
+        # Stage 2: Extract structured domain schema from normalized transcript
         messages = [
             {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
             {
                 "role": "user",
-                "content": f"{batch_prompt}\n\nCLEANED DOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{processed_transcript}\n>>>",
+                "content": f"{batch_prompt}\n\nNORMALIZED DOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{full_cleaned}\n>>>",
             },
         ]
 
@@ -198,9 +196,6 @@ Return ONLY a JSON object: {{"cleaned_transcript": "concise bulleted clinical su
             max_tokens=4000,
         )
 
-        # Guard: if LLM failed (rate limit, timeout, parse error), return empty dict
-        # so the caller (_process_batch_audio_background) preserves the existing draft
-        # data instead of overwriting it with empty enriched shells.
         if isinstance(batch_res, dict) and batch_res.get("_error"):
             logger.warning(
                 "LLM extraction failed for batch %s (error=%s) — caller will preserve existing draft.",
@@ -209,16 +204,33 @@ Return ONLY a JSON object: {{"cleaned_transcript": "concise bulleted clinical su
             return {}
 
         results: Dict[str, Dict[str, Any]] = {}
+        raw_section_transcripts: Dict[str, str] = {}
+
         if isinstance(batch_res, dict):
             for sec_key in batch_sections:
                 sec_data = batch_res.get(sec_key)
+                sec_snippet = segmented_map.get(sec_key) if isinstance(segmented_map, dict) else None
+
+                # Targeted Section Re-extraction Fallback: if domain extraction missed or under-extracted a section
+                if sec_snippet and isinstance(sec_snippet, str) and len(sec_snippet.strip()) > 10:
+                    if not sec_data or (isinstance(sec_data, dict) and len(sec_data) <= 1):
+                        logger.info(f"Targeted re-extraction for section '{sec_key}' using Stage 1 segmented snippet...")
+                        single_sec_res = await self.extract_section(sec_key, sec_snippet)
+                        if single_sec_res and not single_sec_res.get("_error"):
+                            sec_data = single_sec_res
+
                 if sec_data is None:
                     sec_data = {}
                 enriched = enrich_section_data(sec_key, sec_data)
                 results[sec_key] = enriched
+
+                # Save clean section snippet for raw transcripts display
+                raw_section_transcripts[sec_key] = sec_snippet.strip() if (sec_snippet and isinstance(sec_snippet, str) and sec_snippet.strip()) else full_cleaned
+
                 if on_section_done:
                     await on_section_done(sec_key, enriched)
 
+        results["_raw_section_transcripts"] = raw_section_transcripts
         return results
 
     async def extract_sections_from_full_transcript(
@@ -460,6 +472,10 @@ Return ONLY a JSON object: {{"cleaned_transcript": "concise bulleted clinical su
                         }
                         try:
                             response = await client.post(GEMINI_URL, headers=gemini_headers, json=payload)
+                            if response.status_code in (429, 503):
+                                logger.warning("Gemini %s temporary overload for model %s. Retrying in 1s...", response.status_code, model)
+                                await asyncio.sleep(1.0)
+                                response = await client.post(GEMINI_URL, headers=gemini_headers, json=payload)
                             if response.status_code in (400, 404, 429, 500, 502, 503, 504):
                                 logger.warning("Gemini error %s for model %s: %s", response.status_code, model, response.text[:100])
                                 continue

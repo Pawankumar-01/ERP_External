@@ -148,9 +148,9 @@ WHISPER_INITIAL_PROMPTS: dict[str, str] = {
         "History of present illness onset progression course associated symptoms negative history disease timeline."
     ),
     "pulse_diagnosis": _AYU_BASE + (
-        "Nadi Pariksha pulse diagnosis. System codes CVS GIT IS PAN KUB PRO RT LB GB LIV SS LSCS LISI RB OBG. "
-        "Dosha codes V P K. Compound codes PV VP VK VK PK KP VPK meaning Pitta-Vata Vata-Kapha Pitta-Kapha all three. "
-        "Spoken aliases: Liver=LIV KB=KUB Pro=PRO. Severity Mild Very Mild Mild Moderate Moderate Severe."
+        "Nadi Pariksha pulse diagnosis. System codes: LISI, LI, SI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, RT, LIV, SS, LSCS, OBG, KUB. "
+        "Doshas: Vata, Pitta, Kapha, V, P, K. Severities: mild, moderate, severe, very mild, mild to moderate, moderate to severe. "
+        "Spoken aliases: LI Large Intestine, SI Small Intestine, Liver=LIV, KB=KUB, Pro=PRO, RT=Respiratory, GB=Gallbladder."
     ),
     "ayurvedic_assessment_extended": _AYU_BASE + (
         "Prakriti Vikriti VPK dominance Ama Agni Koshta Ojas Bala Srotas Dhatu Mala Mutra Jihva Nidana Samprapti Ayurvedic diagnosis."
@@ -1712,7 +1712,7 @@ You are an expert clinical documentation AI for SGP Integrative Medicine.
 The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Physical Examination, Vitals, Diagnostics, and Nadi Pariksha (Pulse Diagnosis).
 
 CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
-1. "vitals_anthropometry": Physical vital signs (Blood Pressure e.g. 120/80, Pulse Rate bpm, Temperature, Height cm, Weight kg, BMI, SpO2).
+1. "vitals_anthropometry": Physical vital signs (Blood Pressure e.g. 120/80, Pulse Rate bpm, Temperature, Height cm, Weight kg, BMI, SpO2, Wrist cm, Waist cm, Forearm cm, Hip cm).
 2. "general_examination": General physical examination findings — built, nourishment, pallor, icterus, edema (e.g. "General swelling & edema of right leg"), cyanosis, clubbing, orientation.
 3. "systemic_examination": Systems examination — CVS (Heart), RS (Lungs), PA (Per Abdomen), CNS (Nervous System), and Local Examination (e.g. "Varicose veins of right leg more prominent than left").
 4. "investigation_reports": Diagnostic lab tests, USG abdomen reports reviewed (e.g. "USG shows Grade 3 Prostatomegaly and gallstones"), MRI/X-ray key findings, and new investigations advised.
@@ -1721,7 +1721,7 @@ CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
 
 TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
 Return ONLY a valid JSON object whose top-level keys are EXACTLY:
-- "vitals_anthropometry": {{"height_cm": number|null, "weight_kg": number|null, "bp": string|null, "pulse_rate": string|null, "temperature": string|null}}
+- "vitals_anthropometry": {{"height_cm": number|null, "weight_kg": number|null, "bp": string|null, "pulse_rate": string|null, "temperature": string|null, "wrist_cm": number|string|null, "waist_cm": number|string|null, "fore_arm_cm": number|string|null, "hip_cm": number|string|null}}
 - "general_examination": {{"built": string|null, "nourishment": string|null, "pallor": string|null, "icterus": string|null, "edema": string|null, "orientation": string|null}}
 - "systemic_examination": {{"cvs": string|null, "rs": string|null, "pa": string|null, "cns": string|null, "local_examination": string|null}}
 - "investigation_reports": {{"reports_reviewed": [string], "key_findings": [string], "investigations_advised": [string]}}
@@ -1744,7 +1744,9 @@ Return ONLY a valid JSON object whose top-level keys are EXACTLY:
 - "ayurvedic_assessment_extended": {{"prakriti": string|null, "vikriti": string|null, "vpk_dominance": string|null, "samprapti_summary": string|null}}
 
 Rules:
+- For vitals_anthropometry, if wrist, waist, forearm, or hip are spoken in inches (e.g., "6.5 inches"), extract as number or string in inches/cm.
 - For pulse_diagnosis, convert severity ratings like "very mild", "mild", "moderate", "severe" to lowercase strings under vata, pitta, or kapha for each organ system code (LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, RT, SS).
+- Speech-to-Text ASR phonetic mappings: "MILE" or "mile" MUST be treated as "mild". "LI", "SI", "L I", "S I", "Large Intestine", "Small Intestine" map to LISI. "R T" -> RT, "G B" -> GB, "L V" -> LIV, "S S" -> SS, "ISE" -> IS, "LISMODERATE" -> LISI Moderate.
 - Do NOT return reprompt errors. Return valid JSON only.
 """,
     3: f"""\
@@ -1829,4 +1831,112 @@ Rules:
 - Do NOT return reprompt errors. Return valid JSON only.
 """,
 }
+
+
+# -----------------------------------------------------------------------------
+# Stage 1 Middleware Normalizer & Section Segmenter Prompts
+# -----------------------------------------------------------------------------
+
+MIDDLEWARE_SEGMENTER_PROMPTS = {
+    1: f"""\
+You are an expert Clinical Normalizer & Section Segmenter for SGP Integrative Medicine.
+TASK: Clean ASR errors, normalize medical terminology, and segment raw monologue dictation for Batch 1 (Demographics & History).
+
+SECTIONS TO SEGMENT:
+- "patient_identity": Patient name, age, gender, phone, patient ID, OP number, doctor name, date.
+- "encounter_context": Visit type (followup / new), consultation details.
+- "chief_complaint": Main symptoms, pain duration, severity scale (e.g. grade 8), knee stiffness, back pain.
+- "anamnesis": History of present illness, onset (lifted weight), aggravating factors (standing, bending), relieving factors (lying down, fomentation).
+- "medication_history": Current medications, dosages (e.g., Metformin 500mg BD, Telmisartan 40mg OD, Pantoprazole 40mg before food).
+- "past_medical_history": Past medical conditions (Type 2 Diabetes 5 yrs, Hypertension 3 yrs, no TB/asthma).
+- "surgical_history": Past surgeries (Inguinal hernia repair 4 yrs back, no implants).
+- "allergy_history": Drug allergies (Sulfa drugs skin rash).
+- "family_history_detailed": Family conditions (Father T2DM & HTN, Mother Osteoarthritis).
+- "personal_history": Diet, appetite, bowel habits, sleep quality/hours, occupation, stress, exercise.
+- "menstrual_obstetric_history": LMP, cycle regularity (if female).
+- "followup_details": Next visit date, follow-up notes.
+
+RULES:
+1. SPELL & PHONETIC CORRECTION:
+   - "finite mg" -> "500mg", "before foot" -> "before food", "telmesartan" -> "Telmisartan", "pantoprazole" -> "Pantoprazole".
+2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
+3. OUTPUT FORMAT: Return ONLY a valid JSON object:
+{{
+  "patient_identity": string,
+  "encounter_context": string,
+  "chief_complaint": string,
+  "anamnesis": string,
+  "medication_history": string,
+  "past_medical_history": string,
+  "surgical_history": string,
+  "allergy_history": string,
+  "family_history_detailed": string,
+  "personal_history": string,
+  "menstrual_obstetric_history": string,
+  "followup_details": string,
+  "full_cleaned_transcript": string
+}}
+""",
+    2: f"""\
+You are an expert Clinical Normalizer & Section Segmenter for SGP Integrative Medicine.
+TASK: Clean ASR errors, normalize medical terminology, and segment raw monologue dictation for Batch 2 (Vitals, Exam & Pulse).
+
+SECTIONS TO SEGMENT:
+- "vitals_anthropometry": Height cm, Weight kg, BP (130/80), Pulse (58 bpm), Temp (98.4 F), Wrist (6.5 inches / 16.5 cm), Waist, Forearm, Hip.
+- "general_examination": Built, nourishment, pallor, icterus, edema (right leg swelling), cyanosis, clubbing, orientation.
+- "systemic_examination": CVS, RS, PA, CNS, Local Examination (varicose veins).
+- "investigation_reports": Lab tests reviewed (HbA1c 6.8%, Creatinine 0.9), Imaging (MRI Lumbar spine L4-L5 bulge, USG Prostatomegaly & gallstones).
+- "pulse_diagnosis": Nadi Pariksha readings across 11 system codes (LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, RT, SS) and VPK severities.
+- "ayurvedic_assessment_extended": Prakriti, Vikriti, VPK Dominance summary, Samprapti summary.
+
+RULES:
+1. SPELL & PHONETIC CORRECTION:
+   - "LSI" / "LISMODERATE" -> "LISI"
+   - "LV" -> "LB" (if lungs/bronchi) or "LIV" (if liver)
+   - "R T" -> "RT", "G B" -> "GB", "S S" -> "SS"
+   - "MILE" -> "mild"
+2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
+3. OUTPUT FORMAT: Return ONLY a valid JSON object:
+{{
+  "vitals_anthropometry": string,
+  "general_examination": string,
+  "systemic_examination": string,
+  "investigation_reports": string,
+  "pulse_diagnosis": string,
+  "ayurvedic_assessment_extended": string,
+  "full_cleaned_transcript": string
+}}
+""",
+    3: f"""\
+You are an expert Clinical Normalizer & Section Segmenter for SGP Integrative Medicine.
+TASK: Clean ASR errors, normalize medical terminology, and segment raw monologue dictation for Batch 3 (Protocols, Remedies & Plan).
+
+SECTIONS TO SEGMENT:
+- "ayurvedic_supplements": Prescribed SGP medicines (APD, ATHEROLYZIN, MIGRANONE, IMUMODULIN, NEUROTROPIN, CISSUES, D-TOX), doses ("1/2", "1"), start week, durations.
+- "panchakarma": In-clinic physical therapy sessions ONLY (Kati Vasthi, Januvasthi, Abhyanga, Swedana, Basti).
+- "detox_procedures": Home detox routines ONLY (Gandusham, Nithya Virechana, Anutailam, Steam Inhalations, Fennel Tea, Raagi Soup).
+- "exercises_yoga": Physical exercises, Yogasana (Naukasanam, Bhujangasanam), Pranayama.
+- "treatment_and_background": Therapeutic goals, disease background, patient education.
+- "assessment_and_plan": Allopathic/Ayurvedic diagnosis, diet advice (PAD, KPD, VPD, PPD), include/exclude foods, follow-up timeline.
+- "prescription_sheet": Prescribed diet plans by week, daily regimen summary, review after.
+
+RULES:
+1. SPELL & PHONETIC CORRECTION:
+   - "neurotropin" -> "NEUROTROPIN", "migranine" -> "MIGRANONE", "ethylizine" -> "ATHEROLYZIN"
+   - "Kati Vasthi" -> Panchakarma, "Gandusham" -> Detox procedures
+2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
+3. OUTPUT FORMAT: Return ONLY a valid JSON object:
+{{
+  "ayurvedic_supplements": string,
+  "panchakarma": string,
+  "detox_procedures": string,
+  "exercises_yoga": string,
+  "treatment_and_background": string,
+  "assessment_and_plan": string,
+  "prescription_sheet": string,
+  "full_cleaned_transcript": string
+}}
+""",
+}
+
 

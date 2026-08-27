@@ -80,9 +80,13 @@ def _transcribe_sync(
         tmp_path = tmp.name
 
     try:
+        # Default to English ("en") to prevent Whisper from auto-switching to Hindi/Sanskrit on medical accents
+        effective_lang = language or os.getenv("WHISPER_LANGUAGE", "en")
+
         transcribe_kwargs = dict(
-            language=language,
+            language=effective_lang,
             beam_size=5,
+            temperature=[0.0, 0.2, 0.4],
             vad_filter=True,                              # skip silence automatically
             vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=True,              # helps with continuous dictation
