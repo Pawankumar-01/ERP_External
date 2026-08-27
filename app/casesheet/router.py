@@ -1870,14 +1870,14 @@ def _map_draft_to_encounter(
                 surg_items.append(_clean(s))
         surg_items.extend([_clean(h) for h in _as_list(surg.get("hospitalizations") or []) if _clean(h)])
         surg_text = "\n".join(surg_items)
-    elif not surg_text and surg:
+    elif not surg_text and isinstance(surg, str) and len(surg.strip()) < 200:
         surg_text = _clean(surg)
 
     medhist_text = _clean(erp.get("medication_history"))
     if not medhist_text and isinstance(medhist, dict):
         meds_list = _format_medicines_from_current(medhist.get("current_medicines") or medhist.get("medicines") or [])
         medhist_text = meds_list or _clean(medhist.get("summary") or "")
-    elif not medhist_text and medhist:
+    elif not medhist_text and isinstance(medhist, str) and len(medhist.strip()) < 200:
         medhist_text = _clean(medhist)
 
     obgyn_text = _clean(erp.get("menstrual_obstetric_history"))
@@ -1892,7 +1892,7 @@ def _map_draft_to_encounter(
                 ob_parts.append(f"Obstetric History: {_clean(obgyn.get('obstetric_history'))}")
             if ob_parts:
                 obgyn_text = "\n".join(ob_parts)
-    elif not obgyn_text and obgyn:
+    elif not obgyn_text and isinstance(obgyn, str) and len(obgyn.strip()) < 200:
         obgyn_text = _clean(obgyn)
 
     allopathic_from_treat = _format_medicines_from_current(treat.get("current_medications") if isinstance(treat, dict) else [])
@@ -1921,17 +1921,13 @@ def _map_draft_to_encounter(
     elif isinstance(pmh, dict):
         family_text = _join(pmh.get("family_history"))
 
-    ros_text = _clean(ros.get("summary")) if isinstance(ros, dict) else _clean(ros)
-    if not ros_text and isinstance(ros, dict):
-        ros_text = _join([f"{key}: {_clean(val)}" for key, val in ros.items() if val and key != "needs_doctor_confirmation"], sep="\n")
+    ros_text = _clean(ros.get("summary")) if isinstance(ros, dict) else ""
 
     gen_text = _clean(erp.get("general_examination"))
     if not gen_text and isinstance(genex, dict) and _clean(genex):
         gen_text = _format_exam_dict(genex)
-    elif not gen_text and genex:
-        gen_text = _clean(genex)
 
-    sysex_text = _clean(sysex.get("summary")) if isinstance(sysex, dict) else _clean(sysex)
+    sysex_text = _clean(sysex.get("summary")) if isinstance(sysex, dict) else ""
     if not sysex_text and isinstance(sysex, dict):
         sysex_text = _format_exam_dict(sysex)
     if isinstance(local, dict) and _clean(local):
@@ -1949,8 +1945,6 @@ def _map_draft_to_encounter(
             if isinstance(img, dict):
                 inv_items.append(f"Imaging - {img.get('modality') or 'Report'} ({img.get('body_region') or ''}): {img.get('impression') or _join(img.get('findings'))}".strip())
         inv_reports_text = "\n".join(inv_items)
-    elif not inv_reports_text and inv:
-        inv_reports_text = _clean(inv)
 
     detox_text = _clean(erp.get("detox_procedures"))
     if not detox_text and isinstance(detox, dict):
@@ -1962,8 +1956,6 @@ def _map_draft_to_encounter(
                 if parts:
                     d_items.append(" — ".join(parts))
         detox_text = "\n".join(d_items)
-    elif not detox_text and detox:
-        detox_text = _clean(detox)
 
     exercises_text = _clean(erp.get("exercises_yoga"))
     if not exercises_text and isinstance(ex_yoga, dict):
@@ -1973,8 +1965,6 @@ def _map_draft_to_encounter(
                 parts = [p for p in [_clean(e.get("name")), _clean(e.get("frequency")), f"{e.get('duration_minutes')} mins" if e.get("duration_minutes") else "", _clean(e.get("remarks"))] if p]
                 e_items.append(" — ".join(parts))
         exercises_text = "\n".join(e_items)
-    elif not exercises_text and ex_yoga:
-        exercises_text = _clean(ex_yoga)
 
     fup_text = _join([v for v in [fup.get("daily"), fup.get("weekly"), fup.get("monthly"), fup.get("next_visit")] if v], sep=" | ") if isinstance(fup, dict) else ""
     if not fup_text and isinstance(fup_details, dict):
@@ -2104,12 +2094,12 @@ def _map_draft_to_encounter(
         "allopathic_medicines": _clean(erp.get("allopathic_medicines")) or allopathic_medicines,
         # Leave empty so print format renders rich card view from nd.panchakarma.sessions;
         # only honour a manual doctor override from erp_field_summaries.
-        "panchakarma": _clean(erp.get("panchakarma")) or None,
-        "home_remedies": _clean(erp.get("home_remedies")) or _join(plan.get("home_remedies") if isinstance(plan, dict) else []),
+        # Leave home_remedies empty by default so print format renders rich cards without duplicating
+        "home_remedies": _clean(erp.get("home_remedies")) or None,
 
-        "diet_include": _clean(erp.get("diet_include")) or _join(diet.get("include") if isinstance(diet, dict) else []),
+        "diet_include": _clean(erp.get("diet_include")) or _join([x for x in _as_list(diet.get("include") if isinstance(diet, dict) else []) if _clean(x) and not any(kw in _clean(x).lower() for kw in ["soup", "tea", "java", "fennel", "ragi", "tapioca", "jowar", "rice", "barley", "oil", "thailam"])]),
         "diet_exclude": _clean(erp.get("diet_exclude")) or _join(diet.get("exclude") if isinstance(diet, dict) else []),
-        "lifestyle_advice": _clean(erp.get("lifestyle_advice")) or _join(plan.get("lifestyle_advice") if isinstance(plan, dict) else []),
+        "lifestyle_advice": _clean(erp.get("lifestyle_advice")) or _join([x for x in _as_list(plan.get("lifestyle_advice") if isinstance(plan, dict) else []) if _clean(x) and not any(kw in _clean(x).lower() for kw in ["naukasa", "suryanamas", "dnb", "breathing", "nutex", "chandanadi", "anutail", "oil", "thailam"])]),
         "investigations_advised": _clean(erp.get("investigations_advised")) or investigations_text,
 
         "personal_history_diet": _clean(erp.get("personal_history_diet")) or _clean(pers.get("diet") if isinstance(pers, dict) else None),
@@ -2131,8 +2121,8 @@ def _map_draft_to_encounter(
         # Leave empty so print format renders rich card view from nd.detox_procedures.detox_items;
         # only honour a manual doctor override from erp_field_summaries.
         "detox_procedures": _clean(erp.get("detox_procedures")) or None,
-        "oil_applications": _clean(erp.get("oil_applications")) or _clean(synth_rx.get("daily_regimen", {}).get("oil_applications")),
-        "breathing_exercises": _clean(erp.get("breathing_exercises")) or _clean(synth_rx.get("daily_regimen", {}).get("breathing_exercises")),
+        "oil_applications": _clean(erp.get("oil_applications")) or None,
+        "breathing_exercises": _clean(erp.get("breathing_exercises")) or None,
         "exercises_yoga": _clean(erp.get("exercises_yoga")) or exercises_text,
         "rx_quick_summary": rx_quick_str,
         "rx_daily_regimen": rx_regimen_str,
