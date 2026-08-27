@@ -1612,14 +1612,14 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
                 instr = _clean(d.get("instructions") or d.get("remarks")) or ""
 
                 header = f"• {name} ({q_f_str})" if q_f_str and q_f_str != "()" else f"• {name}"
-                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail"]):
+                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):  # keep in sync with print format
                     oils_list.append(f"{header}: {instr}" if instr else (f"{header}: As prescribed" if "anutail" not in name.lower() else header))
                 else:
                     detox_list.append(f"{header}: {instr}" if instr else header)
             elif isinstance(d, str) and d.strip():
                 item_str = d.strip()
                 header = f"• {item_str}"
-                if any(k in item_str.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail"]):
+                if any(k in item_str.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):  # keep in sync with print format
                     oils_list.append(header)
                 else:
                     detox_list.append(header)
@@ -1627,7 +1627,7 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
         for d in detox:
             if isinstance(d, str) and d.strip():
                 header = f"• {d.strip()}"
-                if any(k in d.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail"]):
+                if any(k in d.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):  # keep in sync with print format
                     oils_list.append(header)
                 else:
                     detox_list.append(header)
@@ -2032,7 +2032,6 @@ def _map_draft_to_encounter(
         "gender": pat_gender,
         "mobile": pat_mobile,
         "doctor": doctor_id,
-        "practitioner": doctor_id,
         "appointment": appointment_id,
         "lead": lead_id,
         "encounter_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -2103,7 +2102,9 @@ def _map_draft_to_encounter(
         ],
         "sgp_rx": _clean(erp.get("sgp_rx")) or sgp_rx,
         "allopathic_medicines": _clean(erp.get("allopathic_medicines")) or allopathic_medicines,
-        "panchakarma": _clean(erp.get("panchakarma")) or _format_panchakarma(panca),
+        # Leave empty so print format renders rich card view from nd.panchakarma.sessions;
+        # only honour a manual doctor override from erp_field_summaries.
+        "panchakarma": _clean(erp.get("panchakarma")) or None,
         "home_remedies": _clean(erp.get("home_remedies")) or _join(plan.get("home_remedies") if isinstance(plan, dict) else []),
 
         "diet_include": _clean(erp.get("diet_include")) or _join(diet.get("include") if isinstance(diet, dict) else []),
@@ -2125,9 +2126,11 @@ def _map_draft_to_encounter(
         "medication_history": _clean(erp.get("medication_history")) or medhist_text,
         "surgical_history": _clean(erp.get("surgical_history")) or surg_text,
         "menstrual_obstetric_history": _clean(erp.get("menstrual_obstetric_history")) or obgyn_text,
-        "general_examination": _clean(erp.get("general_examination")) or gen_text,
+        # Duplicate key removed (first occurrence at line ~2062 is the authoritative one).
         "investigation_reports": _clean(erp.get("investigation_reports")) or inv_reports_text,
-        "detox_procedures": _clean(erp.get("detox_procedures")) or _clean(synth_rx.get("daily_regimen", {}).get("detox_procedures")) or detox_text,
+        # Leave empty so print format renders rich card view from nd.detox_procedures.detox_items;
+        # only honour a manual doctor override from erp_field_summaries.
+        "detox_procedures": _clean(erp.get("detox_procedures")) or None,
         "oil_applications": _clean(erp.get("oil_applications")) or _clean(synth_rx.get("daily_regimen", {}).get("oil_applications")),
         "breathing_exercises": _clean(erp.get("breathing_exercises")) or _clean(synth_rx.get("daily_regimen", {}).get("breathing_exercises")),
         "exercises_yoga": _clean(erp.get("exercises_yoga")) or exercises_text,

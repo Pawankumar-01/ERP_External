@@ -50,7 +50,7 @@ SGP_PROTOCOLS = {
         "clean_frequency": "Alternate days",
     },
     "Nutex Oil + Chandanadi Thailam": {
-        "keywords": ["nutex", "chandanadi"],
+        "keywords": ["nutex oil", "chandanadi", "nutex + chandan"],
         "text": "Apply over the scalp / affected area as prescribed.",
         "clean_quantity": "",
         "clean_frequency": "As prescribed",
