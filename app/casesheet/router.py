@@ -1257,10 +1257,6 @@ async def _process_batch_audio_background(
                 # Also preserve the full raw monologue transcript for reference
                 current["_raw_transcripts"][f"_batch_{batch_index}_full"] = transcript
 
-                # Synthesize prescription sheet summary strictly on Batch 3 completion
-                if batch_index == 3:
-                    current["prescription_sheet"] = _synthesize_prescription_sheet(current)
-
                 draft_row.draft = current
 
             sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))

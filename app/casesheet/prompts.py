@@ -1040,7 +1040,7 @@ Schema:
 Extract the clinician's Assessment and Plan matching the UI voice dictation structure.
 
 SPEAKING INSTRUCTION FORMAT EXPECTED IN VOICE TRANSCRIPT:
-"Assessments: Allopathic and Ayurvedic diagnoses. Plan: medicines, therapies, panchakarma, investigations advised, home remedies, diet include/exclude (foods to eat and avoid), lifestyle advice, and follow-up schedule."
+"Assessments: Allopathic and Ayurvedic diagnoses. Plan: medicines, therapies, panchakarma, investigations advised, home remedies, diet include/exclude (foods to eat and avoid), weekly diet plans (PAD, KPD, VPD, PPD), lifestyle advice, and follow-up schedule."
 
 EXTRACTION RULES:
 1. ASSESSMENTS:
@@ -1058,6 +1058,11 @@ EXTRACTION RULES:
      - "include": Foods, soups, grains, or drinks explicitly recommended to eat/drink (e.g. barley soup, warm water, green gram).
      - "exclude": Foods, drinks, or habits explicitly restricted/avoided (e.g. curd, cold water, fried food, nightshades).
      - "general": General dietary rules spoken.
+   - "diet_plan_weeks":
+     - Extract EACH duration-based diet schedule dictated (e.g. "PAD 3 weeks", "KPD week 1", "VPD 4 weeks", "PPD").
+     - "week_range": Specific week numbers spoken (e.g. "1", "1-3", "4-6").
+     - "diet_type": Diet category code ("PAD", "KPD", "VPD", "PPD", or custom).
+     - "diet_items": Spoken instructions, foods, or spices (e.g. "with chillies", "light food only").
    - "lifestyle_advice": Ergonomic advice, posture, habits, or exercise instructions.
    - "follow_up":
      - Extract follow-up duration or next visit date (e.g. "after 2 weeks", "next month", "daily", "weekly").
@@ -1082,6 +1087,14 @@ Schema:
       "exclude": ["string"],
       "general": ["string"]
     },
+    "diet_plan_weeks": [
+      {
+        "week_range": "string | null",
+        "diet_type": "PAD | KPD | VPD | PPD | string | null",
+        "diet_items": "string | null",
+        "notes": "string | null"
+      }
+    ],
     "lifestyle_advice": ["string"],
     "exercise_or_rehab": ["string"],
     "referrals": ["string"],
@@ -1663,7 +1676,6 @@ AMBIENT_BATCH_GROUPS: dict[int, list[str]] = {
         "exercises_yoga",
         "treatment_and_background",
         "assessment_and_plan",
-        "prescription_sheet",
     ],
 }
 
@@ -1765,12 +1777,11 @@ CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
    - STRICT RULE: Do NOT duplicate items from panchakarma here. If it's an in-clinic procedure, it goes in panchakarma only.
 4. "exercises_yoga": Recommended physical exercises, Yogasana, Pranayama (Anulom Vilom, Bhastrika), frequency, and instructions.
 5. "treatment_and_background": Therapeutic goal summary, disease background, and patient education rationale.
-6. "assessment_and_plan": Final clinical diagnosis (Ayurvedic & Allopathic), prognosis, dietary advice (Foods to include & exclude), lifestyle recommendations, and follow-up timeline.
-7. "prescription_sheet": Synthesized quick summary including diet_plan_weeks. Extract every diet plan the doctor mentions (PAD, KPD, VPD, PPD) with week number, diet type, and any extra instructions.
+6. "assessment_and_plan": Final clinical diagnosis (Ayurvedic & Allopathic), prognosis, dietary advice (Foods to include & exclude), weekly diet plans (PAD, KPD, VPD, PPD), lifestyle recommendations, and follow-up timeline.
 
-DIET PLAN EXTRACTION (prescription_sheet.diet_plan_weeks):
+DIET PLAN EXTRACTION (assessment_and_plan.plan.diet_plan_weeks):
 - Extract EACH diet entry the doctor mentions as a separate object.
-- "week_range": The specific week number spoken (e.g. "01", "3", "4"). If the doctor says "week 3 KPD", week_range = "3".
+- "week_range": The specific week number spoken (e.g. "1", "3", "4"). If the doctor says "week 3 KPD", week_range = "3".
 - "diet_type": The diet code (PAD, KPD, VPD, PPD). Map spoken phrases:
   * "PAD", "pitta aggravating diet" → "PAD"
   * "KPD", "kapha pacifying diet" → "KPD"
@@ -1813,15 +1824,15 @@ Return ONLY a valid JSON object whose top-level keys are EXACTLY:
     "ayurvedic_diagnosis": string|null,
     "allopathic_diagnosis": string|null,
     "prognosis": string|null,
-    "plan": {{"home_remedies": [string], "lifestyle_advice": [string], "diet_advice": {{"include": [string], "exclude": [string]}}, "follow_up": string|null}}
-  }}
-- "prescription_sheet": {{
-    "quick_summary": {{"allopathy_medicines": string|null}},
-    "daily_regimen": {{"detox_procedures": string|null, "oil_applications": string|null}},
-    "diet_plan_weeks": [
-      {{"week_range": string|null, "diet_type": "PAD | KPD | VPD | PPD | string | null", "diet_items": string|null, "start_week": string|null}}
-    ],
-    "review_after": string|null
+    "plan": {{
+      "home_remedies": [string],
+      "lifestyle_advice": [string],
+      "diet_advice": {{"include": [string], "exclude": [string]}},
+      "diet_plan_weeks": [
+        {{"week_range": string|null, "diet_type": "PAD | KPD | VPD | PPD | string | null", "diet_items": string|null, "start_week": string|null}}
+      ],
+      "follow_up": string|null
+    }}
   }}
 
 Rules:
@@ -1917,8 +1928,7 @@ SECTIONS TO SEGMENT:
 - "detox_procedures": Home detox routines ONLY (Gandusham, Nithya Virechana, Anutailam, Steam Inhalations, Fennel Tea, Raagi Soup).
 - "exercises_yoga": Physical exercises, Yogasana (Naukasanam, Bhujangasanam), Pranayama.
 - "treatment_and_background": Therapeutic goals, disease background, patient education.
-- "assessment_and_plan": Allopathic/Ayurvedic diagnosis, diet advice (PAD, KPD, VPD, PPD), include/exclude foods, follow-up timeline.
-- "prescription_sheet": Prescribed diet plans by week, daily regimen summary, review after.
+- "assessment_and_plan": Allopathic/Ayurvedic diagnosis, weekly diet plans (PAD, KPD, VPD, PPD), include/exclude foods, follow-up timeline.
 
 RULES:
 1. SPELL & PHONETIC CORRECTION:
@@ -1933,10 +1943,8 @@ RULES:
   "exercises_yoga": string,
   "treatment_and_background": string,
   "assessment_and_plan": string,
-  "prescription_sheet": string,
   "full_cleaned_transcript": string
 }}
 """,
 }
-
 
