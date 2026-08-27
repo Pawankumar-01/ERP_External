@@ -1732,13 +1732,25 @@ CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
 6. "ayurvedic_assessment_extended": Prakriti (Body constitution), Vikriti (Current imbalance), VPK Dominance summary, and Samprapti (Pathogenesis summary).
 
 TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
+PULSE DIAGNOSIS EXTRACTION RULES:
+- COMPOUND DOSHA SHORTHAND EXPANSION:
+  "PV" or "VP" = Pitta AND Vata -> set BOTH vata and pitta to the stated severity
+  "VK" or "KV" = Vata AND Kapha -> set BOTH vata and kapha to the stated severity
+  "PK" or "KP" = Pitta AND Kapha -> set BOTH pitta and kapha to the stated severity
+  "VPK" = Vata AND Pitta AND Kapha -> set ALL THREE to the stated severity
+  Single "V" = only Vata; Single "P" = only Pitta; Single "K" = only Kapha
+- SPOKEN SYSTEM ALIASES:
+  "Liver" / "Liv" -> LIV, "KB" / "KUB" -> KUB, "Pro" -> PRO, "SS" / "Skeletal" -> SS, "GB" -> GB, "LB" / "Lower Back" -> LB, "LSCS" -> LSCS, "LISI" / "LI" / "SI" / "Large Intestine" / "Small Intestine" -> LISI, "RB" -> RB, "OBG" -> OBG, "IS" -> IS, "GIT" -> GIT, "CVS" -> CVS, "PAN" -> PAN, "RT" -> RT.
+- LOW SEVERITY ALIASES:
+  "low V", "low P", "low K", "low VPK" -> set severity to "very_mild" for those doshas.
+
 Return ONLY a valid JSON object whose top-level keys are EXACTLY:
 - "vitals_anthropometry": {{"height_cm": number|null, "weight_kg": number|null, "bp": string|null, "pulse_rate": string|null, "temperature": string|null, "wrist_cm": number|string|null, "waist_cm": number|string|null, "fore_arm_cm": number|string|null, "hip_cm": number|string|null}}
 - "general_examination": {{"built": string|null, "nourishment": string|null, "pallor": string|null, "icterus": string|null, "edema": string|null, "orientation": string|null}}
-- "systemic_examination": {{"cvs": string|null, "rs": string|null, "pa": string|null, "cns": string|null, "local_examination": string|null}}
+- "systemic_examination": {{"cardiovascular": string|null, "respiratory": string|null, "abdomen": string|null, "nervous_system": string|null, "musculoskeletal": string|null, "local_examination": string|null, "summary": string|null}}
 - "investigation_reports": {{"reports_reviewed": [string], "key_findings": [string], "investigations_advised": [string]}}
 - "pulse_diagnosis": {{
-    "overall_vpk": {{"dominance": string|null, "prakriti": string|null, "vikriti": string|null}},
+    "overall_vpk": {{"dominance": string|null, "prakriti": string|null, "vikriti": string|null, "notes": string|null}},
     "systems": [
       {{"system": "LISI", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
       {{"system": "CVS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
@@ -1749,15 +1761,18 @@ Return ONLY a valid JSON object whose top-level keys are EXACTLY:
       {{"system": "PRO", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
       {{"system": "LB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
       {{"system": "GB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "LIV", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
       {{"system": "RT", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
-      {{"system": "SS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}}
+      {{"system": "SS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "KUB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "LSCS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}}
     ]
   }}
 - "ayurvedic_assessment_extended": {{"prakriti": string|null, "vikriti": string|null, "vpk_dominance": string|null, "samprapti_summary": string|null}}
 
 Rules:
 - For vitals_anthropometry, if wrist, waist, forearm, or hip are spoken in inches (e.g., "6.5 inches"), extract as number or string in inches/cm.
-- For pulse_diagnosis, convert severity ratings like "very mild", "mild", "moderate", "severe" to lowercase strings under vata, pitta, or kapha for each organ system code (LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, RT, SS).
+- For pulse_diagnosis, follow all compound expansion and system alias rules above. Convert severity ratings like "very mild", "mild", "moderate", "severe" to lowercase strings under vata, pitta, or kapha for each organ system code.
 - Speech-to-Text ASR phonetic mappings: "MILE" or "mile" MUST be treated as "mild". "LI", "SI", "L I", "S I", "Large Intestine", "Small Intestine" map to LISI. "R T" -> RT, "G B" -> GB, "L V" -> LIV, "S S" -> SS, "ISE" -> IS, "LISMODERATE" -> LISI Moderate.
 - Do NOT return reprompt errors. Return valid JSON only.
 """,
@@ -1871,7 +1886,8 @@ RULES:
 1. SPELL & PHONETIC CORRECTION:
    - "finite mg" -> "500mg", "before foot" -> "before food", "telmesartan" -> "Telmisartan", "pantoprazole" -> "Pantoprazole".
 2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
-3. OUTPUT FORMAT: Return ONLY a valid JSON object:
+3. CRITICAL NON-TRUNCATION RULE: You MUST capture 100% of all spoken content from the start to the very end of the recording. NEVER omit or drop trailing speech at the bottom of the transcript. Ensure full_cleaned_transcript contains the COMPLETE transcript.
+4. OUTPUT FORMAT: Return ONLY a valid JSON object:
 {{
   "patient_identity": string,
   "encounter_context": string,
@@ -1895,19 +1911,20 @@ TASK: Clean ASR errors, normalize medical terminology, and segment raw monologue
 SECTIONS TO SEGMENT:
 - "vitals_anthropometry": Height cm, Weight kg, BP (130/80), Pulse (58 bpm), Temp (98.4 F), Wrist (6.5 inches / 16.5 cm), Waist, Forearm, Hip.
 - "general_examination": Built, nourishment, pallor, icterus, edema (right leg swelling), cyanosis, clubbing, orientation.
-- "systemic_examination": CVS, RS, PA, CNS, Local Examination (varicose veins).
+- "systemic_examination": Cardiovascular (CVS, S1 S2 heard), Respiratory (RS, NVBS, crepitations, wheeze), Abdomen (PA, soft, non-tender), Nervous System (CNS), Musculoskeletal (spine, SLR test, joint range of motion), Local Examination (varicose veins, ulcers).
 - "investigation_reports": Lab tests reviewed (HbA1c 6.8%, Creatinine 0.9), Imaging (MRI Lumbar spine L4-L5 bulge, USG Prostatomegaly & gallstones).
-- "pulse_diagnosis": Nadi Pariksha readings across 11 system codes (LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, RT, SS) and VPK severities.
+- "pulse_diagnosis": Nadi Pariksha VPK readings across organ system codes (LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, LIV, RT, SS, KUB, LSCS, OBG) and compound VPK severities (PV, VK, PK, VPK, low V).
 - "ayurvedic_assessment_extended": Prakriti, Vikriti, VPK Dominance summary, Samprapti summary.
 
 RULES:
 1. SPELL & PHONETIC CORRECTION:
-   - "LSI" / "LISMODERATE" -> "LISI"
-   - "LV" -> "LB" (if lungs/bronchi) or "LIV" (if liver)
-   - "R T" -> "RT", "G B" -> "GB", "S S" -> "SS"
-   - "MILE" -> "mild"
+   - "LSI" / "LISMODERATE" / "LI" / "SI" -> "LISI"
+   - "LV" / "Liv" / "Liver" -> "LIV" (liver) or "LB" (lungs/lower back)
+   - "KB" / "KUB" -> "KUB", "Pro" -> "PRO", "R T" -> "RT", "G B" -> "GB", "S S" -> "SS", "LSCS" -> "LSCS"
+   - "MILE" -> "mild", "PV" -> "Pitta Vata", "VK" -> "Vata Kapha", "PK" -> "Pitta Kapha"
 2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
-3. OUTPUT FORMAT: Return ONLY a valid JSON object:
+3. CRITICAL NON-TRUNCATION RULE: You MUST capture 100% of all spoken content from the start to the very end of the recording. NEVER omit or drop trailing speech at the bottom of the transcript. Ensure full_cleaned_transcript contains the COMPLETE transcript.
+4. OUTPUT FORMAT: Return ONLY a valid JSON object:
 {{
   "vitals_anthropometry": string,
   "general_examination": string,
@@ -1935,7 +1952,8 @@ RULES:
    - "neurotropin" -> "NEUROTROPIN", "migranine" -> "MIGRANONE", "ethylizine" -> "ATHEROLYZIN"
    - "Kati Vasthi" -> Panchakarma, "Gandusham" -> Detox procedures
 2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
-3. OUTPUT FORMAT: Return ONLY a valid JSON object:
+3. CRITICAL NON-TRUNCATION RULE: You MUST capture 100% of all spoken content from the start to the very end of the recording. NEVER omit or drop trailing speech at the bottom of the transcript. Ensure full_cleaned_transcript contains the COMPLETE transcript.
+4. OUTPUT FORMAT: Return ONLY a valid JSON object:
 {{
   "ayurvedic_supplements": string,
   "panchakarma": string,

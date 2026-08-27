@@ -87,8 +87,8 @@ def _transcribe_sync(
             language=effective_lang,
             beam_size=5,
             temperature=[0.0, 0.2, 0.4],
-            vad_filter=True,                              # skip silence automatically
-            vad_parameters={"min_silence_duration_ms": 500},
+            vad_filter=True,                              # skip silence safely without dropping trailing speech
+            vad_parameters={"min_silence_duration_ms": 2000, "speech_pad_ms": 400},
             condition_on_previous_text=True,              # helps with continuous dictation
         )
         if initial_prompt:

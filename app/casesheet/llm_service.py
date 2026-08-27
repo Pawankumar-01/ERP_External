@@ -144,7 +144,7 @@ class LLMService:
             messages=messages,
             label=f"middleware_segmenter_batch:{batch_index}",
             fallback={},
-            max_tokens=2500,
+            max_tokens=4000,
         )
 
         if isinstance(res, dict) and not res.get("_error"):
@@ -178,7 +178,11 @@ class LLMService:
 
         # Stage 1: Middleware Normalizer & Section Segmenter
         segmented_map = await self._preprocess_and_segment_batch_transcript(batch_index, transcript)
-        full_cleaned = segmented_map.get("full_cleaned_transcript") or transcript
+        full_cleaned = segmented_map.get("full_cleaned_transcript")
+        # Non-truncation safeguard: ensure full_cleaned is never empty or truncated relative to original audio transcript
+        if not full_cleaned or len(full_cleaned.strip()) < (0.8 * len(transcript.strip())):
+            logger.info(f"Stage 1 full_cleaned_transcript missing or truncated ({len(full_cleaned or '')} vs {len(transcript)} chars). Using full raw transcript.")
+            full_cleaned = transcript
 
         # Stage 2: Extract structured domain schema from normalized transcript
         messages = [
