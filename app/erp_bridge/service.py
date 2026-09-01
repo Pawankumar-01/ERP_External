@@ -425,6 +425,7 @@ class ERPBridgeService:
 
         lead_name   = lead.get("lead_name") or lead.get("name", "")
         mobile      = lead.get("mobile_number") or lead.get("mobile_no", "")
+        email       = lead.get("email") or lead.get("email_id") or ""
         # Split full name into first_name + last_name
         name_parts = lead_name.strip().split(" ", 1)
         first_name = name_parts[0]
