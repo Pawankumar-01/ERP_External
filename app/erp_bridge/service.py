@@ -415,31 +415,42 @@ class ERPBridgeService:
 
         lead_name   = lead.get("lead_name") or lead.get("name", "")
         mobile      = lead.get("mobile_number") or lead.get("mobile_no", "")
-        email       = lead.get("email_id") or ""
-
         # Split full name into first_name + last_name
-        # ERPNext Patient DocType requires first_name (mandatory)
-        # patient_name is auto-calculated from first + last name in ERPNext
         name_parts = lead_name.strip().split(" ", 1)
         first_name = name_parts[0]
         last_name  = name_parts[1] if len(name_parts) > 1 else ""
 
+        # Extract address and pincode from lead or lead notes
+        address = lead.get("address", "") or ""
+        pincode = lead.get("pincode", "") or ""
+        notes = lead.get("notes") or ""
+        if not address and "Address:" in notes:
+            for line in notes.split("\n"):
+                if line.startswith("Address:"):
+                    address = line.replace("Address:", "").strip()
+                elif line.startswith("Pincode:"):
+                    pincode = line.replace("Pincode:", "").strip()
+
         # ③ Create new Patient record
         # sex is mandatory in ERPNext Patient DocType.
-        # We default to "Prefer not to say" since gender is not collected
-        # at lead registration time — staff can update it in ERPNext.
+        patient_payload = {
+            "first_name":      first_name,
+            "last_name":       last_name,
+            "sex":             "Prefer not to say",
+            "mobile":          mobile,
+            "email":           email,
+            "custom_sgp_lead": lead_id,    # link back to SGP Lead
+            "status":          "Active",
+        }
+        if address:
+            patient_payload["custom_address"] = address
+        if pincode:
+            patient_payload["custom_pincode"] = pincode
+
         new_patient = await self._request(
             "POST",
             f"/api/resource/{DOCTYPE_PATIENT}",
-            data={
-                "first_name":      first_name,
-                "last_name":       last_name,
-                "sex":             "Prefer not to say",
-                "mobile":          mobile,
-                "email":           email,
-                "custom_sgp_lead": lead_id,    # link back to SGP Lead
-                "status":          "Active",
-            },
+            data=patient_payload,
         )
 
         if not new_patient or new_patient.get("_placeholder"):
@@ -451,6 +462,18 @@ class ERPBridgeService:
 
         patient_name = new_patient.get("name")
         logger.info(f"[ERP] Patient '{patient_name}' created from lead {lead_id}")
+
+        # Update lead status to CONVERTED in ERPNext
+        try:
+            await self._request(
+                "PUT",
+                f"/api/resource/{DOCTYPE_LEAD}/{lead_id}",
+                data={"status": "CONVERTED"},
+            )
+            logger.info(f"[ERP] SGP Lead '{lead_id}' marked as CONVERTED")
+        except Exception as e:
+            logger.warning(f"[ERP] Could not update SGP Lead '{lead_id}' status to CONVERTED: {e}")
+
         if patient_name and mobile:
             try:
                 patient_doc = await self._request("GET", f"/api/resource/{DOCTYPE_PATIENT}/{patient_name}")

@@ -19,7 +19,10 @@ class WhatsAppLeadData:
     name: str
     phone: str
     email: Optional[str] = ""
-    lead_source: str = "WhatsApp Bot"
+    address: Optional[str] = ""
+    city: Optional[str] = ""
+    pincode: Optional[str] = ""
+    lead_source: str = "WHATSAPP"
     interested_in: Optional[str] = "Ayurvedic Consultation"
     notes: Optional[str] = ""
 
@@ -46,7 +49,15 @@ class WhatsAppBotEngine:
             if not sender_phone:
                 return
 
+            # Extract WhatsApp profile name if sent by Meta
+            contacts = value.get("contacts", [])
+            wa_name = ""
+            if contacts:
+                wa_name = contacts[0].get("profile", {}).get("name", "").strip()
+
             session = state_store.get_session(sender_phone)
+            if wa_name and "wa_profile_name" not in session.data:
+                session.data["wa_profile_name"] = wa_name
             
             # Extract content based on type
             text_body = ""
@@ -79,6 +90,8 @@ class WhatsAppBotEngine:
                 await self._handle_name_input(sender_phone, session, text_body)
             elif session.state == "AWAITING_HEALTH_CONCERN":
                 await self._handle_health_concern_input(sender_phone, session, text_body)
+            elif session.state == "AWAITING_ADDRESS":
+                await self._handle_address_input(sender_phone, session, text_body)
             elif session.state == "SELECTING_TREATMENT":
                 await self._handle_treatment_selection(sender_phone, session, action_id, text_body)
             elif session.state == "SELECTING_SLOT":
@@ -92,8 +105,22 @@ class WhatsAppBotEngine:
             logger.error(f"Error handling WhatsApp webhook payload: {e}", exc_info=True)
 
     async def send_main_menu(self, phone: str):
+        # Check ERPNext for existing lead/patient name, or fallback to Meta WA Profile name
+        session = state_store.get_session(phone)
+        patient_name = session.data.get("patient_name")
+
+        if not patient_name:
+            lead = await self._find_lead_by_phone(phone)
+            if lead:
+                patient_name = lead.get("lead_name")
+                session.data["patient_name"] = patient_name
+            else:
+                patient_name = session.data.get("wa_profile_name", "")
+
+        greeting = f"Welcome *{patient_name}*" if patient_name else "Welcome"
+
         body_text = (
-            "🌿 *Welcome to SGP Ayurvedic Healthcare Center!*\n\n"
+            f"🌿 *{greeting} to SGP Ayurvedic Healthcare Center!*\n\n"
             "I am your automated AI care assistant. How can we assist you today?"
         )
         buttons = [
@@ -165,6 +192,22 @@ class WhatsAppBotEngine:
 
     async def _handle_health_concern_input(self, phone: str, session, concern: str):
         session.data["health_concern"] = concern
+        session.update_state("AWAITING_ADDRESS")
+
+        await whatsapp_service.send_text_message(
+            phone,
+            "📍 *Residential Address & Location*\n\n"
+            "Please reply with your *Full Address, City, and Pincode*\n"
+            "(e.g. 12-3 Main Road, Jubilee Hills, Hyderabad - 500033):"
+        )
+
+    async def _handle_address_input(self, phone: str, session, address_text: str):
+        import re
+        pincode_match = re.search(r'\b\d{6}\b', address_text)
+        pincode = pincode_match.group(0) if pincode_match else ""
+
+        session.data["patient_address"] = address_text
+        session.data["patient_pincode"] = pincode
 
         # Create Lead in ERPNext
         try:
@@ -172,8 +215,15 @@ class WhatsAppBotEngine:
                 WhatsAppLeadData(
                     name=session.data.get("patient_name", "Valued Patient"),
                     phone=phone,
-                    interested_in=concern[:50],
-                    notes=f"Created via WhatsApp Bot. Primary Concern: {concern}"
+                    address=address_text,
+                    pincode=pincode,
+                    interested_in=session.data.get("health_concern", "Ayurvedic Consultation")[:50],
+                    notes=(
+                        f"Created via WhatsApp Bot.\n"
+                        f"Primary Concern: {session.data.get('health_concern', '')}\n"
+                        f"Address: {address_text}\n"
+                        f"Pincode: {pincode}"
+                    )
                 )
             )
             if lead_res:
@@ -188,7 +238,7 @@ class WhatsAppBotEngine:
     async def _prompt_treatment_selection(self, phone: str, patient_name: str):
         sections = [
             {
-                "title": "Select Specialised Clinic",
+                "title": "Specialised Clinics",
                 "rows": [
                     {
                         "id": "treat_kayachikitsa",
@@ -222,7 +272,7 @@ class WhatsAppBotEngine:
 
         sections = [
             {
-                "title": "Available Slots Today/Tomorrow",
+                "title": "Available Time Slots",
                 "rows": [
                     {
                         "id": "slot_morning_1",
@@ -288,7 +338,7 @@ class WhatsAppBotEngine:
     async def _send_faq_list_menu(self, phone: str):
         sections = [
             {
-                "title": "Frequently Asked Questions",
+                "title": "FAQ Topics",
                 "rows": [
                     {
                         "id": "faq_timings",
