@@ -85,25 +85,13 @@ async def verify_webhook(
     """
     Meta Webhook verification endpoint.
     Meta sends GET request to verify domain ownership and secret token.
-    If accessed via browser without params, returns active status JSON.
     """
-    # 1. Direct browser check (no params)
-    if not hub_mode and not hub_verify_token:
-        return {
-            "status":       "active",
-            "service":      "WhatsApp Bot Engine",
-            "webhook_url":  "https://panaceanova.com/api/v1/whatsapp/webhook",
-            "verify_token": settings.WHATSAPP_VERIFY_TOKEN,
-        }
-
-    # 2. Meta verification handshake
     if hub_mode == "subscribe" and hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN:
         logger.info("[WHATSAPP WEBHOOK] Domain & token verified successfully!")
         return Response(content=hub_challenge, media_type="text/plain")
     else:
         logger.warning(f"[WHATSAPP WEBHOOK] Verification failed. Token mismatch: {hub_verify_token}")
         raise HTTPException(status_code=403, detail="Verification token mismatch")
-
 
 
 @router.post("/webhook")

@@ -139,36 +139,18 @@ class WhatsAppService:
         footer_text: Optional[str] = None,
     ) -> bool:
         clean_phone = self._normalize_phone(phone)
-
-        # Sanitize and strictly enforce Meta Cloud API string length limits:
-        # Title: max 24 chars | Description: max 72 chars | Button: max 20 chars
-        formatted_sections = []
-        for sec in sections:
-            sec_title = str(sec.get("title", ""))[:24]
-            sec_rows = []
-            for r in sec.get("rows", []):
-                sec_rows.append({
-                    "id": str(r.get("id"))[:200],
-                    "title": str(r.get("title"))[:24],
-                    "description": str(r.get("description", ""))[:72],
-                })
-            formatted_sections.append({
-                "title": sec_title,
-                "rows": sec_rows,
-            })
-
         interactive = {
             "type": "list",
-            "body": {"text": body_text[:1024]},
+            "body": {"text": body_text},
             "action": {
-                "button": str(button_label)[:20],
-                "sections": formatted_sections,
+                "button": button_label[:20],
+                "sections": sections,
             },
         }
         if header_text:
-            interactive["header"] = {"type": "text", "text": str(header_text)[:60]}
+            interactive["header"] = {"type": "text", "text": header_text}
         if footer_text:
-            interactive["footer"] = {"text": str(footer_text)[:60]}
+            interactive["footer"] = {"text": footer_text}
 
         payload = {
             "messaging_product": "whatsapp",
