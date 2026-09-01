@@ -582,16 +582,16 @@ FAQ_DATA = {
 # ── Main Menu (Section 23) ────────────────────────────────────────────────────
 
 MAIN_MENU_ROWS = [
-    {"id": "menu_medicines",    "title": "💊 Medicines & Supplements",  "description": "Timing, dosage, missed dose, medium"},
-    {"id": "menu_other_meds",   "title": "🏥 Other / Allopathic Meds",  "description": "Continuing existing medications"},
-    {"id": "menu_diet",         "title": "🥗 Diet Instructions",         "description": "Diet chart, vegetables, nuts, soups"},
-    {"id": "menu_exercise",     "title": "🧘 Exercise & Breathing",      "description": "DNB breathing, Naukasan, Surya"},
-    {"id": "menu_oils",         "title": "🫙 Oils & Procedures",         "description": "Pain oil, Anutailam, steam, castor"},
-    {"id": "menu_symptoms",     "title": "🌡️ Symptoms / Treatment Query", "description": "Pain, BP, sugar, fever, digestion"},
-    {"id": "menu_appointments", "title": "📅 Appointments & Follow-up",  "description": "Book or reschedule consultation"},
-    {"id": "menu_dispatch",     "title": "📦 Medicine Dispatch",         "description": "Track order, missing items"},
-    {"id": "menu_special",      "title": "🤰 Special Situations",        "description": "Pregnancy, surgery, reactions"},
-    {"id": "menu_team",         "title": "🩺 Speak to Patient-Care Team","description": "Connect with clinical support"},
+    {"id": "menu_medicines",    "title": "💊 Medicines Schedule",    "description": "Timing, dosage, missed dose, medium"},
+    {"id": "menu_other_meds",   "title": "🏥 Allopathic Medicines",  "description": "Continuing existing medications"},
+    {"id": "menu_diet",         "title": "🥗 Diet Instructions",     "description": "Diet chart, vegetables, nuts, soups"},
+    {"id": "menu_exercise",     "title": "🧘 Exercise & Breathing",  "description": "DNB breathing, Naukasan, Surya"},
+    {"id": "menu_oils",         "title": "🫙 Oils & Daily Care",     "description": "Pain oil, Anutailam, steam, castor"},
+    {"id": "menu_symptoms",     "title": "🌡️ Symptoms & Queries",    "description": "Pain, BP, sugar, fever, digestion"},
+    {"id": "menu_appointments", "title": "📅 Book Appointments",     "description": "Book or reschedule consultation"},
+    {"id": "menu_dispatch",     "title": "📦 Medicine Dispatch",     "description": "Track order, missing items"},
+    {"id": "menu_special",      "title": "🤰 Special Situations",    "description": "Pregnancy, surgery, reactions"},
+    {"id": "menu_team",         "title": "🩺 Speak to Care Team",    "description": "Connect with clinical support"},
 ]
 
 # Maps menu IDs to FAQ_DATA keys
