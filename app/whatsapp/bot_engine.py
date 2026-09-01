@@ -182,7 +182,7 @@ class WhatsAppBotEngine:
         rows = [
             {
                 "id": q["id"],
-                "title": q["short_title"][:24],
+                "title": q["short_title"],
                 "description": "",
             }
             for q in category["questions"]

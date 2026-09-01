@@ -50,7 +50,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "med_1",
-                "short_title": "Medicine timing schedule",
+                "short_title": "Medicine Schedule",
                 "answer": (
                     "💊 *Medicine Timing (General Guide)*\n\n"
                     "Unless your prescription states otherwise:\n"
@@ -62,7 +62,7 @@ FAQ_DATA = {
             },
             {
                 "id": "med_2",
-                "short_title": "Medicines taken after food",
+                "short_title": "Medicines After Food",
                 "answer": (
                     "💊 *Medicines After Food*\n\n"
                     "Certain medicines have special instructions:\n"
@@ -74,7 +74,7 @@ FAQ_DATA = {
             },
             {
                 "id": "med_3",
-                "short_title": "Gap between medicines",
+                "short_title": "Gap Between Medicines",
                 "answer": (
                     "💊 *Gap Between Medicines*\n\n"
                     "• After *APD:* 15-minute gap before the next medicine.\n"
@@ -84,7 +84,7 @@ FAQ_DATA = {
             },
             {
                 "id": "med_4",
-                "short_title": "Milk or water with medicines",
+                "short_title": "Milk or Water Medium",
                 "answer": (
                     "💊 *Medicine Medium*\n\n"
                     "• *Tablets:* usually with water\n"
@@ -95,7 +95,7 @@ FAQ_DATA = {
             },
             {
                 "id": "med_5",
-                "short_title": "Can't get prescribed milk",
+                "short_title": "Prescribed Milk Issue",
                 "answer": (
                     "💊 *Milk Substitution*\n\n"
                     "Please do not substitute the prescribed medium on your own.\n\n"
@@ -105,7 +105,7 @@ FAQ_DATA = {
             },
             {
                 "id": "med_6",
-                "short_title": "Missed a dose",
+                "short_title": "Missed Dose Instructions",
                 "answer": (
                     "💊 *Missed Dose*\n\n"
                     "Do *not* automatically double the next dose.\n\n"
@@ -115,7 +115,7 @@ FAQ_DATA = {
             },
             {
                 "id": "med_7",
-                "short_title": "Changing supplement quantity",
+                "short_title": "Supplement Quantity",
                 "answer": (
                     "💊 *Changing Supplement Quantity*\n\n"
                     "⚠️ *No.* Take only the quantity prescribed to you.\n\n"
@@ -125,7 +125,7 @@ FAQ_DATA = {
             },
             {
                 "id": "med_8",
-                "short_title": "Stopping if feeling better",
+                "short_title": "Stopping Treatment",
                 "answer": (
                     "💊 *Stopping Medicines When Feeling Better*\n\n"
                     "Please do not make treatment changes solely on the basis of improved symptoms.\n\n"
@@ -141,7 +141,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "omed_1",
-                "short_title": "Continue regular medicines",
+                "short_title": "Continue Regular Meds",
                 "answer": (
                     "🏥 *Continuing Regular Medicines*\n\n"
                     "Do *not* stop or change an existing prescribed medicine without medical advice.\n\n"
@@ -151,7 +151,7 @@ FAQ_DATA = {
             },
             {
                 "id": "omed_2",
-                "short_title": "Stop diabetes/BP/thyroid meds",
+                "short_title": "Stopping Chronic Meds",
                 "answer": (
                     "🏥 *Chronic Disease Medicines*\n\n"
                     "⚠️ *No.* Do not stop them on your own.\n\n"
@@ -161,7 +161,7 @@ FAQ_DATA = {
             },
             {
                 "id": "omed_3",
-                "short_title": "New medicine from another doctor",
+                "short_title": "Meds From Other Doctor",
                 "answer": (
                     "🏥 *New Medicine From Another Doctor*\n\n"
                     "Follow the advice of the prescribing healthcare professional.\n\n"
@@ -178,7 +178,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "diet_1",
-                "short_title": "Following diet chart strictly",
+                "short_title": "Diet Chart Duration",
                 "answer": (
                     "🥗 *Diet Chart*\n\n"
                     "Please follow the personalized diet plan provided to you.\n\n"
@@ -188,7 +188,7 @@ FAQ_DATA = {
             },
             {
                 "id": "diet_2",
-                "short_title": "Vegetables to avoid",
+                "short_title": "Vegetables to Avoid",
                 "answer": (
                     "🥗 *Vegetables to Avoid (CCRSTT)*\n\n"
                     "• Cabbage\n• Cauliflower\n• Radish\n• Spinach\n• Tomato\n• Tamarind\n\n"
@@ -198,7 +198,7 @@ FAQ_DATA = {
             },
             {
                 "id": "diet_3",
-                "short_title": "Tomato & tamarind alternatives",
+                "short_title": "Tomato/Tamarind Alt.",
                 "answer": (
                     "🥗 *Alternatives to Tomato & Tamarind*\n\n"
                     "• Raw mango\n• Aamchur powder\n• Amla\n\n"
@@ -208,7 +208,7 @@ FAQ_DATA = {
             },
             {
                 "id": "diet_4",
-                "short_title": "Nuts to take",
+                "short_title": "Daily Nuts Allowance",
                 "answer": (
                     "🥗 *Nuts (Overnight Soaked)*\n\n"
                     "• Cashews – 5\n• Almonds – 5\n• Groundnuts – 2 tablespoons\n\n"
@@ -218,7 +218,7 @@ FAQ_DATA = {
             },
             {
                 "id": "diet_5",
-                "short_title": "Honey/jaggery for diabetics",
+                "short_title": "Honey/Jaggery Usage",
                 "answer": (
                     "🥗 *Honey / Jaggery for Diabetic Patients*\n\n"
                     "Honey and jaggery contain sugars and *can affect blood glucose.*\n\n"
@@ -228,7 +228,7 @@ FAQ_DATA = {
             },
             {
                 "id": "diet_6",
-                "short_title": "Soups & fennel water",
+                "short_title": "Soups & Fennel Water",
                 "answer": (
                     "🥗 *Soups & Fennel Water*\n\n"
                     "*Suitable soups:*\n"
@@ -247,7 +247,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "ex_1",
-                "short_title": "What exercises to do",
+                "short_title": "Prescribed Exercises",
                 "answer": (
                     "🧘 *Prescribed Exercise Program*\n\n"
                     "Only perform exercises prescribed or demonstrated to you:\n"
@@ -261,7 +261,7 @@ FAQ_DATA = {
             },
             {
                 "id": "ex_2",
-                "short_title": "DNB breathing exercise",
+                "short_title": "DNB Breathing Exercise",
                 "answer": (
                     "🧘 *DNB Breathing Exercise*\n\n"
                     "• Perform *left to right*\n"
@@ -272,7 +272,7 @@ FAQ_DATA = {
             },
             {
                 "id": "ex_3",
-                "short_title": "When to start Suryanamaskar",
+                "short_title": "Starting Suryanamaskar",
                 "answer": (
                     "🧘 *Suryanamaskar*\n\n"
                     "Begin only after you can hold Naukasan for at least *40 seconds* "
@@ -291,7 +291,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "oil_1",
-                "short_title": "Pain oil application",
+                "short_title": "Pain Oil Application",
                 "answer": (
                     "🫙 *Pain Oil Application*\n\n"
                     "May be applied daily and left overnight, or for at least 1 hour "
@@ -301,7 +301,7 @@ FAQ_DATA = {
             },
             {
                 "id": "oil_2",
-                "short_title": "Neelibringadi Keera Thailam",
+                "short_title": "Neelibringadi Thailam",
                 "answer": (
                     "🫙 *Neelibringadi Keera Thailam*\n\n"
                     "Apply to the scalp like hair oil, daily or on alternate days, "
@@ -311,7 +311,7 @@ FAQ_DATA = {
             },
             {
                 "id": "oil_3",
-                "short_title": "Anutailam (nose & ear drops)",
+                "short_title": "Anutailam Drops",
                 "answer": (
                     "🫙 *Anutailam*\n\n"
                     "General: 2 drops in each nostril and ear, once daily for two weeks.\n\n"
@@ -321,7 +321,7 @@ FAQ_DATA = {
             },
             {
                 "id": "oil_4",
-                "short_title": "Steam inhalation",
+                "short_title": "Steam Inhalation",
                 "answer": (
                     "🫙 *Steam Inhalation*\n\n"
                     "• Once daily for 2 weeks\n"
@@ -333,7 +333,7 @@ FAQ_DATA = {
             },
             {
                 "id": "oil_5",
-                "short_title": "Gandusham / Oil Pulling",
+                "short_title": "Gandusham Oil Pulling",
                 "answer": (
                     "🫙 *Gandusham (Oil Pulling)*\n\n"
                     "Sesame oil, once daily for two weeks.\n\n"
@@ -342,7 +342,7 @@ FAQ_DATA = {
             },
             {
                 "id": "oil_6",
-                "short_title": "Castor oil / Nithya Virechana",
+                "short_title": "Castor Oil Procedure",
                 "answer": (
                     "🫙 *Castor Oil Procedure*\n\n"
                     "Only perform if *specifically prescribed* for you.\n\n"
@@ -360,7 +360,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "sym_1",
-                "short_title": "Body pain increased",
+                "short_title": "Increased Body Pain",
                 "answer": (
                     "🌡️ *Increased Body Pain*\n\n"
                     "Do not assume increased pain is a normal treatment reaction.\n\n"
@@ -371,7 +371,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sym_2",
-                "short_title": "Blood sugar increasing",
+                "short_title": "Rising Blood Sugar",
                 "answer": (
                     "🌡️ *Rising Blood Sugar*\n\n"
                     "• Continue monitoring as advised\n"
@@ -384,7 +384,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sym_3",
-                "short_title": "Low blood sugar",
+                "short_title": "Low Blood Sugar",
                 "answer": (
                     "🌡️ *Low Blood Glucose*\n\n"
                     "Follow the hypoglycaemia plan provided by your treating doctor.\n\n"
@@ -395,7 +395,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sym_4",
-                "short_title": "Low blood pressure",
+                "short_title": "Low Blood Pressure",
                 "answer": (
                     "🌡️ *Low Blood Pressure*\n\n"
                     "Sit or lie down safely and recheck if possible.\n\n"
@@ -406,7 +406,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sym_5",
-                "short_title": "Loose stools / diarrhoea",
+                "short_title": "Loose Stools / Diarrhoea",
                 "answer": (
                     "🌡️ *Loose Stools / Diarrhoea*\n\n"
                     "Maintain hydration according to your medical restrictions and contact the clinical team "
@@ -417,7 +417,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sym_6",
-                "short_title": "Constipation / bloating",
+                "short_title": "Constipation / Bloating",
                 "answer": (
                     "🌡️ *Constipation / Bloating*\n\n"
                     "Continue only the diet, fluids and procedures already prescribed.\n\n"
@@ -428,7 +428,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sym_7",
-                "short_title": "Loss of appetite",
+                "short_title": "Loss of Appetite",
                 "answer": (
                     "🌡️ *Loss of Appetite*\n\n"
                     "Do not automatically stop all medicines.\n\n"
@@ -439,7 +439,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sym_8",
-                "short_title": "Feeling unusually hot / fever",
+                "short_title": "Feeling Hot / Fever",
                 "answer": (
                     "🌡️ *Feeling Hot / Fever*\n\n"
                     "Measure your temperature with a thermometer if available.\n\n"
@@ -456,7 +456,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "dis_1",
-                "short_title": "Check dispatch status",
+                "short_title": "Track Order Status",
                 "answer": (
                     "📦 *Medicine Dispatch Status*\n\n"
                     "To track your order, please select:\n"
@@ -467,7 +467,7 @@ FAQ_DATA = {
             },
             {
                 "id": "dis_2",
-                "short_title": "Medicines are about to finish",
+                "short_title": "Refill / Supply Running Low",
                 "answer": (
                     "📦 *Medicines About to Finish*\n\n"
                     "Please contact the patient-care/dispatch team *sufficiently in advance.*\n\n"
@@ -477,7 +477,7 @@ FAQ_DATA = {
             },
             {
                 "id": "dis_3",
-                "short_title": "Damaged package / missing item",
+                "short_title": "Damaged / Missing Item",
                 "answer": (
                     "📦 *Damaged Package / Missing Item*\n\n"
                     "Do not use a product if the container is damaged, seal integrity is compromised, "
@@ -496,7 +496,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "appt_1",
-                "short_title": "How to book a consultation",
+                "short_title": "Booking Consultation",
                 "answer": (
                     "📅 *Book a Consultation*\n\n"
                     "Select *Book Appointment* from the main menu.\n\n"
@@ -512,7 +512,7 @@ FAQ_DATA = {
             },
             {
                 "id": "appt_2",
-                "short_title": "When to schedule follow-up",
+                "short_title": "Scheduling Follow-up",
                 "answer": (
                     "📅 *Follow-up Scheduling*\n\n"
                     "Follow the review date advised by your doctor.\n\n"
@@ -522,7 +522,7 @@ FAQ_DATA = {
             },
             {
                 "id": "appt_3",
-                "short_title": "What to prepare for follow-up",
+                "short_title": "Follow-up Preparation",
                 "answer": (
                     "📅 *For Your Follow-up Consultation*\n\n"
                     "Please keep ready:\n"
@@ -544,7 +544,7 @@ FAQ_DATA = {
         "questions": [
             {
                 "id": "sp_1",
-                "short_title": "Pregnant / breastfeeding",
+                "short_title": "Pregnancy / Breastfeeding",
                 "answer": (
                     "🤰 *Pregnancy / Breastfeeding*\n\n"
                     "Please inform your treating doctor promptly.\n\n"
@@ -555,7 +555,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sp_2",
-                "short_title": "Scheduled for surgery",
+                "short_title": "Scheduled for Surgery",
                 "answer": (
                     "🤰 *Planned Surgery / Medical Procedure*\n\n"
                     "Inform both:\n"
@@ -566,7 +566,7 @@ FAQ_DATA = {
             },
             {
                 "id": "sp_3",
-                "short_title": "Allergy or reaction to medicine",
+                "short_title": "Allergy / Reaction",
                 "answer": (
                     "🤰 *Allergy / Reaction*\n\n"
                     "Stop using the suspected non-essential product and contact a healthcare professional.\n\n"
