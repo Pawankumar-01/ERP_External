@@ -383,14 +383,10 @@ class ERPBridgeService:
 
     async def get_or_create_patient(self, lead_id: str) -> Optional[str]:
         """
-        Idempotent: find the ERPNext Patient linked to this lead, or create one.
-        Returns the ERPNext Patient document name (e.g. 'PAT-0001'), or None on failure.
+        Idempotent & UID-Deduplicated: find the ERPNext Patient linked to this lead,
+        or matched by custom_uid_number, or create a new Patient record.
 
-        Field used for the lead → patient link: custom_sgp_lead
-        This must exist as a custom field on the ERPNext Patient DocType.
-
-        Safe to call from orientation completion AND appointment scheduling —
-        calling it twice will always return the same patient name.
+        Supports family members sharing the same mobile number.
         """
         # ① Search for existing Patient already linked to this lead
         existing = await self._request(
@@ -407,7 +403,7 @@ class ERPBridgeService:
             logger.info(f"[ERP] Existing patient '{patient_name}' found for lead {lead_id}")
             return patient_name
 
-        # ② Fetch lead data so we can populate the Patient record
+        # ② Fetch lead data so we can check UID and populate the Patient record
         lead = await self.get_lead(lead_id)
         if not lead:
             logger.error(f"[ERP] Cannot create Patient — lead {lead_id} not found")
@@ -416,30 +412,53 @@ class ERPBridgeService:
         lead_name   = lead.get("lead_name") or lead.get("name", "")
         mobile      = lead.get("mobile_number") or lead.get("mobile_no", "")
         email       = lead.get("email_id") or ""
+        uid_number  = lead.get("uid_number") or ""
+        uid_type    = lead.get("uid_type") or "Not Provided"
+        dob         = lead.get("dob") or None
+        relation    = lead.get("relation") or "Self"
+
+        # ②-B Search by UID Number if provided (prevents duplicate patient for same Aadhaar/PAN)
+        if uid_number:
+            existing_uid = await self._request(
+                "GET",
+                f"/api/resource/{DOCTYPE_PATIENT}",
+                params={
+                    "filters": f'[["custom_uid_number","=","{uid_number}"]]',
+                    "fields":  '["name","patient_name"]',
+                    "limit":   "1",
+                },
+            )
+            if existing_uid and isinstance(existing_uid, list) and len(existing_uid) > 0:
+                patient_name = existing_uid[0].get("name")
+                logger.info(f"[ERP] Existing patient '{patient_name}' matched by UID {uid_number}")
+                return patient_name
 
         # Split full name into first_name + last_name
-        # ERPNext Patient DocType requires first_name (mandatory)
-        # patient_name is auto-calculated from first + last name in ERPNext
         name_parts = lead_name.strip().split(" ", 1)
         first_name = name_parts[0]
         last_name  = name_parts[1] if len(name_parts) > 1 else ""
 
-        # ③ Create new Patient record
-        # sex is mandatory in ERPNext Patient DocType.
-        # We default to "Prefer not to say" since gender is not collected
-        # at lead registration time — staff can update it in ERPNext.
+        # ③ Create new Patient record with identity & family contact details
+        patient_payload = {
+            "first_name":            first_name,
+            "last_name":             last_name,
+            "sex":                   "Prefer not to say",
+            "mobile":                mobile,
+            "email":                 email,
+            "custom_sgp_lead":       lead_id,
+            "custom_uid_type":       uid_type,
+            "custom_uid_number":     uid_number,
+            "custom_family_contact": mobile,
+            "custom_relation":       relation,
+            "status":                "Active",
+        }
+        if dob:
+            patient_payload["dob"] = dob
+
         new_patient = await self._request(
             "POST",
             f"/api/resource/{DOCTYPE_PATIENT}",
-            data={
-                "first_name":      first_name,
-                "last_name":       last_name,
-                "sex":             "Prefer not to say",
-                "mobile":          mobile,
-                "email":           email,
-                "custom_sgp_lead": lead_id,    # link back to SGP Lead
-                "status":          "Active",
-            },
+            data=patient_payload,
         )
 
         if not new_patient or new_patient.get("_placeholder"):
@@ -481,6 +500,36 @@ class ERPBridgeService:
     async def get_patient(self, erp_patient_id: str) -> Optional[Dict]:
         """GET /api/resource/Patient/{id}"""
         return await self._request("GET", f"/api/resource/{DOCTYPE_PATIENT}/{erp_patient_id}")
+
+    async def search_patients(self, query: str) -> List[Dict]:
+        """
+        Search ERPNext Patient by name, mobile, family contact, UID number, or DOB.
+        Returns a list of matching patient dicts.
+        """
+        if not query or len(query.strip()) < 2:
+            return []
+
+        q = query.strip()
+        fields = [
+            "name", "patient_name", "mobile", "email", "sex", "dob",
+            "custom_uid_type", "custom_uid_number", "custom_family_contact",
+            "custom_relation", "custom_sgp_lead", "status"
+        ]
+
+        # Or-filters across name, mobile, family_contact, custom_uid_number
+        or_filters = f'[["patient_name","like","%{q}%"],["mobile","like","%{q}%"],["custom_family_contact","like","%{q}%"],["custom_uid_number","like","%{q}%"]]'
+
+        results = await self._request(
+            "GET",
+            f"/api/resource/{DOCTYPE_PATIENT}",
+            params={
+                "or_filters": or_filters,
+                "fields": json.dumps(fields),
+                "limit_page_length": "20",
+            },
+        )
+        return results if isinstance(results, list) else []
+
 
     # ── Appointment operations ────────────────────────────────────────────────
 

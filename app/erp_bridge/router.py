@@ -255,6 +255,18 @@ async def get_erp_patient(erp_patient_id: str):
     return patient
 
 
+@router.get("/patients/search")
+async def search_erp_patients(q: str):
+    """
+    Search ERPNext Patients by name, mobile, family contact, UID number (Aadhaar/PAN), or DOB.
+    Returns list of matching patient records.
+    """
+    if not q or len(q.strip()) < 2:
+        return []
+    return await erp_bridge_service.search_patients(q)
+
+
+
 @router.post("/appointment")
 async def create_appointment(req: AppointmentRequest):
     """
