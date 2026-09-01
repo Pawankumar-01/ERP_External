@@ -230,36 +230,36 @@ class WhatsAppBotEngine:
     async def _prompt_treatment_selection(self, phone: str, patient_name: str):
         sections = [
             {
-                "title": "Specialised Clinics",
+                "title": "Consultation Type",
                 "rows": [
                     {
-                        "id": "treat_kayachikitsa",
-                        "title": "General",
-                        "description": "General medicine, chronic conditions & consultations"
+                        "id": "consult_new",
+                        "title": "New Consultation",
+                        "description": "First time holistic clinical assessment"
                     },
                     {
-                        "id": "treat_panchakarma",
-                        "title": "Panchakarma & Detox",
-                        "description": "8-week purification, Abhyanga & Vamana/Virechana"
+                        "id": "consult_followup",
+                        "title": "Follow-up Review",
+                        "description": "Review progress & current prescription"
                     },
                     {
-                        "id": "treat_lifestyle",
-                        "title": "Diet & Lifestyle Plan",
-                        "description": "Ayurvedic nutrition, Yoga & Pathya advice"
+                        "id": "consult_panchakarma",
+                        "title": "Panchakarma & Therapy",
+                        "description": "Detox procedures & therapy guidance"
                     },
                 ]
             }
         ]
         await whatsapp_service.send_interactive_list(
             phone=phone,
-            body_text=f"Hello *{patient_name}*! Please select the department/specialty for your consultation:",
-            button_label="Choose Specialty",
+            body_text=f"Hello *{patient_name}*! Please select the consultation category for your appointment:",
+            button_label="Choose Category",
             sections=sections,
-            header_text="Select Consultation Specialty"
+            header_text="Novadigm Consultation"
         )
 
     async def _handle_treatment_selection(self, phone: str, session, action_id: str, title: str):
-        session.data["treatment"] = title or "Ayurvedic Consultation"
+        session.data["treatment"] = title or "Novadigm Consultation"
         session.update_state("SELECTING_SLOT")
 
         sections = [
@@ -286,7 +286,7 @@ class WhatsAppBotEngine:
         ]
         await whatsapp_service.send_interactive_list(
             phone=phone,
-            body_text=f"Department Selected: *{session.data['treatment']}*\n\nPlease select your preferred appointment time slot:",
+            body_text=f"Category Selected: *{session.data['treatment']}*\n\nPlease select your preferred appointment time slot:",
             button_label="Select Time Slot",
             sections=sections,
             header_text="Select Consultation Slot"
@@ -294,7 +294,7 @@ class WhatsAppBotEngine:
 
     async def _handle_slot_selection(self, phone: str, session, action_id: str, slot_title: str):
         patient_name = session.data.get("patient_name", "Valued Patient")
-        treatment = session.data.get("treatment", "Ayurvedic Consultation")
+        treatment = session.data.get("treatment", "Novadigm Consultation")
         slot = slot_title or "Preferred Time Slot"
 
         # Create Patient & Appointment in ERPNext
@@ -306,7 +306,7 @@ class WhatsAppBotEngine:
                     appt_res = await erp_bridge_service.create_patient_appointment({
                         "patient": patient_id,
                         "department": treatment,
-                        "notes": f"Booked via WhatsApp Bot. Selected Slot: {slot}",
+                        "notes": f"Booked via Novadigm WhatsApp Bot. Selected Slot: {slot}",
                         "appointment_date": "Today / Scheduled"
                     })
                     if appt_res:
@@ -318,9 +318,9 @@ class WhatsAppBotEngine:
         confirmation_msg = (
             f"🎉 *Appointment Confirmed!*\n\n"
             f"👤 *Patient Name:* {patient_name}\n"
-            f"🩺 *Specialty:* {treatment}\n"
+            f"🩺 *Category:* {treatment}\n"
             f"⏰ *Slot:* {slot}\n"
-            f"📍 *Location:* SGP Ayurvedic Healthcare Center\n\n"
+            f"📍 *Location:* Novadigm Health Center\n\n"
             f"Our team will send a reminder link prior to your consultation.\n"
             f"Type 'menu' anytime to return to the main options."
         )
@@ -340,7 +340,7 @@ class WhatsAppBotEngine:
                     {
                         "id": "faq_fees",
                         "title": "Consultation Fees",
-                        "description": "Fee details & Panchakarma packages"
+                        "description": "Fee details & treatment packages"
                     },
                     {
                         "id": "faq_panchakarma",
@@ -360,28 +360,35 @@ class WhatsAppBotEngine:
             body_text="Choose an FAQ topic below, or select 'Ask AI Care Assistant' to type your question freely:",
             button_label="View FAQ Topics",
             sections=sections,
-            header_text="SGP Patient FAQs"
+            header_text="Novadigm Patient FAQs"
         )
 
     async def _handle_ai_question(self, phone: str, query: str):
-        await whatsapp_service.send_text_message(phone, "⏳ *Consulting SGP AI Knowledge Base...*")
+        await whatsapp_service.send_text_message(phone, "⏳ *Consulting Novadigm Clinical Knowledge Base...*")
 
         system_prompt = (
-            "You are a friendly, compassionate clinical AI assistant for SGP Ayurvedic Healthcare Center. "
-            "Provide helpful, concise (max 3-4 sentences) answers to patient queries regarding Ayurvedic consultation, "
-            "Panchakarma therapies, clinic timings, and general health precautions. Always encourage consulting an SGP doctor."
+            "You are a friendly, compassionate clinical AI assistant for Novadigm Health. "
+            "You strictly follow Novadigm Health's official patient guidelines:\n"
+            "1. Medicines: Morning (6-8 AM), Evening (6-8 PM) before food unless specified. D-Tox (2h after food), Lithozen (20m after food with ginger tea), Carcincure R (2h after food). Keep 15m gap after APD, 5m gap between others.\n"
+            "2. Never alter prescription, medium (milk/water), or doses independently.\n"
+            "3. Diet (CCRSTT to avoid): Cabbage, Cauliflower, Radish, Spinach, Tomato, Tamarind. Alternatives: Raw mango, Aamchur, Amla, Ginger, Ajwain, Cinnamon.\n"
+            "4. Soups: Barley, Sabudana/Tapioca, Rice, Broccoli. Nuts: 5 Cashews, 5 Almonds, 2 tbsp Groundnuts soaked overnight.\n"
+            "5. Breathing: DNB left-to-right (10m morning, 10m night). Suryanamaskar only after holding Naukasan for 40s without pain.\n"
+            "6. Oils: Anutailam (2 drops nostril/ear daily x2 weeks), Steam inhalation (1x daily x2 weeks), Gandusham/Oil Pulling (sesame oil 1x daily x2 weeks).\n"
+            "7. RED-FLAG SAFETY: Never diagnose, promise guaranteed cure/duration, or stop allopathic/BP/diabetes medicines without doctor review.\n"
+            "Keep answers concise (max 3-4 sentences) and encourage consulting the Novadigm clinical team for personalized advice."
         )
         try:
             answer = await llm_service.generate_completion(
                 system_prompt=system_prompt,
                 user_content=query
             )
-            reply = f"🤖 *SGP Assistant Response:*\n\n{answer}\n\n_Type 'menu' to return to options._"
+            reply = f"🤖 *Novadigm Assistant Response:*\n\n{answer}\n\n_Type 'menu' to return to options._"
         except Exception as e:
-            logger.error(f"Gemini AI error for WA query: {e}")
+            logger.error(f"AI error for WA query: {e}")
             reply = (
-                "Our clinic offers authentic Ayurvedic consultations, customized 8-week supplement plans, "
-                "and Panchakarma detox therapies. Please type 'menu' to schedule a consultation with our doctor!"
+                "Novadigm Health provides personalized consultations, 8-week diet & supplement plans, "
+                "and therapy guidance. Please type 'menu' to schedule a consultation with our clinical team!"
             )
 
         await whatsapp_service.send_text_message(phone, reply)
