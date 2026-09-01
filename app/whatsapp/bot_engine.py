@@ -264,21 +264,21 @@ class WhatsAppBotEngine:
 
         sections = [
             {
-                "title": "Available Time Slots",
+                "title": "Available Slots",
                 "rows": [
                     {
                         "id": "slot_morning_1",
-                        "title": "Morning (10:00 AM - 11:30 AM)",
+                        "title": "Morning (10:00 - 11:30)",
                         "description": "First available morning slot"
                     },
                     {
                         "id": "slot_morning_2",
-                        "title": "Midday (11:30 AM - 01:00 PM)",
+                        "title": "Midday (11:30 - 1:00)",
                         "description": "Midday slot"
                     },
                     {
                         "id": "slot_evening_1",
-                        "title": "Evening (04:30 PM - 06:00 PM)",
+                        "title": "Evening (4:30 - 6:00)",
                         "description": "Evening slot"
                     },
                 ]
