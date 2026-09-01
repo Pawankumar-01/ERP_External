@@ -23,7 +23,7 @@ class WhatsAppLeadData:
     city: Optional[str] = ""
     pincode: Optional[str] = ""
     lead_source: str = "WHATSAPP"
-    interested_in: Optional[str] = "Ayurvedic Consultation"
+    interested_in: Optional[str] = "CONSULTATION"
     notes: Optional[str] = ""
 
 
@@ -138,20 +138,12 @@ class WhatsAppBotEngine:
 
     async def _handle_main_menu_action(self, phone: str, session, text_body: str, action_id: str):
         if action_id == "btn_book_appt" or "book" in text_body.lower():
-            # Check if lead already exists in ERPNext
-            lead = await self._find_lead_by_phone(phone)
-            if lead:
-                session.data["patient_name"] = lead.get("lead_name") or "Valued Patient"
-                session.data["lead_id"] = lead.get("name")
-                session.update_state("SELECTING_TREATMENT")
-                await self._prompt_treatment_selection(phone, session.data["patient_name"])
-            else:
-                session.update_state("AWAITING_NAME")
-                await whatsapp_service.send_text_message(
-                    phone,
-                    "Welcome! Let's get your consultation scheduled.\n\n"
-                    "Please reply with your *Full Name*:"
-                )
+            session.update_state("AWAITING_NAME")
+            await whatsapp_service.send_text_message(
+                phone,
+                "Welcome! Let's get your consultation scheduled.\n\n"
+                "Please reply with your *Full Name*:"
+            )
 
         elif action_id == "btn_faqs" or "faq" in text_body.lower() or "services" in text_body.lower():
             await self._send_faq_list_menu(phone)

@@ -191,13 +191,23 @@ class ERPBridgeService:
         the created doc. We use the returned 'name' to do a follow-up GET
         to guarantee we return the real created document with correct ID.
         """
+        # Sanitize interested_in to ERPNext allowed select values: CONSULTATION, DEVICE, BOTH
+        interested_in = getattr(data, "interested_in", "CONSULTATION")
+        if interested_in not in ["CONSULTATION", "DEVICE", "BOTH"]:
+            interested_in = "CONSULTATION"
+
+        lead_source = getattr(data, "lead_source", "WHATSAPP")
+        allowed_sources = ["WEBSITE", "INSTAGRAM", "FACEBOOK", "YOUTUBE", "WALK_IN", "REFERRAL", "CALL_CENTER", "WHATSAPP", "OTHER"]
+        if lead_source not in allowed_sources:
+            lead_source = "WHATSAPP"
+
         payload = {
             "lead_name":     data.name,
             "mobile_number": data.phone,
-            "email_id":      data.email,
-            "lead_source":   data.lead_source,
-            "interested_in": data.interested_in,
-            "notes":         data.notes,
+            "email":         getattr(data, "email", "") or "",
+            "lead_source":   lead_source,
+            "interested_in": interested_in,
+            "notes":         getattr(data, "notes", "") or "",
             "status":        "NEW",
         }
         result = await self._request("POST", f"/api/resource/{DOCTYPE_LEAD}", data=payload)
@@ -225,7 +235,7 @@ class ERPBridgeService:
         """
         params: Dict[str, Any] = {
             "limit_page_length": limit,
-            "fields": '["name","lead_name","mobile_number","email_id","status","lead_source","interested_in","notes","creation","modified"]',
+            "fields": '["name","lead_name","mobile_number","email","status","lead_source","interested_in","notes","creation","modified"]',
         }
         if status:
             params["filters"] = f'[["SGP Lead","status","=","{status}"]]'
