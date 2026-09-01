@@ -209,7 +209,7 @@ class WhatsAppBotEngine:
                     phone=phone,
                     address=address_text,
                     pincode=pincode,
-                    interested_in=session.data.get("health_concern", "Ayurvedic Consultation")[:50],
+                    interested_in="CONSULTATION",
                     notes=(
                         f"Created via WhatsApp Bot.\n"
                         f"Primary Concern: {session.data.get('health_concern', '')}\n"
