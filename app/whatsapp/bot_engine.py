@@ -234,7 +234,7 @@ class WhatsAppBotEngine:
                 "rows": [
                     {
                         "id": "treat_kayachikitsa",
-                        "title": "Kaya Chikitsa (General)",
+                        "title": "General",
                         "description": "General medicine, chronic conditions & consultations"
                     },
                     {
