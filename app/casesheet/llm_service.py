@@ -54,18 +54,16 @@ GEMINI_MODELS = [
     "gemini-1.5-pro",
 ]
 GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.6-27b",
+    "groq/compound-mini",
 ]
-PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "openrouter/free")
 _raw_candidates = [
     PRIMARY_MODEL,
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen/qwen-2.5-72b-instruct:free",
-    "deepseek/deepseek-r1:free",
     "openrouter/free",
+    "google/gemma-2-9b-it:free",
 ]
 MODEL_CANDIDATES = []
 for m in _raw_candidates:
