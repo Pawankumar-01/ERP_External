@@ -421,14 +421,16 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "chief_complaint": BASE_RULES + """\
-Extract the Chief Complaint: the primary reason for today's visit.
+    "chief_complaint": """\
+You are an expert clinical AI extracting chief complaints from doctor dictation.
 
-Rules:
-- Summarize the main complaint in one clinical sentence.
-- Include Ayurvedic disease name only if stated.
-- Include duration, site, laterality, severity, course, aggravating and relieving factors only if stated.
-- Do not include examination findings or diagnoses unless the doctor explicitly says the complaint is a known diagnosis.
+Extraction Rules:
+1. Summary: A single, clean clinical sentence summarizing all chief complaints.
+2. Complaint List: Extract each distinct complaint mentioned as a separate object in complaints list.
+3. Laterality: Must be one of ["left", "right", "bilateral", "midline", "generalized", null].
+4. Severity: Normalize to ["mild", "moderate", "severe", "very_mild", "mild_moderate", "moderate_severe", null].
+5. Course: Must be one of ["acute", "subacute", "chronic", "recurrent", "progressive", "improving", "worsening", "intermittent", null].
+6. Ayurvedic Name: Include Ayurvedic terms if dictated (e.g., "Gridhrasi", "Katigraha", "Sandhivata", "Amlapitta").
 
 Schema:
 {
@@ -438,9 +440,9 @@ Schema:
       "complaint": "string",
       "ayurvedic_name": "string | null",
       "site": "string | null",
-      "laterality": "right | left | bilateral | midline | generalized | null",
+      "laterality": "left | right | bilateral | midline | generalized | null",
       "duration": "string | null",
-      "severity": "string | null",
+      "severity": "mild | moderate | severe | very_mild | mild_moderate | moderate_severe | null",
       "course": "acute | subacute | chronic | recurrent | progressive | improving | worsening | intermittent | null",
       "aggravating_factors": ["string"],
       "relieving_factors": ["string"],
@@ -450,102 +452,100 @@ Schema:
     }
   ]
 }
-""" + _SECTION_FOOTER,
 
-    "anamnesis": BASE_RULES + """\
-Extract Anamnesis / History of Present Illness.
+FEW-SHOT CLINICAL EXAMPLE:
 
-Rules:
-- Write a concise clinical narrative of how the illness developed.
-- Capture onset, progression, episode pattern, associated symptoms, relevant context and negative history.
-- Do not repeat the chief complaint unless needed for continuity.
-- Do not include examination or final assessment.
+Dictation:
+"Patient presents with severe lower back pain radiating to left leg for 3 months, Gridhrasi. Pain is chronic, worse with prolonged sitting and bending forward, relieved by hot compress and rest."
+
+Expected JSON:
+{
+  "summary": "Severe chronic lower back pain radiating to left leg for 3 months (Gridhrasi), aggravated by sitting and bending, relieved by rest and hot compress.",
+  "complaints": [
+    {
+      "complaint": "Lower back pain radiating to left leg",
+      "ayurvedic_name": "Gridhrasi",
+      "site": "lower back, left leg",
+      "laterality": "left",
+      "duration": "3 months",
+      "severity": "severe",
+      "course": "chronic",
+      "aggravating_factors": [
+        "prolonged sitting",
+        "bending forward"
+      ],
+      "relieving_factors": [
+        "hot compress",
+        "rest"
+      ],
+      "functional_impact": [],
+      "prior_treatment": null,
+      "needs_doctor_confirmation": []
+    }
+  ]
+}
+
+IMPORTANT: Return ONLY valid JSON matching the schema above.
+""",
+
+    "anamnesis": """\
+You are an expert clinical AI extracting Anamnesis / History of Present Illness (HPI) from doctor dictation.
+
+Extraction Rules:
+1. Summary: A clean narrative of how the illness developed over time.
+2. Mode of Onset: Normalize to ["sudden", "gradual", "traumatic", "spontaneous", "post_infective", "post_procedure", null].
+3. Capture episode patterns, progression, associated symptoms, negative history, and context.
 
 Schema:
 {
   "summary": "string | null",
   "onset": "string | null",
-  "mode_of_onset": "sudden | gradual | traumatic | spontaneous | post_infective | post_procedure | unknown | null",
+  "mode_of_onset": "sudden | gradual | traumatic | spontaneous | post_infective | post_procedure | null",
   "progression": "string | null",
   "duration_total": "string | null",
   "episode_pattern": "string | null",
   "associated_symptoms": ["string"],
   "negative_history": ["string"],
   "relevant_context": "string | null",
-  "patient_reported_concerns": ["string"],
   "needs_doctor_confirmation": ["string"]
 }
-""" + _SECTION_FOOTER,
 
-    "pulse_diagnosis": BASE_RULES + """\
-Extract Pulse Diagnosis / Nadi Pariksha, including overall VPK / Tridosha dominance and system-wise pulse severity.
+FEW-SHOT CLINICAL EXAMPLE:
+Dictation: "Gradual onset of symptoms starting 6 months ago following a viral illness. Pain has been slowly progressive."
+Expected JSON: {
+  "summary": "Gradual onset of symptoms 6 months ago post viral illness, with progressive course.",
+  "onset": "6 months ago",
+  "mode_of_onset": "post_infective",
+  "progression": "slowly progressive",
+  "duration_total": "6 months",
+  "episode_pattern": null,
+  "associated_symptoms": [],
+  "negative_history": [],
+  "relevant_context": "Following viral illness",
+  "needs_doctor_confirmation": []
+}
+IMPORTANT: Return ONLY valid JSON matching schema above.
+""",
 
-Rules for overall VPK:
-- Use only one of: V, P, K, VP, VK, PK, VPK, null for dominance.
-- Normalize: PV->VP, KV->VK, KP->PK.
-- Extract Prakriti, Vikriti, notes, dominance ONLY if explicitly stated.
+    "pulse_diagnosis": """\
+You are an expert clinical AI extracting Nadi Pariksha (Pulse Diagnosis) data from doctor dictation.
 
-COMPOUND DOSHA SHORTHAND EXPANSION (CRITICAL — Apply before all other rules):
-Doctors commonly speak in abbreviated compound dosha codes. Each letter in the compound means a separate dosha, ALL receiving the stated severity.
-- "PV" or "VP" = Pitta AND Vata — set BOTH pitta and vata to the stated severity
-- "VK" or "KV" = Vata AND Kapha — set BOTH vata and kapha to the stated severity
-- "PK" or "KP" = Pitta AND Kapha — set BOTH pitta and kapha to the stated severity
-- "VPK" = Vata AND Pitta AND Kapha — set ALL THREE to the stated severity
-- Single "V" = only Vata; Single "P" = only Pitta; Single "K" = only Kapha
-Examples:
-  "LISI Mild PV"     → LISI: vata=mild, pitta=mild, kapha=null
-  "CVS Moderate VK"  → CVS: vata=moderate, pitta=null, kapha=moderate
-  "GIT Mild PV"      → GIT: vata=mild, pitta=mild, kapha=null
-  "PAN IS VK Moderate" → PAN: vata=moderate, kapha=moderate; IS: vata=moderate, kapha=moderate
-  "RT MLP Moderate K" → RT: kapha=moderate (MLP is not a valid system code — ignore it)
-
-SPOKEN SYSTEM CODE ALIASES (map these to valid codes BEFORE any other processing):
-- "Liver" or "Liv" → LIV
-- "KB" or "KUB" → KUB
-- "Pro" → PRO
-- "SS" or "Skeletal" → SS
-- "GB" → GB
-- "LB" or "Lower Back" → LB
-- "LSCS" → LSCS
-- "LISI", "Large Intestine Small Intestine" → LISI
-- "LI" or "Large Intestine" → LISI   ← spoken shorthand, always expand to LISI
-- "SI" or "Small Intestine" → LISI   ← spoken shorthand, always expand to LISI
-- "LI SI" or "SI LI" (spoken together or separately for same system) → LISI
-- "RB" → RB
-- "OBG" → OBG
-- "IS" → IS
-- "GIT" → GIT
-- "CVS" → CVS
-- "PAN" → PAN
-- "RT" → RT
-
-SPOKEN LOW-SEVERITY ALIASES:
-- "low V", "low Vata" → vata = "very_mild" for that system
-- "low P", "low Pitta" → pitta = "very_mild" for that system
-- "low K", "low Kapha" → kapha = "very_mild" for that system
-- "low VPK" → all three = "very_mild"
-These phrases indicate the patient has a constitutionally low dosha reading — treat as severity "very_mild".
-
-Rules for system-wise pulse:
-- Valid system codes ONLY (do not invent codes):
-  CVS (cardiovascular), GIT (gastrointestinal), IS (immune system), PAN (pancreas),
-  KUB (kidney ureter bladder), PRO (prostate), RT (respiratory tract), LB (lower back),
-  GB (gallbladder), LIV (liver), SS (skeletal system), LSCS (lumbo sacro cranial system),
-  LISI (large intestine small intestine), RB (reproductive bladder), OBG (obstetrics gynecology).
-- If a spoken term does not match any valid system code or alias above, DO NOT create a system entry for it. Log it in needs_doctor_confirmation instead.
-- Severity normalization (map spoken terms):
-  "very mild", "very-mild", "low" -> "very_mild"
-  "mild" -> "mild"
-  "mild moderate", "mild-moderate", "mild-mod" -> "mild_moderate"
-  "moderate", "mod" -> "moderate"
-  "moderate severe", "moderate-severe" -> "moderate_severe"
-  "severe", "sev" -> "severe"
-- When doshas appear together next to one severity, apply that severity to all listed doshas.
-- When doshas appear separately with separate severities, assign individually.
-- Unmentioned doshas for a system must be null (do not assume zero/absent).
-- ONLY include systems explicitly mentioned in the transcript. Do not list systems not spoken.
-
-ANTI-HALLUCINATION: Never invent system codes. Only use codes from the valid list above.
+Extraction Rules:
+1. Overall VPK Dominance: Must be one of ["V", "P", "K", "VP", "VK", "PK", "VPK", null]. Normalize: PV->VP, KV->VK, KP->PK.
+2. Valid System Codes ONLY: [CVS, GIT, IS, PAN, KUB, PRO, RT, LB, GB, LIV, SS, LSCS, LISI, RB, OBG]. Never invent other system codes.
+3. STT Phonetic & Alias Mappings (Apply BEFORE extracting):
+   - "caffa", "kafa", "kaffa" -> Kapha
+   - "LI", "SI", "Large Intestine", "Small Intestine", "large in this multistance" -> LISI
+   - "Liver", "Liv" -> LIV
+   - "KB", "KUB" -> KUB
+   - "Lower Back" -> LB
+4. Compound & Range Severities:
+   - "mild to moderate", "mild-mod" -> "mild_moderate"
+   - "moderate to severe", "mod-sev" -> "moderate_severe"
+   - "low P", "low V", "low K" -> "very_mild"
+   - "PV" / "VP" -> set BOTH Vata and Pitta to stated severity.
+   - "VK" / "KV" -> set BOTH Vata and Kapha to stated severity.
+5. Filter Out Non-Pulse Dictation: Ignore height/weight, blood group, labs, or narrative progress commentary mixed into the transcript.
 
 Schema:
 {
@@ -567,7 +567,40 @@ Schema:
   ],
   "needs_doctor_confirmation": ["string"]
 }
-""" + _SECTION_FOOTER,
+
+FEW-SHOT CLINICAL EXAMPLE (REAL DOCTOR DICTATION):
+
+Dictation:
+"LI, large in this multistance, mildly aggravated caffa, CVS mild to moderate V and mild to moderate K, RB moderate V and moderate K, GIT mild P and mild K, IS moderate V and moderate K, PAN moderate K, PRO mild K, KUB moderate K and mild V, RT moderate K, LB moderate K and low P, GB mild P and mild K, LIV moderate K, SS moderate K, 174 centimeter height and weight is 80 kilos, blood group AB positive."
+
+Expected JSON:
+{
+  "overall_vpk": {
+    "dominance": "VK",
+    "prakriti": null,
+    "vikriti": null,
+    "notes": null
+  },
+  "systems": [
+    { "system": "LISI", "vata": null, "pitta": null, "kapha": "mild", "raw_phrase": "LI, large in this multistance, mildly aggravated caffa", "needs_doctor_confirmation": [] },
+    { "system": "CVS", "vata": "mild_moderate", "pitta": null, "kapha": "mild_moderate", "raw_phrase": "CVS mild to moderate V and mild to moderate K", "needs_doctor_confirmation": [] },
+    { "system": "RB", "vata": "moderate", "pitta": null, "kapha": "moderate", "raw_phrase": "RB moderate V and moderate K", "needs_doctor_confirmation": [] },
+    { "system": "GIT", "vata": null, "pitta": "mild", "kapha": "mild", "raw_phrase": "GIT mild P and mild K", "needs_doctor_confirmation": [] },
+    { "system": "IS", "vata": "moderate", "pitta": null, "kapha": "moderate", "raw_phrase": "IS moderate V and moderate K", "needs_doctor_confirmation": [] },
+    { "system": "PAN", "vata": null, "pitta": null, "kapha": "moderate", "raw_phrase": "PAN moderate K", "needs_doctor_confirmation": [] },
+    { "system": "PRO", "vata": null, "pitta": null, "kapha": "mild", "raw_phrase": "PRO mild K", "needs_doctor_confirmation": [] },
+    { "system": "KUB", "vata": "mild", "pitta": null, "kapha": "moderate", "raw_phrase": "KUB moderate K and mild V", "needs_doctor_confirmation": [] },
+    { "system": "RT", "vata": null, "pitta": null, "kapha": "moderate", "raw_phrase": "RT moderate K", "needs_doctor_confirmation": [] },
+    { "system": "LB", "vata": null, "pitta": "very_mild", "kapha": "moderate", "raw_phrase": "LB moderate K and low P", "needs_doctor_confirmation": [] },
+    { "system": "GB", "vata": null, "pitta": "mild", "kapha": "mild", "raw_phrase": "GB mild P and mild K", "needs_doctor_confirmation": [] },
+    { "system": "LIV", "vata": null, "pitta": null, "kapha": "moderate", "raw_phrase": "LIV moderate K", "needs_doctor_confirmation": [] },
+    { "system": "SS", "vata": null, "pitta": null, "kapha": "moderate", "raw_phrase": "SS moderate K", "needs_doctor_confirmation": [] }
+  ],
+  "needs_doctor_confirmation": []
+}
+
+IMPORTANT: Return ONLY valid JSON matching the schema above.
+""",
 
 
     "ayurvedic_assessment_extended": BASE_RULES + """\
@@ -597,88 +630,164 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "ayurvedic_supplements": BASE_RULES + _SGP_MEDICINE_KNOWLEDGE + """\
-Extract Ayurvedic supplements and SGP proprietary medicines prescribed or currently used.
+    "ayurvedic_supplements": """\
+You are an expert clinical AI extracting SGP Ayurvedic supplements, dosages, times per day, and prescription schedules from doctor dictation.
 
-Rules:
-- APPLY the SGP MEDICINE CANONICAL NAME CORRECTION TABLE above to fix any misspelled medicine names (e.g., NETROLYZIN -> ATHEROLYZIN, NEEROTROPIN -> NEUROTROPIN).
-- When the doctor says a name that matches a known SGP canonical name (or variant), output the canonical name.
-- CRITICAL DOSAGE FRACTION NORMALIZATION: Always convert spoken fractions or raw STT numeric strings into clean standard mathematical fractions:
-  * "one fourth" / "1 4th" / "1 by 4th" / "quarter" -> "1/4"
-  * "half" / "one half" / "half tablet" / "half tsf" / "half dose" -> "1/2"
-  * "three fourths" / "3 4th" / "3 by 4th" -> "3/4"
-  * "one" / "one tablet" / "one tsf" -> "1"
-  SPECIAL: When a doctor says "half instead of one", "half of one", or "half" in the context of a standard dose, always store "1/2" — this is a common clinical shorthand. Apply this normalization to weeks[], dose, dose_morning, dose_evening fields.
-- MANDATORY 8-WEEK DOSAGE MATRIX ("weeks" field):
-  * For EVERY medicine or supplement, you MUST output an explicit 8-element array of strings corresponding to Week 1 through Week 8 in the "weeks" field. NEVER set "weeks" to null!
-  * SGP TITRATION PROTOCOLS ("quarter half one titration" / "1/4 1/2 1 titration" / "quarter half one dosage"):
-    This specific clinical shorthand defines a 3-stage dose escalation over consecutive weeks:
-    - 1st active week of taking the medicine: dose is "1/4"
-    - 2nd active week of taking the medicine: dose is "1/2"
-    - 3rd active week onwards (until week 8): dose is "1"
-  * EFFECT OF START WEEK ("starting week X"):
-    Any week BEFORE the start_week must be marked as "--" (inactive/not started yet). The titration schedule begins strictly on the specified start_week!
-    - Example 1 ("APD starting week 1 at quarter half 1 titration"): start_week="1", weeks=["1/4", "1/2", "1", "1", "1", "1", "1", "1"]
-    - Example 2 ("ATHEROLYZIN starting week 2 at quarter half 1 titration"): start_week="2", weeks=["--", "1/4", "1/2", "1", "1", "1", "1", "1"] (Notice Week 1 is "--", Week 2 is "1/4", Week 3 is "1/2", Weeks 4-8 are "1")
-    - Example 3 ("SYNGEN starting in week 3 at half to 1 tablet titration"): start_week="3", weeks=["--", "--", "1/2", "1", "1", "1", "1", "1"]
-    - Example 4 ("BIOTIN starting week 2 twice daily" without titration): start_week="2", weeks=["--", "1", "1", "1", "1", "1", "1", "1"]
-  * RESERVE / SOS MEDICATIONS:
-    If a medicine is ordered "to be kept on reserve" or "SOS" (e.g. NEUROTROPIN twice daily to be kept on reserve for acute nerve flare ups):
-    - Do NOT assign numbers like "1/4" or "1" across the weeks!
-    - Set weeks=["Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve"], frequency="SOS (Reserve)", remarks="To be kept on reserve for acute nerve flare ups".
-  * FOODS / NUTS PROTOCOLS (e.g. CAG Nuts):
-    If starting week 1: weeks=["1", "1", "1", "1", "1", "1", "1", "1"] (or appropriate weekly status), and put preparation/soaking instructions in "timing" or "remarks".
-- QUANTITY / BASE WEIGHT: Extract the exact quantity, strength, or weight (e.g., "500mg", "250mg", "10 ml", "2 tablets") as specified by the doctor in "quantity_mg". Do NOT default to "1000mg" or hallucinate quantities if not stated. If not mentioned, output null or empty string.
-- GLOBAL FREQUENCY PROPAGATION: If a trailing or overarching command is spoken such as "all twice daily morning and evening", "take all BID", "6 to 8 am and 6 to 8 pm on empty stomach", apply that frequency ("BID") and timing/instructions to ALL medicines in the extracted list unless specifically overridden for an individual item.
-- SGP dose sequence when spoken as four values: morning / afternoon / evening / night.
-- start_week: capture the number of the starting week (e.g. "1", "2", "3").
-- Do not interpret or translate the clinical meaning of SGP codes.
-- Do NOT mix allopathic medicines here; put them in treatment_and_background.
+CANONICAL MEDICINE CORRECTION TABLE (Use ONLY these canonical names):
+- apd, a.p.d -> APD
+- atherolyzin, atherolyzine, ethylizine -> ATHEROLYZIN
+- migranone, migranine -> MIGRANONE
+- imumodulin, imd, immunodulin -> IMUMODULIN
+- biotin, biotine -> BIOTIN
+- allowyn, allowin -> ALLOWYN
+- syngen, syngin, singin -> SYNGEN
+- d-tox, dtox, detox -> D-TOX
+- neurotropin, neurotropine -> NEUROTROPIN
+- cag nuts, cag -> CAG Nuts
+- reserve -> RESERVE
+- cissues -> CISSUES
+- quadrangularies -> QUADRANGULARIES
+
+Extraction Rules:
+1. "weeks" must ALWAYS be an 8-element array representing Week 1 through Week 8.
+2. Titration ("quarter half one titration"): 1st active week="1/4", 2nd active week="1/2", 3rd active week onwards="1".
+3. Start Week ("starting week 2"): Weeks before start week are marked as "--" (inactive).
+4. Reserve/SOS: weeks=["Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve"].
+5. Dose & Frequency Mapping:
+   - "twice daily" / "BID" / "morning and evening" -> frequency="1-0-1", dose_morning="1", dose_evening="1", times_per_day=2.
+   - "thrice daily" / "TDS" / "morning afternoon night" -> frequency="1-1-1", dose_morning="1", dose_afternoon="1", dose_night="1", times_per_day=3.
+   - "once daily" / "OD" / "morning" -> frequency="1-0-0", dose_morning="1", times_per_day=1.
+   - "bedtime" / "night" -> frequency="0-0-1", dose_night="1", times_per_day=1.
+6. Timing: Normalize to ["before_food", "after_food", "empty_stomach", "bedtime", null].
 
 Schema:
 [
   {
     "name": "string",
-    "medicine_category": "SGP proprietary | Ayurvedic classical | Ayurvedic supplement | herb | unknown | null",
+    "medicine_category": "SGP proprietary | Ayurvedic classical | Ayurvedic supplement | herb | null",
     "quantity_mg": "string | null",
-    "weeks": ["string", "string", "string", "string", "string", "string", "string", "string"],
-    "start_week": "string | null",
+    "dose": "string | null",
+    "times_per_day": "number | null",
+    "frequency": "1-0-0 | 1-0-1 | 1-1-1 | 0-0-1 | SOS | string | null",
     "dose_morning": "string | null",
     "dose_afternoon": "string | null",
     "dose_evening": "string | null",
     "dose_night": "string | null",
-    "dose": "string | null",
-    "frequency": "OD | BID | TDS | QID | SOS | string | null",
-    "route": "PO (Oral) | topical | nasal | string | null",
+    "weeks": ["string", "string", "string", "string", "string", "string", "string", "string"],
+    "start_week": "string | null",
     "duration": "string | null",
-    "timing": "string | null",
-    "indication": "string | null",
+    "timing": "before_food | after_food | empty_stomach | bedtime | null",
     "remarks": "string | null",
     "needs_doctor_confirmation": ["string"]
   }
 ]
-""" + _SECTION_FOOTER,
 
-    "panchakarma": BASE_RULES + _SGP_PROCEDURE_KNOWLEDGE + """\
-Extract Panchakarma and classical therapy prescription details.
+FEW-SHOT CLINICAL EXAMPLE (REAL DOCTOR PRESCRIPTION):
 
-Rules:
-- APPLY the SGP PROCEDURE CANONICAL NAME CORRECTION TABLE above to fix any misspelled procedure names.
-- When the doctor names a procedure that matches a canonical SGP procedure, output the canonical name.
-- One procedure or procedure combination per session object.
-- Capture procedure, companion procedure, oils/ingredients, session count, temperature, duration, body site, laterality, remarks.
-- Do not invent oils, session counts, or temperatures not spoken.
-- If doctor says "already done" for a procedure, set status to "completed". If prescribed, set to "prescribed".
-- status field: "prescribed" | "completed" | "ongoing" | null.
+Dictation:
+"Starting APD 500mg, 1 tablet twice daily morning and evening after food, starting week 1 quarter half one titration for 8 weeks. Also add Atherolyzin 250mg, 1 capsule in the morning empty stomach starting week 2. CAG Nuts 2 nuts soaked overnight taken every morning. Keep Neurotropin on reserve, 1 tablet as needed SOS for nerve pain."
 
-STRICT BOUNDARY — NEVER INCLUDE in panchakarma (these belong ONLY in detox_procedures):
-- Gandusham / Gandusha (oil pulling / gargling — home procedure)
-- Nithya Virechana / Prathivaara Virechana (home daily/weekly purgation)
-- Anutailam (nasal drops — self-administered at home)
-- Steam Inhalations (home steam therapy)
-- Fennel Tea, Barley Soup, Rice Soup, Tapioca Soup, Raagi Soup, Jowar Soup (dietary decoctions)
-- Any decoctions, teas, soups, or home-use oil self-applications.
-If the doctor mentions any of the above items, do NOT add them to panchakarma. Leave them for detox_procedures.
+Expected JSON:
+[
+  {
+    "name": "APD",
+    "medicine_category": "SGP proprietary",
+    "quantity_mg": "500mg",
+    "dose": "1 tablet",
+    "times_per_day": 2,
+    "frequency": "1-0-1",
+    "dose_morning": "1",
+    "dose_afternoon": null,
+    "dose_evening": "1",
+    "dose_night": null,
+    "weeks": ["1/4", "1/2", "1", "1", "1", "1", "1", "1"],
+    "start_week": "1",
+    "duration": "8 weeks",
+    "timing": "after_food",
+    "remarks": null,
+    "needs_doctor_confirmation": []
+  },
+  {
+    "name": "ATHEROLYZIN",
+    "medicine_category": "SGP proprietary",
+    "quantity_mg": "250mg",
+    "dose": "1 capsule",
+    "times_per_day": 1,
+    "frequency": "1-0-0",
+    "dose_morning": "1",
+    "dose_afternoon": null,
+    "dose_evening": null,
+    "dose_night": null,
+    "weeks": ["--", "1/4", "1/2", "1", "1", "1", "1", "1"],
+    "start_week": "2",
+    "duration": "7 weeks",
+    "timing": "empty_stomach",
+    "remarks": null,
+    "needs_doctor_confirmation": []
+  },
+  {
+    "name": "CAG Nuts",
+    "medicine_category": "Ayurvedic supplement",
+    "quantity_mg": "2 nuts",
+    "dose": "2 nuts",
+    "times_per_day": 1,
+    "frequency": "1-0-0",
+    "dose_morning": "2",
+    "dose_afternoon": null,
+    "dose_evening": null,
+    "dose_night": null,
+    "weeks": ["1", "1", "1", "1", "1", "1", "1", "1"],
+    "start_week": "1",
+    "duration": "8 weeks",
+    "timing": "empty_stomach",
+    "remarks": "Soaked overnight",
+    "needs_doctor_confirmation": []
+  },
+  {
+    "name": "NEUROTROPIN",
+    "medicine_category": "SGP proprietary",
+    "quantity_mg": null,
+    "dose": "1 tablet",
+    "times_per_day": null,
+    "frequency": "SOS",
+    "dose_morning": null,
+    "dose_afternoon": null,
+    "dose_evening": null,
+    "dose_night": null,
+    "weeks": ["Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve", "Reserve"],
+    "start_week": "1",
+    "duration": null,
+    "timing": null,
+    "remarks": "As needed SOS for nerve pain",
+    "needs_doctor_confirmation": []
+  }
+]
+
+IMPORTANT: Return ONLY valid JSON array matching the schema above.
+""",
+
+    "panchakarma": """\
+You are an expert clinical AI extracting in-clinic Panchakarma therapy prescriptions from doctor dictation.
+
+CANONICAL PROCEDURE CORRECTION TABLE:
+- swedana, sweda, savana, savanna, sauna, steam bath -> Swedana
+- janu pichu, jhanu pichu, knee pichu -> Janu Pichu
+- januvasthi, januvasti, janu basti -> Januvasthi
+- abhyanga, full body massage -> Abhyanga
+- shirodhara, shiro dhara -> Shirodhara
+- greeva vasthi, greeva basti -> Greeva Vasthi
+- kati vasthi, kati basti -> Kati Vasthi
+
+CANONICAL OIL CORRECTION TABLE (ALWAYS put in oils_or_ingredients array):
+- nutex, nutex oil -> Nutex Oil
+- chandanadi, chandanadi tailam -> Chandanadi Thailam
+- neelibringadi, neelibrungadi -> NeeliBringadi Keera Tailam
+- mahanarayana -> Mahanarayana Thailam
+
+Strict Rules:
+1. Oils (Nutex Oil, Chandanadi Thailam) are ALWAYS ingredients, NEVER standalone procedures!
+2. Sauna/Savana/Steam bath must ALWAYS normalize to canonical "Swedana".
+3. Filter out home detox remedies (Raagi soup, Jowar/Java soup, Fennel tea, Anutailam, Nithya Virechana) -> Leave those for detox_procedures.
 
 Schema:
 {
@@ -695,24 +804,64 @@ Schema:
       "temperature_celsius": "number | null",
       "sequence_or_schedule": "string | null",
       "status": "prescribed | completed | ongoing | null",
-      "indication": "string | null",
-      "contraindication_or_caution_mentioned": ["string"],
       "remarks": "string | null",
       "needs_doctor_confirmation": ["string"]
     }
   ],
   "overall_remarks": "string | null"
 }
-""" + _SECTION_FOOTER,
+
+FEW-SHOT CLINICAL EXAMPLE (REAL DOCTOR DICTATION):
+
+Dictation:
+"Abhyanga with Jhanu Pichu, five sessions with Nutex oil and Savana at 60 degrees centigrade."
+
+Expected JSON:
+{
+  "total_sessions": 5,
+  "sessions": [
+    {
+      "procedure": "Abhyanga",
+      "companion_procedure": "Janu Pichu",
+      "body_site": "knee",
+      "laterality": "bilateral",
+      "oils_or_ingredients": ["Nutex Oil"],
+      "session_count": 5,
+      "duration_per_session": null,
+      "temperature_celsius": null,
+      "sequence_or_schedule": "5 sessions",
+      "status": "prescribed",
+      "remarks": null,
+      "needs_doctor_confirmation": []
+    },
+    {
+      "procedure": "Swedana",
+      "companion_procedure": null,
+      "body_site": null,
+      "laterality": "generalized",
+      "oils_or_ingredients": [],
+      "session_count": 5,
+      "duration_per_session": null,
+      "temperature_celsius": 60,
+      "sequence_or_schedule": "5 sessions at 60 deg C",
+      "status": "prescribed",
+      "remarks": "Sauna/Steam bath at 60 degrees centigrade",
+      "needs_doctor_confirmation": []
+    }
+  ],
+  "overall_remarks": null
+}
+
+IMPORTANT: Return ONLY valid JSON matching the schema above.
+""",
 
 
-    "treatment_and_background": BASE_RULES + """\
-Extract current treatment background with focus on allopathic medications and ongoing non-drug therapies.
+    "treatment_and_background": """\
+You are an expert clinical AI extracting Current Treatment and Medical Background from doctor dictation.
 
-Rules:
-- Include allopathic medicines here.
-- Do not include SGP/Ayurvedic medicines unless they are mixed into treatment context and cannot be separated.
-- Capture allergies if mentioned, but dedicated allergy extraction should be used when available.
+Extraction Rules:
+1. Capture all ongoing allopathic medications and non-drug clinical therapies.
+2. Exclude SGP/Ayurvedic medicines (those belong in ayurvedic_supplements).
 
 Schema:
 {
@@ -725,8 +874,7 @@ Schema:
       "duration": "string | null",
       "indication": "string | null",
       "timing": "string | null",
-      "adherence": "good | poor | irregular | stopped | unknown | null",
-      "side_effects": ["string"],
+      "adherence": "good | poor | irregular | stopped | null",
       "needs_doctor_confirmation": ["string"]
     }
   ],
@@ -735,16 +883,37 @@ Schema:
   "allergies": ["string"],
   "background_notes": "string | null"
 }
-""" + _SECTION_FOOTER,
 
-    "medication_history": BASE_RULES + """\
-Extract a robust medication history from the transcript.
+FEW-SHOT CLINICAL EXAMPLE:
+Dictation: "Patient is on Telmisartan 40mg once daily for hypertension, ongoing physical therapy twice weekly."
+Expected JSON: {
+  "current_medications": [
+    {
+      "name": "Telmisartan",
+      "dose": "40mg",
+      "frequency": "OD",
+      "route": "oral",
+      "duration": null,
+      "indication": "hypertension",
+      "timing": null,
+      "adherence": "good",
+      "needs_doctor_confirmation": []
+    }
+  ],
+  "ongoing_therapies": ["Physical therapy twice weekly"],
+  "previous_treatments": [],
+  "allergies": [],
+  "background_notes": null
+}
+IMPORTANT: Return ONLY valid JSON matching schema above.
+""",
 
-Rules:
-- Include current, past, stopped, OTC, supplement, allopathic, Ayurvedic and SGP medicines if spoken.
-- For each medication, extract name, dose, frequency, route, duration, indication, adherence and adverse effects.
-- If medicine name or dose is unclear, keep raw text and add needs_doctor_confirmation.
-- Do not create or recommend new medicines.
+    "medication_history": """\
+You are an expert clinical AI extracting Medication History from doctor dictation.
+
+Extraction Rules:
+1. Capture all current, past, and stopped medicines (allopathic, Ayurvedic, OTC, supplements).
+2. System: Must be one of ["allopathic", "ayurvedic", "SGP", "supplement", "home_remedy", "unknown"].
 
 Schema:
 {
@@ -754,32 +923,47 @@ Schema:
       "system": "allopathic | ayurvedic | SGP | supplement | home_remedy | unknown",
       "dose": "string | null",
       "frequency": "string | null",
-      "route": "string | null",
       "duration": "string | null",
-      "timing": "string | null",
       "indication": "string | null",
-      "adherence": "good | poor | irregular | stopped | unknown | null",
-      "side_effects": ["string"],
-      "raw_phrase": "string | null",
+      "adherence": "good | poor | irregular | stopped | null",
       "needs_doctor_confirmation": ["string"]
     }
   ],
   "past_medicines": ["string"],
   "stopped_medicines": ["string"],
   "otc_or_self_medication": ["string"],
-  "duplicate_or_unclear_medicine_risks": ["string"],
   "medication_summary": "string | null"
 }
-""" + _SECTION_FOOTER,
 
+FEW-SHOT CLINICAL EXAMPLE:
+Dictation: "Currently on Telmisartan 40mg OD for hypertension, took Metformin 500mg in the past but stopped 3 months ago."
+Expected JSON: {
+  "current_medicines": [
+    {
+      "name": "Telmisartan",
+      "system": "allopathic",
+      "dose": "40mg",
+      "frequency": "OD",
+      "duration": null,
+      "indication": "hypertension",
+      "adherence": "good",
+      "needs_doctor_confirmation": []
+    }
+  ],
+  "past_medicines": ["Metformin 500mg"],
+  "stopped_medicines": ["Metformin 500mg (stopped 3 months ago)"],
+  "otc_or_self_medication": [],
+  "medication_summary": "On Telmisartan 40mg OD; stopped Metformin 3 months ago."
+}
+IMPORTANT: Return ONLY valid JSON matching schema above.
+""",
 
-    "past_medical_history": BASE_RULES + """\
-Extract past medical, surgical, hospitalization, trauma and family history.
+    "past_medical_history": """\
+You are an expert clinical AI extracting Past Medical History from doctor dictation.
 
-Rules:
-- Medical history means prior or chronic conditions, not today's chief complaint.
-- If no history/nil is stated, return [] for the relevant category and mention in negative_history.
-- Preserve duration if spoken.
+Extraction Rules:
+1. Prior chronic conditions (e.g. Hypertension, Type 2 Diabetes) distinct from today's chief complaint.
+2. Capture hospitalizations, trauma, blood transfusion history, and negative history.
 
 Schema:
 {
@@ -788,16 +972,33 @@ Schema:
   "hospitalizations": ["string"],
   "trauma_history": ["string"],
   "blood_transfusion": "string | null",
-  "implant_or_prosthesis_history": ["string"],
   "family_history": ["string"],
   "allergies": ["string"],
   "negative_history": ["string"],
   "needs_doctor_confirmation": ["string"]
 }
-""" + _SECTION_FOOTER,
 
-    "surgical_history": BASE_RULES + """\
-Extract surgical, procedural and hospitalization history.
+FEW-SHOT CLINICAL EXAMPLE:
+Dictation: "Patient is a known case of Type 2 Diabetes for 5 years and Hypertension for 2 years. No history of surgeries or blood transfusion."
+Expected JSON: {
+  "medical": ["Type 2 Diabetes Mellitus (5 years)", "Hypertension (2 years)"],
+  "surgical": [],
+  "hospitalizations": [],
+  "trauma_history": [],
+  "blood_transfusion": "No history",
+  "family_history": [],
+  "allergies": [],
+  "negative_history": ["No surgical history", "No blood transfusion"],
+  "needs_doctor_confirmation": []
+}
+IMPORTANT: Return ONLY valid JSON matching schema above.
+""",
+
+    "surgical_history": """\
+You are an expert clinical AI extracting Surgical and Procedural History from doctor dictation.
+
+Extraction Rules:
+1. Capture surgeries, procedures, dates, indications, complications, and implants.
 
 Schema:
 {
@@ -819,15 +1020,37 @@ Schema:
   "negative_surgical_history": "string | null",
   "needs_doctor_confirmation": ["string"]
 }
-""" + _SECTION_FOOTER,
 
-    "allergy_history": BASE_RULES + """\
-Extract allergy and adverse reaction history.
+FEW-SHOT CLINICAL EXAMPLE:
+Dictation: "Appendectomy in 2015, no complications. No implants."
+Expected JSON: {
+  "surgeries": [
+    {
+      "procedure": "Appendectomy",
+      "year_or_date": "2015",
+      "indication": "Acute Appendicitis",
+      "hospital": null,
+      "complications": [],
+      "notes": null
+    }
+  ],
+  "hospitalizations": ["Hospitalized for Appendectomy in 2015"],
+  "trauma": [],
+  "implants_or_devices": [],
+  "blood_transfusion": null,
+  "anesthesia_reaction": null,
+  "negative_surgical_history": null,
+  "needs_doctor_confirmation": []
+}
+IMPORTANT: Return ONLY valid JSON matching schema above.
+""",
 
-Rules:
-- Include drug, food, environmental and Ayurvedic/herbal allergies or intolerances.
-- Differentiate confirmed allergy, suspected allergy, intolerance and side effect when stated.
-- If no known allergy is explicitly stated, set no_known_allergies to true.
+    "allergy_history": """\
+You are an expert clinical AI extracting Allergy and Adverse Reaction History from doctor dictation.
+
+Extraction Rules:
+1. Category: Must be one of ["drug", "food", "environmental", "herbal", "ayurvedic", "unknown"].
+2. Severity: Normalize to ["mild", "moderate", "severe", "anaphylaxis", null].
 
 Schema:
 {
@@ -837,22 +1060,34 @@ Schema:
       "substance": "string",
       "category": "drug | food | environmental | herbal | ayurvedic | unknown",
       "reaction": "string | null",
-      "severity": "mild | moderate | severe | anaphylaxis | unknown | null",
-      "date_or_period": "string | null",
-      "status": "confirmed | suspected | intolerance | side_effect | unknown | null",
-      "notes": "string | null",
-      "needs_doctor_confirmation": ["string"]
+      "severity": "mild | moderate | severe | anaphylaxis | null",
+      "notes": "string | null"
     }
   ]
 }
-""" + _SECTION_FOOTER,
 
-    "family_history_detailed": BASE_RULES + """\
-Extract detailed family history.
+FEW-SHOT CLINICAL EXAMPLE:
+Dictation: "Severe penicillin allergy resulting in urticaria. No food allergies."
+Expected JSON: {
+  "no_known_allergies": false,
+  "allergies": [
+    {
+      "substance": "Penicillin",
+      "category": "drug",
+      "reaction": "Urticaria",
+      "severity": "severe",
+      "notes": null
+    }
+  ]
+}
+IMPORTANT: Return ONLY valid JSON matching schema above.
+""",
 
-Rules:
-- Capture condition, relation and relevant age/duration if spoken.
-- If no family history is stated, capture that explicitly.
+    "family_history_detailed": """\
+You are an expert clinical AI extracting Detailed Family History from doctor dictation.
+
+Extraction Rules:
+1. Capture family member relation and medical condition.
 
 Schema:
 {
@@ -860,44 +1095,68 @@ Schema:
     {
       "relation": "string | null",
       "condition": "string",
-      "age_or_duration": "string | null",
-      "status": "alive | deceased | unknown | null",
+      "status": "alive | deceased | null",
       "notes": "string | null"
     }
   ],
   "negative_family_history": ["string"],
-  "hereditary_risk_notes": "string | null",
-  "needs_doctor_confirmation": ["string"]
+  "hereditary_risk_notes": "string | null"
 }
-""" + _SECTION_FOOTER,
 
-    "personal_history": BASE_RULES + """\
-Extract personal, dietary and lifestyle history.
+FEW-SHOT CLINICAL EXAMPLE:
+Dictation: "Father had Type 2 Diabetes and IHD, deceased at age 65. Mother alive and healthy."
+Expected JSON: {
+  "family_conditions": [
+    { "relation": "Father", "condition": "Type 2 Diabetes Mellitus, IHD", "status": "deceased", "notes": "Deceased at age 65" },
+    { "relation": "Mother", "condition": "Healthy", "status": "alive", "notes": null }
+  ],
+  "negative_family_history": [],
+  "hereditary_risk_notes": "Family risk for T2DM and CAD"
+}
+IMPORTANT: Return ONLY valid JSON matching schema above.
+""",
 
-Rules:
-- Capture diet, appetite, bowel, urine, sleep, exercise, occupation, stress and addictions only if stated.
-- Do not judge or add advice here.
+    "personal_history": """\
+You are an expert clinical AI extracting Personal and Lifestyle History from doctor dictation.
+
+Extraction Rules:
+1. Diet: Must be one of ["Vegetarian", "Non-Vegetarian", "Vegan", "Mixed", "Jain", "Satvik", null].
+2. Bowel Habits: Normalize to ["Regular", "Irregular", "Constipated", "Loose", null].
+3. Sleep Quality: Normalize to ["Good", "Fair", "Poor", "Disturbed", null].
+4. Stress Level: Normalize to ["Low", "Moderate", "High", null].
 
 Schema:
 {
-  "diet": "Vegetarian | Non-Vegetarian | Vegan | Mixed | Jain | Satvik | string | null",
-  "diet_details": "string | null",
-  "appetite": "Good | Fair | Poor | Increased | Reduced | string | null",
-  "water_intake": "string | null",
-  "bowel_habits": "Regular | Irregular | Constipated | Loose | string | null",
+  "diet": "Vegetarian | Non-Vegetarian | Vegan | Mixed | Jain | Satvik | null",
+  "appetite": "Good | Reduced | Excessive | Irregular | null",
+  "bowel_habits": "Regular | Irregular | Constipated | Loose | null",
   "urine": "string | null",
   "sleep_hours": "number | null",
-  "sleep_quality": "Good | Fair | Poor | Disturbed | string | null",
+  "sleep_quality": "Good | Fair | Poor | Disturbed | null",
   "exercise": "string | null",
-  "occupation": "string | null",
-  "stress_level": "Low | Moderate | High | string | null",
+  "stress_level": "Low | Moderate | High | null",
   "addictions": [
-    {"type": "string", "quantity": "string | null", "duration": "string | null", "status": "current | past | stopped | unknown | null"}
+    {"type": "string", "quantity": "string | null", "status": "current | past | stopped | null"}
   ],
-  "lifestyle_summary": "string | null",
-  "needs_doctor_confirmation": ["string"]
+  "lifestyle_summary": "string | null"
 }
-""" + _SECTION_FOOTER,
+
+FEW-SHOT CLINICAL EXAMPLE:
+Dictation: "Vegetarian diet, reduced appetite, constipated bowel habits. Sleep is disturbed, about 5 hours. High work stress. Non-smoker."
+Expected JSON: {
+  "diet": "Vegetarian",
+  "appetite": "Reduced",
+  "bowel_habits": "Constipated",
+  "urine": null,
+  "sleep_hours": 5,
+  "sleep_quality": "Disturbed",
+  "exercise": null,
+  "stress_level": "High",
+  "addictions": [],
+  "lifestyle_summary": "Vegetarian with reduced appetite, constipation, 5 hrs disturbed sleep, high stress."
+}
+IMPORTANT: Return ONLY valid JSON matching schema above.
+""",
 
     "menstrual_obstetric_history": BASE_RULES + """\
 Extract menstrual, obstetric and gynecological history when relevant.
@@ -925,13 +1184,15 @@ Schema:
 """ + _SECTION_FOOTER,
 
 
-    "vitals_anthropometry": BASE_RULES + """\
-Extract vitals and anthropometry.
+    "vitals_anthropometry": """\
+You are an expert clinical AI extracting vitals, anthropometry, and blood group data from doctor dictation.
 
-Rules:
-- Extract numeric values and units exactly as spoken.
-- Do not calculate BMI unless height and weight are explicitly present and the transcript asks for BMI; otherwise null.
-- The ERP fields available are height_cm, weight_kg, wrist_cm, waist_cm, fore_arm_cm, hip_cm, temp, bp, pr, rr.
+Extraction Rules:
+1. Extract numeric values for height and weight. Convert feet/inches to cm (1 ft = 30.48 cm, 1 in = 2.54 cm). Convert lbs to kg (1 lb = 0.453 kg).
+2. Blood Pressure (bp): Extract as 'systolic/diastolic' string (e.g., "120/80").
+3. Blood Group: Output ONLY one of ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", null]. Convert spoken phrases ("O positive" -> "O+", "B negative" -> "B-").
+4. Temperature: Include unit if spoken (e.g., "98.6 F" or "37 C").
+5. Calculate BMI ONLY if both height_cm and weight_kg are present: BMI = weight_kg / ((height_cm/100) ^ 2).
 
 Schema:
 {
@@ -948,12 +1209,40 @@ Schema:
   "respiratory_rate": "string | null",
   "spo2": "string | null",
   "blood_sugar": "string | null",
-  "blood_group": "A+ | A- | B+ | B- | AB+ | AB- | O+ | O- | string | null",
+  "blood_group": "A+ | A- | B+ | B- | AB+ | AB- | O+ | O- | null",
   "pain_score": "string | null",
   "notes": "string | null",
   "needs_doctor_confirmation": ["string"]
 }
-""" + _SECTION_FOOTER,
+
+FEW-SHOT CLINICAL EXAMPLE:
+
+Dictation:
+"Vitals patient height is 5 feet 7 inches, weight 70 kilos. BP 130 over 85, pulse rate 76, SpO2 99 percent. Blood group is B positive. Pain score 6 out of 10."
+
+Expected JSON:
+{
+  "height_cm": 170.18,
+  "weight_kg": 70.0,
+  "bmi": 24.17,
+  "wrist_cm": null,
+  "waist_cm": null,
+  "fore_arm_cm": null,
+  "hip_cm": null,
+  "temperature": null,
+  "bp": "130/85",
+  "pulse_rate": "76",
+  "respiratory_rate": null,
+  "spo2": "99%",
+  "blood_sugar": null,
+  "blood_group": "B+",
+  "pain_score": "6/10",
+  "notes": null,
+  "needs_doctor_confirmation": []
+}
+
+IMPORTANT: Return ONLY valid JSON matching the schema above.
+""",
 
     "general_examination": BASE_RULES + """\
 Extract general physical examination.
@@ -1042,50 +1331,34 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "assessment_and_plan": BASE_RULES + """\
-Extract the clinician's Assessment and Plan matching the UI voice dictation structure.
+    "assessment_and_plan": """\
+You are an expert clinical AI extracting Assessment (Diagnoses) and Master Treatment Plan from doctor dictation.
 
-SPEAKING INSTRUCTION FORMAT EXPECTED IN VOICE TRANSCRIPT:
-"Assessments: Allopathic and Ayurvedic diagnoses. Plan: medicines, therapies, panchakarma, investigations advised, home remedies, diet include/exclude (foods to eat and avoid), weekly diet plans (PAD, KPD, VPD, PPD), lifestyle advice, and follow-up schedule."
-
-EXTRACTION RULES:
-1. ASSESSMENTS:
-   - Extract allopathic diagnoses into "allopathic_diagnosis" array.
-   - Extract Ayurvedic diagnoses into "ayurvedic_diagnosis" string.
-   - Extract integrated impression or provisional diagnoses if spoken.
-2. PLAN:
-   - "medications": List all prescribed medicines, SGP supplements, doses, and schedules.
-   - "therapies": External therapies (e.g. Abhyanga, Lepanam, Kashaya Dhara).
-   - "panchakarma": Specific Panchakarma procedures prescribed (e.g. Vamana, Virechana, Basti, Nasyam).
-   - "procedures": Minor clinical procedures.
-   - "investigations": Lab tests, blood tests, X-rays, MRI, CT, USG scans advised.
-   - "home_remedies": Home preparations, teas, decoctions, warm compresses spoken in plan.
-   - "diet_advice":
-     - "include": Foods, soups, grains, or drinks explicitly recommended to eat/drink (e.g. barley soup, warm water, green gram).
-     - "exclude": Foods, drinks, or habits explicitly restricted/avoided (e.g. curd, cold water, fried food, nightshades).
-     - "general": General dietary rules spoken.
-   - "diet_plan_weeks":
-     - Extract EACH duration-based diet schedule dictated (e.g. "PAD 3 weeks", "KPD week 1", "VPD 4 weeks", "PPD").
-     - "week_range": Specific week numbers spoken (e.g. "1", "1-3", "4-6").
-     - "diet_type": Diet category code ("PAD", "KPD", "VPD", "PPD", or custom).
-     - "diet_items": Spoken instructions, foods, or spices (e.g. "with chillies", "light food only").
-   - "lifestyle_advice": Ergonomic advice, posture, habits, or exercise instructions.
-   - "follow_up":
-     - Extract follow-up duration or next visit date (e.g. "after 2 weeks", "next month", "daily", "weekly").
-
-STRICT RULE: Extract every single item dictated by the doctor without missing any points. Do NOT invent recommendations not present in the transcript.
+Extraction Rules:
+1. Diagnoses:
+   - "allopathic_diagnosis": List of ICD/allopathic conditions mentioned (e.g. "Lumbar Radiculopathy", "Hyperlipidemia").
+   - "ayurvedic_diagnosis": Ayurvedic diagnosis term (e.g. "Gridhrasi", "Sandhivata", "Amlapitta").
+2. Lab & Diagnostic Tests Advised ("investigations"):
+   - Extract any blood tests, lab panels, or scans ordered (e.g. "CBP", "ESR", "serum immunoglobulin", "X-ray lumbar spine").
+3. Diet Plan Weeks ("diet_plan_weeks"):
+   - "diet_type": Must be one of ["PAD", "KPD", "VPD", "PPD", null].
+   - "week_range": e.g. "1-3", "4", "1-8".
+   - "diet_items": Specific spoken dietary instructions (e.g. "PAD with chillies", "light warm liquid diet").
+4. Diet Advice:
+   - "include": Foods/drinks explicitly recommended (e.g. "warm water", "barley soup", "green gram").
+   - "exclude": Foods/drinks explicitly restricted (e.g. "curd", "cold water", "fried items", "nightshades").
+5. Follow-up:
+   - Next visit timeframe (e.g. "after 4 weeks", "next month").
 
 Schema:
 {
   "allopathic_diagnosis": ["string"],
   "ayurvedic_diagnosis": "string | null",
   "integrated_clinical_impression": "string | null",
-  "differential_considerations_spoken": ["string"],
   "plan": {
-    "medications": ["string"],
-    "therapies": ["string"],
-    "panchakarma": ["string"],
-    "procedures": ["string"],
+    "medications_summary": ["string"],
+    "therapies_summary": ["string"],
+    "panchakarma_summary": ["string"],
     "investigations": ["string"],
     "home_remedies": ["string"],
     "diet_advice": {
@@ -1096,26 +1369,68 @@ Schema:
     "diet_plan_weeks": [
       {
         "week_range": "string | null",
-        "diet_type": "PAD | KPD | VPD | PPD | string | null",
+        "diet_type": "PAD | KPD | VPD | PPD | null",
         "diet_items": "string | null",
         "notes": "string | null"
       }
     ],
     "lifestyle_advice": ["string"],
-    "exercise_or_rehab": ["string"],
-    "referrals": ["string"],
     "follow_up": {
-      "daily": "string | null",
-      "weekly": "string | null",
-      "monthly": "string | null",
       "next_visit": "string | null"
     }
   },
-  "prognosis": "string | null",
-  "patient_education_spoken": ["string"],
   "needs_doctor_confirmation": ["string"]
 }
-""" + _SECTION_FOOTER,
+
+FEW-SHOT CLINICAL EXAMPLE (REAL DOCTOR DICTATION):
+
+Dictation:
+"Assessment: Gridhrasi with Lumbar Radiculopathy. Plan: Advise CBP, ESR, and serum immunoglobulin. Diet: PAD for weeks 1 to 3, then VPD for week 4. Include warm water and green gram, exclude curd and cold water. Follow up after 4 weeks."
+
+Expected JSON:
+{
+  "allopathic_diagnosis": ["Lumbar Radiculopathy"],
+  "ayurvedic_diagnosis": "Gridhrasi",
+  "integrated_clinical_impression": "Gridhrasi with Lumbar Radiculopathy",
+  "plan": {
+    "medications_summary": [],
+    "therapies_summary": [],
+    "panchakarma_summary": [],
+    "investigations": [
+      "CBP (Complete Blood Picture)",
+      "ESR",
+      "Serum Immunoglobulin"
+    ],
+    "home_remedies": [],
+    "diet_advice": {
+      "include": ["warm water", "green gram"],
+      "exclude": ["curd", "cold water"],
+      "general": []
+    },
+    "diet_plan_weeks": [
+      {
+        "week_range": "1-3",
+        "diet_type": "PAD",
+        "diet_items": "Pitta Aggravating Diet",
+        "notes": null
+      },
+      {
+        "week_range": "4",
+        "diet_type": "VPD",
+        "diet_items": "Vata Pacifying Diet",
+        "notes": null
+      }
+    ],
+    "lifestyle_advice": [],
+    "follow_up": {
+      "next_visit": "4 weeks"
+    }
+  },
+  "needs_doctor_confirmation": []
+}
+
+IMPORTANT: Return ONLY valid JSON matching the schema above.
+""",
 
     "exercises_yoga": BASE_RULES + """\
 Extract exercises, yoga, and physical activity prescriptions.
@@ -1149,41 +1464,92 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "detox_procedures": BASE_RULES + _SGP_PROCEDURE_KNOWLEDGE + """\
-Extract detoxifying procedures, decoctions, home therapies, and SGP-specific protocols.
+    "detox_procedures": """\
+You are an expert clinical AI extracting home detox procedures, dietary soups, and self-administered remedies from doctor dictation.
 
-Rules:
-- APPLY the SGP PROCEDURE CANONICAL NAME CORRECTION TABLE above to identify canonical procedure names.
-- Capture each detox/decoction/home therapy as a separate item.
-- Include: Gandusham, Nithya Virechana Process, Prathivaara Virechana Karma, Anutailam,
-  Steam Inhalations, Fennel Tea, Barley Soup, Rice Soup, Tapioca Soup (Sabu Dana),
-  Raagi Soup (Finger Millet), Jowar Soup, SGP Covid Protocol, hair/skin oil applications,
-  and any other detox, cleanse or decoction procedure mentioned.
-- Do NOT include classical Panchakarma procedures (Abhyanga, Basti, Shirodhara, etc.) here;
-  those belong in the panchakarma section.
-- quantity: e.g., "2 drops", "1-2 tablespoons", "1 litre".
-- frequency: e.g., "daily", "twice a week", "once in a week".
-- timing: e.g., "before bed", "morning empty stomach", "alternate days".
+CANONICAL DETOX & REMEDY NAMES:
+- ragi soup, ragi -> Raagi Soup (Finger Millet)
+- java soup, jowar soup, jwar -> Jowar Soup
+- tapioca soup, sabu dana, saboo dana -> Tapioca Soup (Sabu Dana)
+- barley soup, barley water -> Barley Soup
+- rice soup, kanji -> Rice Soup
+- fennel tea, saunf tea -> Fennel Tea
+- anutailam, anu tailam -> Anutailam Nasal Drops
+- nithya virechana, daily virechana -> Nithya Virechana Process
+- prathivaara virechana -> Prathivaara Virechana Karma
+- gandusham, oil pulling -> Gandusham
+
+Extraction Rules:
+1. Preserve exact quantity, volume (ml/liters), and frequency instructions (e.g. "150-250 ml on alternate days", "2 liters daily").
+2. Include preparation instructions in remarks so downstream SGP pre-saved usage templates attach properly.
 
 Schema:
 {
   "detox_items": [
     {
-      "name": "string",
-      "category": "decoction | oil_application | nasal_drops | virechana | steam | protocol | other | null",
-      "quantity": "string | null",
-      "frequency": "string | null",
-      "timing": "string | null",
-      "instructions": "string | null",
-      "indication": "string | null",
-      "remarks": "string | null",
-      "needs_doctor_confirmation": ["string"]
+      "item_name": "string",
+      "category": "dietary_soup | herbal_tea | home_oil_application | home_purgation | oral_rinse | null",
+      "volume_or_quantity": "string | null",
+      "frequency_and_schedule": "string | null",
+      "preparation_instructions": "string | null",
+      "remarks": "string | null"
     }
-  ],
-  "overall_detox_notes": "string | null",
-  "needs_doctor_confirmation": ["string"]
+  ]
 }
-""" + _SECTION_FOOTER,
+
+FEW-SHOT CLINICAL EXAMPLE (REAL DOCTOR DICTATION):
+
+Dictation:
+"So from the detox remedies, include ragi and java soups, 150 to 250 ml of ragi one day, 250 ml of java soup next day alternate. 2 liters of fennel tea daily, Anutailam oils to be applied, and Nithya Virechana Karma continued."
+
+Expected JSON:
+{
+  "detox_items": [
+    {
+      "item_name": "Raagi Soup (Finger Millet)",
+      "category": "dietary_soup",
+      "volume_or_quantity": "150-250 ml",
+      "frequency_and_schedule": "Alternate days",
+      "preparation_instructions": "Take 150-250 ml on alternating days with Jowar soup",
+      "remarks": null
+    },
+    {
+      "item_name": "Jowar Soup",
+      "category": "dietary_soup",
+      "volume_or_quantity": "250 ml",
+      "frequency_and_schedule": "Alternate days",
+      "preparation_instructions": "Take 250 ml on alternating days with Raagi soup",
+      "remarks": null
+    },
+    {
+      "item_name": "Fennel Tea",
+      "category": "herbal_tea",
+      "volume_or_quantity": "2 liters",
+      "frequency_and_schedule": "Daily",
+      "preparation_instructions": "2 liters to be taken throughout the day",
+      "remarks": null
+    },
+    {
+      "item_name": "Anutailam Nasal Drops",
+      "category": "home_oil_application",
+      "volume_or_quantity": null,
+      "frequency_and_schedule": "As directed",
+      "preparation_instructions": "Home oil application",
+      "remarks": null
+    },
+    {
+      "item_name": "Nithya Virechana Process",
+      "category": "home_purgation",
+      "volume_or_quantity": null,
+      "frequency_and_schedule": "Continued",
+      "preparation_instructions": "Continue ongoing home purgation process",
+      "remarks": null
+    }
+  ]
+}
+
+IMPORTANT: Return ONLY valid JSON matching the schema above.
+""",
 
     "followup_details": BASE_RULES + """\
 Extract follow-up and care continuity details.
