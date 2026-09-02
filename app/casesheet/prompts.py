@@ -126,6 +126,10 @@ Spoken/Misspelled -> Canonical Name:
 - januvasthi, januvasti, janu basti, knee basti -> Januvasthi
 - greeva vasthi, greeva basti, neck basti -> Greeva Vasthi
 - kati vasthi, kati basti, lumbar basti -> Kati Vasthi
+- swedana, sweda, savana, savanna, steam bath, swedanam -> Swedana
+
+CRITICAL PROCEDURE VS OIL RULE:
+- Oils and thailams (e.g. Nutex Oil, Chandanadi Thailam, NeeliBringadi, Anutailam) are ALWAYS ingredients/oils, NEVER standalone procedure names. Put them in oils_or_ingredients array under the procedure they were used with.
 """
 
 WHISPER_INITIAL_PROMPTS: dict[str, str] = {
@@ -359,6 +363,7 @@ Schema:
   "age": "number | null",
   "age_unit": "years | months | days | null",
   "gender": "male | female | other | unknown | null",
+  "blood_group": "A+ | A- | B+ | B- | AB+ | AB- | O+ | O- | string | null",
   "appointment_id": "string | null",
   "visit_type": "new | follow_up | emergency | walk_in | teleconsultation | null",
   "language_detected": "string | null",
@@ -943,6 +948,7 @@ Schema:
   "respiratory_rate": "string | null",
   "spo2": "string | null",
   "blood_sugar": "string | null",
+  "blood_group": "A+ | A- | B+ | B- | AB+ | AB- | O+ | O- | string | null",
   "pain_score": "string | null",
   "notes": "string | null",
   "needs_doctor_confirmation": ["string"]

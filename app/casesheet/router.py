@@ -1411,6 +1411,33 @@ def _parse_measurement_to_cm(val: Any, raw_text: str = "", field_name: str = "")
     return None
 
 
+def _extract_blood_group(val: Any, raw_text: str = "") -> Optional[str]:
+    """
+    Extract and normalize blood group from structured JSON or raw text.
+    Handles 'AB+', 'AB Positive', 'AB plus', 'O negative', 'O-', etc.
+    """
+    if val not in (None, "", "null"):
+        v_str = str(val).strip()
+        match = re.search(r"^(A|B|AB|O)\s*(\+|\-|\bpositive|\bnegative|\bplus|\bminus)", v_str, re.IGNORECASE)
+        if match:
+            bg = match.group(1).upper()
+            rh_raw = match.group(2).lower()
+            rh = "+" if ("pos" in rh_raw or "+" in rh_raw or "plus" in rh_raw) else "-"
+            return f"{bg}{rh}"
+        if v_str.upper() in ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]:
+            return v_str.upper()
+
+    if raw_text:
+        match = re.search(r"\bblood\s*group\s*(is|:|=)?\s*(A|B|AB|O)\s*(\+|\-|\bpositive|\bnegative|\bplus|\bminus)?", raw_text, re.IGNORECASE)
+        if match:
+            bg = match.group(2).upper()
+            rh_raw = (match.group(3) or "").lower()
+            rh = "+" if ("pos" in rh_raw or "+" in rh_raw or "plus" in rh_raw) else "-"
+            return f"{bg}{rh}"
+
+    return None
+
+
 def _clean_pulse_severity(val: Any) -> Optional[str]:
     if not val:
         return None
@@ -1500,27 +1527,35 @@ def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") ->
         for idx, (pos, code) in enumerate(matches):
             next_pos = matches[idx + 1][0] if idx + 1 < len(matches) else len(cleaned)
             segment = cleaned[pos + len(code):next_pos].lower()
-            
-            curr = systems_map.get(code) or {}
-            v_val = curr.get("vata")
-            p_val = curr.get("pitta")
-            k_val = curr.get("kapha")
+
+            # FIX: Transcript is the authoritative source — reset dosha values
+            # to None and re-derive entirely from the raw text segment.
+            # This prevents LLM hallucinations (e.g. invented Pitta) from
+            # surviving into the final output when the transcript contradicts them.
+            v_val = None
+            p_val = None
+            k_val = None
 
             for sev_str, sev_key in [
                 ("moderate severe", "moderate_severe"), ("moderate to severe", "moderate_severe"),
                 ("mild moderate", "mild_moderate"), ("mild to moderate", "mild_moderate"),
-                ("very mild", "very_mild"), ("very-mild", "very_mild"),
+                ("very mild", "very_mild"), ("very-mild", "very_mild"), ("low", "very_mild"),
                 ("moderate", "moderate"), ("mild", "mild"), ("severe", "severe")
             ]:
                 if not v_val and (f"{sev_str} v" in segment or f"v {sev_str}" in segment or f"vata {sev_str}" in segment):
                     v_val = sev_key
                 if not p_val and (f"{sev_str} p" in segment or f"p {sev_str}" in segment or f"pitta {sev_str}" in segment):
                     p_val = sev_key
-                if not k_val and (f"{sev_str} k" in segment or f"k {sev_str}" in segment or f"kapha {sev_str}" in segment):
+                if not k_val and (f"{sev_str} k" in segment or f"k {sev_str}" in segment or f"kapha {sev_str}" in segment or f"caffa {sev_str}" in segment or f"{sev_str} caffa" in segment):
                     k_val = sev_key
 
             if v_val or p_val or k_val:
+                # Transcript parse succeeded — override LLM values for this system
                 systems_map[code] = {"system": code, "vata": v_val, "pitta": p_val, "kapha": k_val}
+            elif code in systems_map:
+                # Transcript found the system code but detected no severity phrase —
+                # keep the LLM value as a best-effort fallback rather than losing data
+                pass
 
     return list(systems_map.values())
 
@@ -1750,6 +1785,18 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
     # Daily regimen synthesis
     oils_list = []
     detox_list = []
+    # Helper: detect LLM schema-placeholder strings (e.g. "string", "string | null",
+    # pipe-delimited enum values echoed verbatim from the prompt).
+    def _is_schema_placeholder(val: str) -> bool:
+        if not val:
+            return False
+        v = val.strip()
+        return (
+            v.lower() in ("string", "null", "string | null", "number | null")
+            or ("string" in v.lower() and "|" in v)
+            or ("null" in v.lower() and "|" in v and len(v) < 60)
+        )
+
     if isinstance(detox, dict):
         raw_items = detox.get("detox_items") or detox.get("items") or []
         if isinstance(raw_items, str):
@@ -1757,7 +1804,9 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
         for d in _as_list(raw_items):
             if isinstance(d, dict):
                 name = _clean(d.get("name"))
-                if not name:
+                # FIX: Discard items whose name is a literal schema placeholder
+                # ("string", "string | null") — the LLM echoed the prompt template.
+                if not name or _is_schema_placeholder(name):
                     continue
                 q = _clean(d.get("quantity")) or ""
                 f = _clean(d.get("frequency")) or ""
@@ -1886,6 +1935,13 @@ def _normalize_supplements_weeks(supplements: Any) -> list:
             while len(existing) < 8:
                 existing.append(last)
             existing = existing[:8]
+            # FIX: If the LLM filled all weeks with the placeholder "1" but the
+            # dose field has a real value (e.g. "1.5", "1.4"), override the weeks
+            # array so the Rx grid shows the correct dose instead of "1" everywhere.
+            dose_val = _clean(new_item.get("dose") or new_item.get("dose_morning") or "")
+            all_placeholder = all(str(v).strip() in ("1", "1.0", "") for v in existing)
+            if all_placeholder and dose_val and any(c.isdigit() for c in dose_val) and dose_val.strip() not in ("1", "1.0"):
+                existing = [dose_val] * 8
             if any(isinstance(v, str) and ("->" in v or ("-" in v and not v.startswith("-") and not v.endswith("-"))) for v in existing):
                 cleaned_weeks = []
                 i = 0
@@ -1963,7 +2019,8 @@ def _map_draft_to_encounter(
     anamn = draft.get("anamnesis") or {}
     symptoms = draft.get("symptom_analysis") or {}
     vitals = draft.get("vitals_anthropometry") or {}
-    raw_vitals_text = (draft.get("_raw_transcripts") or {}).get("vitals_anthropometry") or (draft.get("_raw_transcripts") or {}).get("general_examination") or ""
+    raw_vitals_text = (draft.get("_raw_transcripts") or {}).get("vitals_anthropometry") or (draft.get("_raw_transcripts") or {}).get("general_examination") or (draft.get("_raw_transcripts") or {}).get("_batch_2_full") or ""
+    pat_blood_group = _clean(erp.get("blood_group")) or _extract_blood_group(pat_identity.get("blood_group") if isinstance(pat_identity, dict) else None) or _extract_blood_group(vitals.get("blood_group") if isinstance(vitals, dict) else None, raw_vitals_text)
     vpk = (draft.get("pulse_diagnosis") or {}).get("overall_vpk") if isinstance(draft.get("pulse_diagnosis"), dict) else (draft.get("overall_vpk") or {})
     vpk = vpk or {}
     ayu_ext = draft.get("ayurvedic_assessment_extended") or {}
@@ -2196,6 +2253,7 @@ def _map_draft_to_encounter(
         "age": pat_age,
         "gender": pat_gender,
         "mobile": pat_mobile,
+        "blood_group": pat_blood_group,
         "doctor": doctor_id,
         "appointment": appointment_id,
         "lead": lead_id,
