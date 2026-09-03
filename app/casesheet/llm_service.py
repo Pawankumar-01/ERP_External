@@ -46,23 +46,32 @@ logger = logging.getLogger(__name__)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+# Tier 1: Gemini (Google AI Studio - 1,000,000 TPM Free Tier)
 GEMINI_MODELS = [
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro-latest",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
 ]
+
+# Tier 2: Groq (Ultra-Fast Inference Engine)
 GROQ_MODELS = [
     "qwen/qwen3.8-27b",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.6-27b",
     "groq/compound-mini",
+    "groq/compound",
+    "qwen/qwen3.6-27b",
+    "openai/gpt-oss-120b",
 ]
-PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "openrouter/free")
+
+# Tier 3: OpenRouter (Fallback Routing Tier)
+PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "openrouter/auto")
+
 _raw_candidates = [
     PRIMARY_MODEL,
-    "openrouter/free",
-    "google/gemma-2-9b-it:free",
+    "openrouter/auto",
+    "meta-llama/llama-3.3-70b-instruct",
+    "qwen/qwen-2.5-72b-instruct",
+    "deepseek/deepseek-chat",
 ]
 MODEL_CANDIDATES = []
 for m in _raw_candidates:
@@ -472,11 +481,12 @@ class LLMService:
                             "response_format": {"type": "json_object"},
                         }
                         try:
-                            response = await client.post(GEMINI_URL, headers=gemini_headers, json=payload)
+                            gemini_endpoint = f"{GEMINI_URL}?key={gemini_key}"
+                            response = await client.post(gemini_endpoint, headers=gemini_headers, json=payload)
                             if response.status_code in (429, 503):
                                 logger.warning("Gemini %s temporary overload for model %s. Retrying in 1s...", response.status_code, model)
                                 await asyncio.sleep(1.0)
-                                response = await client.post(GEMINI_URL, headers=gemini_headers, json=payload)
+                                response = await client.post(gemini_endpoint, headers=gemini_headers, json=payload)
                             if response.status_code in (400, 404, 429, 500, 502, 503, 504):
                                 logger.warning("Gemini error %s for model %s: %s", response.status_code, model, response.text[:100])
                                 continue
