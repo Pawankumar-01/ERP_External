@@ -532,10 +532,12 @@ You are an expert clinical AI extracting Nadi Pariksha (Pulse Diagnosis) data fr
 
 Extraction Rules:
 1. Overall VPK Dominance: Must be one of ["V", "P", "K", "VP", "VK", "PK", "VPK", null]. Normalize: PV->VP, KV->VK, KP->PK.
-2. Valid System Codes ONLY: [CVS, GIT, IS, PAN, KUB, PRO, RT, LB, GB, LIV, SS, LSCS, LISI, RB, OBG]. Never invent other system codes.
+2. Valid System Codes ONLY: [LI, SI, LISI, CVS, GIT, IS, PAN, KUB, PRO, RT, LB, GB, LIV, SS, LSCS, RB, OBG]. Never invent other system codes.
 3. STT Phonetic & Alias Mappings (Apply BEFORE extracting):
    - "caffa", "kafa", "kaffa" -> Kapha
-   - "LI", "SI", "Large Intestine", "Small Intestine", "large in this multistance" -> LISI
+   - "LI", "Large Intestine" -> LI
+   - "SI", "Small Intestine" -> SI
+   - "LISI", "Large and Small Intestine" -> LISI
    - "Liver", "Liv" -> LIV
    - "KB", "KUB" -> KUB
    - "Lower Back" -> LB
@@ -557,7 +559,7 @@ Schema:
   },
   "systems": [
     {
-      "system": "CVS | GIT | IS | PAN | KUB | PRO | RT | LB | GB | LIV | SS | LSCS | LISI | RB | OBG",
+      "system": "LI | SI | LISI | CVS | GIT | IS | PAN | KUB | PRO | RT | LB | GB | LIV | SS | LSCS | RB | OBG",
       "vata": "very_mild | mild | mild_moderate | moderate | moderate_severe | severe | null",
       "pitta": "very_mild | mild | mild_moderate | moderate | moderate_severe | severe | null",
       "kapha": "very_mild | mild | mild_moderate | moderate | moderate_severe | severe | null",
@@ -595,6 +597,8 @@ Expected JSON:
     { "system": "GB", "vata": null, "pitta": "mild", "kapha": "mild", "raw_phrase": "GB mild P and mild K", "needs_doctor_confirmation": [] },
     { "system": "LIV", "vata": null, "pitta": null, "kapha": "moderate", "raw_phrase": "LIV moderate K", "needs_doctor_confirmation": [] },
     { "system": "SS", "vata": null, "pitta": null, "kapha": "moderate", "raw_phrase": "SS moderate K", "needs_doctor_confirmation": [] }
+    { "system": "LI", "vata": null, "pitta": null, "kapha": "mild", "raw_phrase": "LI, large in this multistance, mildly aggravated caffa", "needs_doctor_confirmation": [] },
+    { "system": "SI", "vata": null, "pitta": null, "kapha": "mild", "raw_phrase": "SI, small in this multistance, mildly aggravated caffa", "needs_doctor_confirmation": [] },
   ],
   "needs_doctor_confirmation": []
 }
@@ -998,7 +1002,12 @@ IMPORTANT: Return ONLY valid JSON matching schema above.
 You are an expert clinical AI extracting Surgical and Procedural History from doctor dictation.
 
 Extraction Rules:
-1. Capture surgeries, procedures, dates, indications, complications, and implants.
+1. IMPLICIT CLINICAL RECOGNITION: The doctor may NOT explicitly say "surgical history". You MUST identify implicit surgical/procedural terms mentioned anywhere in dictation:
+   - Suffixes: -ectomy (Appendectomy, Cholecystectomy, Hysterectomy, Mastectomy), -otomy (Laparotomy), -plasty (Rhinoplasty, Angioplasty, Arthroplasty), -oscopy (Endoscopy, Colonoscopy, Arthroscopy), -stomy (Colostomy).
+   - Procedures & Abbreviations: CABG, PCI, Stent placement, ORIF, TKR (Total Knee Replacement), THR (Total Hip Replacement), Cataract surgery, C-section / Caesarean, Hernia repair, Spinal fusion, Pacemaker implantation, Tonsillectomy, Bypass.
+   - Implants & Hardware: Mesh, Stent, Pacemaker, Plates/Screws, Joint prosthesis, Intraocular lens (IOL).
+   - Casual mention (e.g. "gallbladder removed 3 years ago", "knee replaced in 2020", "had a stent placed last year") MUST be extracted as surgeries.
+2. Capture surgeries, procedures, dates, indications, complications, implants, and explicit negative history.
 
 Schema:
 {
@@ -1022,22 +1031,30 @@ Schema:
 }
 
 FEW-SHOT CLINICAL EXAMPLE:
-Dictation: "Appendectomy in 2015, no complications. No implants."
+Dictation: "Patient had a CABG 5 years back and cholecystectomy in 2018. Dental implant in 2021. No blood transfusions."
 Expected JSON: {
   "surgeries": [
     {
-      "procedure": "Appendectomy",
-      "year_or_date": "2015",
-      "indication": "Acute Appendicitis",
+      "procedure": "Coronary Artery Bypass Graft (CABG)",
+      "year_or_date": "5 years ago",
+      "indication": "Coronary Artery Disease",
+      "hospital": null,
+      "complications": [],
+      "notes": null
+    },
+    {
+      "procedure": "Cholecystectomy",
+      "year_or_date": "2018",
+      "indication": "Gallbladder disease",
       "hospital": null,
       "complications": [],
       "notes": null
     }
   ],
-  "hospitalizations": ["Hospitalized for Appendectomy in 2015"],
+  "hospitalizations": ["Hospitalized for CABG 5 years ago", "Hospitalized for Cholecystectomy in 2018"],
   "trauma": [],
-  "implants_or_devices": [],
-  "blood_transfusion": null,
+  "implants_or_devices": ["Dental implant (2021)"],
+  "blood_transfusion": "No blood transfusions",
   "anesthesia_reaction": null,
   "negative_surgical_history": null,
   "needs_doctor_confirmation": []
@@ -1049,8 +1066,12 @@ IMPORTANT: Return ONLY valid JSON matching schema above.
 You are an expert clinical AI extracting Allergy and Adverse Reaction History from doctor dictation.
 
 Extraction Rules:
-1. Category: Must be one of ["drug", "food", "environmental", "herbal", "ayurvedic", "unknown"].
-2. Severity: Normalize to ["mild", "moderate", "severe", "anaphylaxis", null].
+1. IMPLICIT CLINICAL RECOGNITION: The doctor may NOT explicitly use the word "allergy". You MUST infer allergies and hypersensitivities from clinical descriptions:
+   - Adverse Drug Reactions: "gets hives/rash from Amoxicillin", "facial swelling after Sulfa drugs", "bronchospasm with Aspirin", "cannot take Penicillin".
+   - Food & Environmental Hypersensitivities: "breaks out in rashes with peanuts or seafood", "milk causes severe hives", "dust/pollen causes allergic rhinitis".
+   - Hypersensitivity Indicators: Urticaria, Hives, Rash, Pruritus, Angioedema, Anaphylaxis, Facial/lip swelling, Wheezing/bronchospasm triggered by a specific drug, food, or substance.
+2. Category: Must be one of ["drug", "food", "environmental", "herbal", "ayurvedic", "unknown"].
+3. Severity: Normalize to ["mild", "moderate", "severe", "anaphylaxis", null].
 
 Schema:
 {
@@ -1067,15 +1088,22 @@ Schema:
 }
 
 FEW-SHOT CLINICAL EXAMPLE:
-Dictation: "Severe penicillin allergy resulting in urticaria. No food allergies."
+Dictation: "Patient gets rashes and lip swelling whenever taking Amoxicillin. Also breaks out in hives with peanuts."
 Expected JSON: {
   "no_known_allergies": false,
   "allergies": [
     {
-      "substance": "Penicillin",
+      "substance": "Amoxicillin",
       "category": "drug",
-      "reaction": "Urticaria",
-      "severity": "severe",
+      "reaction": "Rashes, Lip swelling",
+      "severity": "moderate",
+      "notes": null
+    },
+    {
+      "substance": "Peanuts",
+      "category": "food",
+      "reaction": "Hives",
+      "severity": "moderate",
       "notes": null
     }
   ]
@@ -2112,7 +2140,7 @@ PULSE DIAGNOSIS EXTRACTION RULES:
   "VPK" = Vata AND Pitta AND Kapha -> set ALL THREE to the stated severity
   Single "V" = only Vata; Single "P" = only Pitta; Single "K" = only Kapha
 - SPOKEN SYSTEM ALIASES:
-  "Liver" / "Liv" -> LIV, "KB" / "KUB" -> KUB, "Pro" -> PRO, "SS" / "Skeletal" -> SS, "GB" -> GB, "LB" / "Lower Back" -> LB, "LSCS" -> LSCS, "LISI" / "LI" / "SI" / "Large Intestine" / "Small Intestine" -> LISI, "RB" -> RB, "OBG" -> OBG, "IS" -> IS, "GIT" -> GIT, "CVS" -> CVS, "PAN" -> PAN, "RT" -> RT.
+  "Liver" / "Liv" -> LIV, "KB" / "KUB" -> KUB, "Pro" -> PRO, "SS" / "Skeletal" -> SS, "GB" -> GB, "LB" / "Lower Back" -> LB, "LSCS" -> LSCS, "LI" / "Large Intestine" -> LI, "SI" / "Small Intestine" -> SI, "LISI" -> LISI, "RB" -> RB, "OBG" -> OBG, "IS" -> IS, "GIT" -> GIT, "CVS" -> CVS, "PAN" -> PAN, "RT" -> RT.
 - LOW SEVERITY ALIASES:
   "low V", "low P", "low K", "low VPK" -> set severity to "very_mild" for those doshas.
 
@@ -2124,6 +2152,8 @@ Return ONLY a valid JSON object whose top-level keys are EXACTLY:
 - "pulse_diagnosis": {{
     "overall_vpk": {{"dominance": string|null, "prakriti": string|null, "vikriti": string|null, "notes": string|null}},
     "systems": [
+      {{"system": "LI", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "SI", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
       {{"system": "LISI", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
       {{"system": "CVS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
       {{"system": "RB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
@@ -2145,7 +2175,7 @@ Return ONLY a valid JSON object whose top-level keys are EXACTLY:
 Rules:
 - For vitals_anthropometry, if wrist, waist, forearm, or hip are spoken in inches (e.g., "6.5 inches"), extract as number or string in inches/cm.
 - For pulse_diagnosis, follow all compound expansion and system alias rules above. Convert severity ratings like "very mild", "mild", "moderate", "severe" to lowercase strings under vata, pitta, or kapha for each organ system code.
-- Speech-to-Text ASR phonetic mappings: "MILE" or "mile" MUST be treated as "mild". "LI", "SI", "L I", "S I", "Large Intestine", "Small Intestine" map to LISI. "R T" -> RT, "G B" -> GB, "L V" -> LIV, "S S" -> SS, "ISE" -> IS, "LISMODERATE" -> LISI Moderate.
+- Speech-to-Text ASR phonetic mappings: "MILE" or "mile" MUST be treated as "mild". "LI", "L I", "Large Intestine" map to LI. "SI", "S I", "Small Intestine" map to SI. "LISI" maps to LISI. "R T" -> RT, "G B" -> GB, "L V" -> LIV, "S S" -> SS, "ISE" -> IS.
 - Do NOT return reprompt errors. Return valid JSON only.
 """,
     3: f"""\

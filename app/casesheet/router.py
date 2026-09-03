@@ -1465,7 +1465,7 @@ def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") ->
     Handles clean LLM JSON, phonetic ASR mishearings, and fallback regex extraction.
     """
     systems_map = {}
-    valid_codes_list = ["LISI", "CVS", "RB", "GIT", "IS", "PAN", "PRO", "LB", "GB", "RT", "LIV", "SS", "LSCS", "OBG", "KUB"]
+    valid_codes_list = ["LI", "SI", "LISI", "CVS", "RB", "GIT", "IS", "PAN", "PRO", "LB", "GB", "RT", "LIV", "SS", "LSCS", "OBG", "KUB"]
     valid_codes = set(valid_codes_list)
 
     # 1. Inspect existing LLM output list
@@ -1477,7 +1477,9 @@ def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") ->
         if isinstance(item, dict):
             sys_code = (item.get("system") or "").strip().upper()
             if sys_code in ["LV", "L V"]: sys_code = "LIV"
-            if sys_code in ["LI", "SI", "L I", "S I", "LARGE INTESTINE", "SMALL INTESTINE"]: sys_code = "LISI"
+            if sys_code in ["LI", "L I", "LARGE INTESTINE"]: sys_code = "LI"
+            if sys_code in ["SI", "S I", "SMALL INTESTINE"]: sys_code = "SI"
+            if sys_code in ["LISI", "L I S I", "LARGE AND SMALL INTESTINE"]: sys_code = "LISI"
             if sys_code == "R T": sys_code = "RT"
             if sys_code == "G B": sys_code = "GB"
             if sys_code == "S S": sys_code = "SS"
@@ -1505,10 +1507,10 @@ def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") ->
         cleaned = raw_transcript
         cleaned = re.sub(r'\bMILE\b', 'MILD', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\bMILE TO MODERATE\b', 'MILD TO MODERATE', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bL\s*I\b', 'LISI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bS\s*I\b', 'LISI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bLARGE INTESTINE\b', 'LISI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bSMALL INTESTINE\b', 'LISI', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\bLARGE INTESTINE\b', 'LI', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\bSMALL INTESTINE\b', 'SI', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\bL\s+I\b', 'LI', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\bS\s+I\b', 'SI', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\bR\s+T\b', 'RT', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\bG\s+B\b', 'GB', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\bL\s+V\b', 'LIV', cleaned, flags=re.IGNORECASE)

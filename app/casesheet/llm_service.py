@@ -46,12 +46,11 @@ logger = logging.getLogger(__name__)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-# Tier 1: Gemini (Google AI Studio - 1,000,000 TPM Free Tier)
+# Tier 1: Gemini (Google AI Studio - Active Production Models)
 GEMINI_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    "gemini-3.5-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-flash",
 ]
 
 # Tier 2: Groq (Ultra-Fast Inference Engine)
@@ -466,7 +465,77 @@ class LLMService:
 
         async with self._semaphore:
             async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-                # ── Tier 1 Primary: Google Gemini API (1,000,000 TPM Free Limit) ──
+                # ── Tier 1 Primary Engine: Groq (Ultra-Fast <300ms Inference) ──
+                if groq_key:
+                    groq_headers = {
+                        "Authorization": f"Bearer {groq_key}",
+                        "Content-Type": "application/json",
+                    }
+                    for model in GROQ_MODELS:
+                        payload = {
+                            "model": model,
+                            "messages": self._prepare_messages_for_model(messages, model),
+                            "temperature": 0.1,
+                            "max_tokens": int(max_tokens),
+                            "response_format": {"type": "json_object"},
+                        }
+                        try:
+                            response = await client.post(GROQ_URL, headers=groq_headers, json=payload)
+                            if response.status_code == 429:
+                                logger.warning("Groq 429 rate limit for model %s. Trying next Groq model...", model)
+                                continue
+                            if response.status_code in (400, 404, 429, 500, 502, 503, 504):
+                                logger.warning("Groq error %s for model %s: %s", response.status_code, model, response.text[:100])
+                                continue
+                            response.raise_for_status()
+                            data = response.json()
+                            choice_msg = data.get("choices", [{}])[0].get("message", {})
+                            content = choice_msg.get("content") or choice_msg.get("reasoning") or ""
+                            if content:
+                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                            if content:
+                                logger.info("LLM extraction succeeded via Groq (%s)", model)
+                                return content
+                        except httpx.HTTPError as err:
+                            logger.warning("HTTP error on Groq model %s: %s", model, err)
+                            continue
+                    logger.warning("All Groq models failed. Falling back to OpenRouter...")
+
+                # ── Tier 2 Engine: OpenRouter (Robust Multi-Provider Fallback) ──
+                if openrouter_key:
+                    headers = {
+                        "Authorization": f"Bearer {openrouter_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://sgp.clinic",
+                        "X-Title": "SGP Clinical AI",
+                    }
+                    for model in MODEL_CANDIDATES:
+                        payload = {
+                            "model": model,
+                            "messages": self._prepare_messages_for_model(messages, model),
+                            "temperature": 0.1,
+                            "max_tokens": int(max_tokens),
+                        }
+                        try:
+                            response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+                            if response.status_code in (400, 404, 429, 500, 502, 503, 504):
+                                logger.warning("OpenRouter %s error for model %s: %s", response.status_code, model, response.text[:100])
+                                continue
+                            response.raise_for_status()
+                            data = response.json()
+                            choice_msg = data.get("choices", [{}])[0].get("message", {})
+                            content = choice_msg.get("content") or choice_msg.get("reasoning") or ""
+                            if content:
+                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                            if content:
+                                logger.info("LLM extraction succeeded via OpenRouter (%s)", model)
+                                return content
+                        except httpx.HTTPError as err:
+                            logger.warning("HTTP error on OpenRouter model %s: %s", model, err)
+                            continue
+                    logger.warning("All OpenRouter models failed. Falling back to Gemini...")
+
+                # ── Tier 3 Fallback: Google Gemini API ──
                 if gemini_key:
                     gemini_headers = {
                         "Authorization": f"Bearer {gemini_key}",
@@ -502,78 +571,6 @@ class LLMService:
                         except httpx.HTTPError as err:
                             logger.warning("HTTP error on Gemini model %s: %s", model, err)
                             continue
-                    logger.warning("All Gemini models failed. Falling back to Groq...")
-
-                # ── Tier 2 Engine: Groq ──
-                if groq_key:
-                    groq_headers = {
-                        "Authorization": f"Bearer {groq_key}",
-                        "Content-Type": "application/json",
-                    }
-                    for model in GROQ_MODELS:
-                        payload = {
-                            "model": model,
-                            "messages": self._prepare_messages_for_model(messages, model),
-                            "temperature": 0.1,
-                            "max_tokens": int(max_tokens),
-                            "response_format": {"type": "json_object"},
-                        }
-                        try:
-                            response = await client.post(GROQ_URL, headers=groq_headers, json=payload)
-                            if response.status_code == 429:
-                                logger.warning("Groq 429 rate limit for model %s. Retrying after 6s backoff...", model)
-                                await asyncio.sleep(6.0)
-                                response = await client.post(GROQ_URL, headers=groq_headers, json=payload)
-                                if response.status_code == 429:
-                                    logger.warning("Groq 429 rate limit again for model %s. Retrying after 10s backoff...", model)
-                                    await asyncio.sleep(10.0)
-                                    response = await client.post(GROQ_URL, headers=groq_headers, json=payload)
-                            if response.status_code in (400, 404, 429, 500, 502, 503, 504):
-                                logger.warning("Groq error %s for model %s: %s", response.status_code, model, response.text[:100])
-                                continue
-                            response.raise_for_status()
-                            data = response.json()
-                            choice_msg = data.get("choices", [{}])[0].get("message", {})
-                            content = choice_msg.get("content") or choice_msg.get("reasoning") or ""
-                            if content:
-                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                            if content:
-                                logger.info("LLM extraction succeeded via Groq (%s)", model)
-                                return content
-                        except httpx.HTTPError as err:
-                            logger.warning("HTTP error on Groq model %s: %s", model, err)
-                            continue
-                    logger.warning("All Groq models failed. Falling back to OpenRouter...")
-
-                # ── Tier 3 Engine: OpenRouter ──
-                if openrouter_key:
-                    headers = {
-                        "Authorization": f"Bearer {openrouter_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://sgp.clinic",
-                        "X-Title": "SGP Clinical AI",
-                    }
-                    for model in MODEL_CANDIDATES:
-                        payload = {
-                            "model": model,
-                            "messages": self._prepare_messages_for_model(messages, model),
-                            "temperature": 0.1,
-                            "max_tokens": int(max_tokens),
-                        }
-                        try:
-                            response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-                            if response.status_code in (400, 404, 429, 500, 502, 503, 504):
-                                logger.warning("OpenRouter %s error for model %s: %s", response.status_code, model, response.text[:100])
-                                continue
-                            response.raise_for_status()
-                            data = response.json()
-                            choice_msg = data.get("choices", [{}])[0].get("message", {})
-                            content = choice_msg.get("content") or choice_msg.get("reasoning") or ""
-                            if content:
-                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                            if content:
-                                logger.info("LLM extraction succeeded via OpenRouter (%s)", model)
-                                return content
                         except httpx.HTTPError as err:
                             logger.warning("HTTP error on OpenRouter model %s: %s", model, err)
                             continue
