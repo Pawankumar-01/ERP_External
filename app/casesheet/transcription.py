@@ -85,11 +85,11 @@ def _transcribe_sync(
 
         transcribe_kwargs = dict(
             language=effective_lang,
-            beam_size=5,
-            temperature=[0.0, 0.2, 0.4],
+            beam_size=2,
+            temperature=0.0,
             vad_filter=True,                              # skip silence safely without dropping trailing speech
-            vad_parameters={"min_silence_duration_ms": 2000, "speech_pad_ms": 400},
-            condition_on_previous_text=True,              # helps with continuous dictation
+            vad_parameters={"min_silence_duration_ms": 1000, "speech_pad_ms": 300},
+            condition_on_previous_text=False,             # prevents infinite looping on repetitive audio segments
         )
         if initial_prompt:
             transcribe_kwargs["initial_prompt"] = initial_prompt
