@@ -1,22 +1,3 @@
-"""
-Casesheet API Router
-────────────────────
-Endpoints:
-  POST   /start                    → init session, return session_id
-  POST   /{session_id}/audio       → accept audio chunk, transcribe + extract in background
-  GET    /{session_id}/draft       → fetch current draft JSON
-  PATCH  /{session_id}/draft       → manually update specific sections
-  POST   /{session_id}/retranscribe/{section} → re-process corrected transcript
-  POST   /{session_id}/finalize    → push final draft to ERPNext Patient Encounter
-  GET    /                         → list sessions (paginated, filter by doctor/patient)
-  GET    /pending                  → list unsubmitted drafts for a practitioner dashboard
-
-Architecture:
-  - Audio processing (Whisper + LLM) runs in BackgroundTasks — never blocks event loop
-  - Draft state lives in PostgreSQL (JSON column) — no in-memory state
-  - start: lookup patient by mobile number
-  - finalize: creates SGP Encounter in ERPNext with all casesheet fields
-"""
 
 import logging
 import re
@@ -41,7 +22,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-# ── Schemas ────────────────────────────────────────────────────────────────────
 
 class StartSessionRequest(BaseModel):
     mobile:             str
@@ -71,7 +51,6 @@ class SessionListItem(BaseModel):
 
 
 class PendingSessionItem(BaseModel):
-    """Enriched session info for the practitioner draft dashboard."""
     session_id:              str
     patient_id:              str
     patient_name:            Optional[str]
@@ -101,7 +80,6 @@ class FinalizeResponse(BaseModel):
     message:            str
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.get("/", response_model=List[SessionListItem])
 async def list_sessions(
@@ -136,14 +114,9 @@ async def list_sessions(
 
 @router.get("/practitioners")
 async def list_practitioners(db: AsyncSession = Depends(get_db)):
-    """
-    Return all available Healthcare Practitioners directly from ERPNext DocType.
-    Returns a deduplicated list of practitioner objects with `id`, `name`, `department`, `designation`.
-    """
     practitioners: List[Dict[str, Any]] = []
     seen_ids = set()
 
-    # 1. Fetch live practitioners directly from ERPNext Healthcare Practitioner DocType
     try:
         erp_list = await erp_bridge_service.get_practitioners()
         for doc in erp_list:
@@ -162,7 +135,6 @@ async def list_practitioners(db: AsyncSession = Depends(get_db)):
     except Exception as err:
         logger.warning(f"Error fetching ERPNext practitioners: {err}")
 
-    # 2. Fallback to local database doctor_ids ONLY if ERPNext returned nothing
     if not practitioners:
         try:
             result = await db.execute(select(CasesheetSession.doctor_id).distinct())
@@ -195,7 +167,6 @@ async def list_pending_sessions(
     doctor_id: str = Query(..., description="Practitioner ID to fetch unsubmitted drafts for"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return all non-finalized sessions for a practitioner, enriched with section progress."""
     query = (
         select(CasesheetSession)
         .where(CasesheetSession.doctor_id == doctor_id)
@@ -213,7 +184,6 @@ async def list_pending_sessions(
     total_sections = len(VALID_SECTIONS)
     items: List[PendingSessionItem] = []
     for s in sessions:
-        # Count how many clinical sections have data in the draft
         draft_data = {}
         if s.draft:
             draft_data = s.draft.draft or {}
@@ -221,10 +191,10 @@ async def list_pending_sessions(
             1 for k, v in draft_data.items()
             if k in VALID_SECTIONS
             and isinstance(v, dict)
-            and not v.get("_error")           # exclude failed extractions
+            and not v.get("_error")
             and (
-                v.get("status") == "completed"  # image-processed sections have wrapper
-                or (                            # audio sections stored as flat dicts
+                v.get("status") == "completed"
+                or (
                     "status" not in v
                     and any(
                         val is not None and val != "" and val != [] and val != {}
@@ -251,7 +221,6 @@ async def list_pending_sessions(
 
 @router.get("/patient-lookup")
 async def lookup_patient(mobile: str):
-    """Lookup patient by mobile number before starting session."""
     patient = await erp_bridge_service.get_patient_by_mobile(mobile)
     if not patient:
         raise HTTPException(status_code=404, detail="No patient found with this mobile number.")
@@ -268,7 +237,6 @@ async def start_session(
     payment_entry_id = None
     paid_amount      = None
 
-    # ── Step 1: Lookup patient by mobile ──────────────────────────────────
     patient = await erp_bridge_service.get_patient_by_mobile(req.mobile)
     if not patient:
         raise HTTPException(
@@ -282,7 +250,6 @@ async def start_session(
     if not doctor_id:
         raise HTTPException(status_code=400, detail="doctor_id is required.")
 
-    # ── Step 2: Payment gate (optional — free consultations allowed) ───────
     if not req.skip_payment_check:
         payment = await erp_bridge_service.get_payment_for_patient(patient_id)
         if not payment:
@@ -303,7 +270,6 @@ async def start_session(
     else:
         payment_verified = True
 
-    # ── Step 3: Create session + draft ────────────────────────────────────
     session = CasesheetSession(
         id=str(uuid.uuid4()),
         patient_id=patient_id,
@@ -378,16 +344,10 @@ async def process_full_consultation_audio(
     session_id: str,
     background_tasks: BackgroundTasks,
     language: Optional[str] = Form(None),
-    mode: Optional[str] = Form("ambient"),  # "ambient" (during visit) or "monologue" (post-visit dictation)
+    mode: Optional[str] = Form("ambient"),
     audio: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Ambient Continuous Consultation Recording Endpoint (V2 Workflow).
-
-    Receives a single audio file covering the entire patient consultation or doctor monologue.
-    Transcribes the entire audio once, then extracts data for all 24 sections in parallel.
-    """
     session = await _get_session(db, session_id)
     if session.status == SessionStatus.FINALIZED:
         raise HTTPException(status_code=409, detail="Session already finalized")
@@ -401,7 +361,6 @@ async def process_full_consultation_audio(
         f"size={len(audio_bytes)} bytes lang={language}"
     )
 
-    # Immediately mark session as PROCESSING with initial progress state
     session.status = SessionStatus.PROCESSING
     session.processing_progress = {
         "status": "transcribing",
@@ -439,12 +398,6 @@ async def process_batch_consultation_audio(
     audio: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Batch Monologue Consultation Recording Endpoint (V2 Workflow).
-
-    Receives audio for a specific domain batch (1, 2, or 3).
-    Transcribes batch audio, extracts data for batch sections, and updates draft immediately.
-    """
     session = await _get_session(db, session_id)
     if session.status == SessionStatus.FINALIZED:
         raise HTTPException(status_code=409, detail="Session already finalized")
@@ -460,9 +413,6 @@ async def process_batch_consultation_audio(
 
     batch_total = 12 if batch_index == 1 else (6 if batch_index in (2, 3) else 24)
 
-    # Merge into existing progress — preserves completed/processing state of OTHER batches.
-    # Replacing the entire dict would wipe sibling batch_X keys which the Flutter
-    # polling uses to drive its state machine.
     existing_prog = dict(session.processing_progress or {})
     existing_prog[f"batch_{batch_index}"] = {
         "status": "transcribing",
@@ -503,10 +453,6 @@ async def get_processing_status(
     session_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Poll processing progress for ambient full-consultation extraction.
-    Returns status ('transcribing', 'extracting', 'completed', 'failed') and section progress count.
-    """
     session = await _get_session(db, session_id)
     progress = session.processing_progress or {
         "status": "idle",
@@ -817,14 +763,13 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
         lead_id=session.lead_id,
         )
 
-    # ── Resilient ERPNext submission — capture error, never lose draft ─────
     try:
         encounter = await erp_bridge_service.create_encounter(encounter_payload)
     except Exception as exc:
         error_msg = f"ERPNext encounter creation error: {exc}"
         logger.error(f"Session {session_id}: {error_msg}")
         session.status     = SessionStatus.FAILED
-        session.last_error = error_msg[:2000]  # truncate to avoid oversized field
+        session.last_error = error_msg[:2000]
         await db.commit()
         raise HTTPException(status_code=502, detail=error_msg)
 
@@ -838,10 +783,9 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
     encounter_id             = encounter.get("name")                                
     session.status           = SessionStatus.FINALIZED
     session.erp_encounter_id = encounter_id
-    session.last_error       = None  # clear any previous failure reason
+    session.last_error       = None
     await db.commit()
 
-    # Automatically attach captured image files to the SGP Encounter in Frappe/ERPNext
     try:
         await _attach_draft_images_to_encounter(encounter_id, draft_data)
     except Exception as e:
@@ -869,7 +813,6 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
     )
 
 
-# ── Background tasks ──────────────────────────────────────────────────────────
 
 async def _attach_draft_images_to_encounter(encounter_id: str, draft: dict):
     if not encounter_id or encounter_id == "PLACEHOLDER":
@@ -1009,16 +952,9 @@ async def _process_full_audio_background(
     language: Optional[str] = None,
     mode: str = "ambient",
 ) -> None:
-    """
-    Background worker for full consultation audio processing.
-    1. Transcribes full audio using faster-whisper with WHISPER_AMBIENT_PROMPT.
-    2. Runs extract_sections_from_full_transcript to populate draft JSON.
-    3. Updates processing_progress and session status in DB progressively.
-    """
     from app.config.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         try:
-            # 1. Update progress -> transcribing
             sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
             session = sess_res.scalar_one_or_none()
             if session:
@@ -1033,7 +969,6 @@ async def _process_full_audio_background(
                 }
                 await db.commit()
 
-            # 2. Transcribe full audio
             logger.info(
                 f"Ambient background: starting STT for session={session_id} "
                 f"audio_size={len(audio_bytes)} mode={mode}"
@@ -1045,7 +980,6 @@ async def _process_full_audio_background(
             )
             logger.info(f"Ambient STT complete for session={session_id}: transcript len={len(transcript)}")
 
-            # Update progress -> extracting
             sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
             session = sess_res.scalar_one_or_none()
             if session:
@@ -1060,7 +994,6 @@ async def _process_full_audio_background(
                 }
                 await db.commit()
 
-            # Callback to update draft and progress as each section finishes
             sections_completed = 0
             async def on_section_done(section_key: str, section_data: Optional[dict]):
                 nonlocal sections_completed
@@ -1088,13 +1021,11 @@ async def _process_full_audio_background(
                 except Exception as inner_err:
                     logger.warning(f"Error in on_section_done callback for {section_key}: {inner_err}")
 
-            # 3. Parallel section extraction
             extracted = await llm_service.extract_sections_from_full_transcript(
                 transcript=transcript,
                 on_section_done=on_section_done,
             )
 
-            # 4. Final bulk merge and synthesize prescription sheet
             d_res = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
             draft_row = d_res.scalar_one_or_none()
             if draft_row:
@@ -1107,11 +1038,9 @@ async def _process_full_audio_background(
                 for k in extracted.keys():
                     current["_raw_transcripts"][k] = transcript
 
-                # Synthesize prescription sheet summary
                 current["prescription_sheet"] = _synthesize_prescription_sheet(current)
                 draft_row.draft = current
 
-            # Mark session completed & active for doctor review
             sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
             session = sess_res.scalar_one_or_none()
             if session:
@@ -1158,10 +1087,6 @@ async def _process_batch_audio_background(
     language: Optional[str] = None,
     mode: str = "monologue",
 ) -> None:
-    """
-    Background worker for single domain batch monologue audio processing.
-    Ensures non-destructive deep-merging into CasesheetDraft and accurate per-batch progress.
-    """
     from app.config.database import AsyncSessionLocal
 
     batch_total = 12 if batch_index == 1 else (6 if batch_index in (2, 3) else 24)
@@ -1238,7 +1163,6 @@ async def _process_batch_audio_background(
 
             batch_results = await llm_service.extract_batch_transcript(batch_index, transcript, on_section_done=_on_sec_done)
 
-            # Update DB draft with deep merging (preserving prior batch outputs)
             d_res = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
             draft_row = d_res.scalar_one_or_none()
             if draft_row:
@@ -1254,7 +1178,6 @@ async def _process_batch_audio_background(
                         clean_snippet = raw_transcripts_map.get(k) or transcript
                         current["_raw_transcripts"][k] = clean_snippet
 
-                # Also preserve the full raw monologue transcript for reference
                 current["_raw_transcripts"][f"_batch_{batch_index}_full"] = transcript
 
                 draft_row.draft = current
@@ -1298,7 +1221,6 @@ async def _process_batch_audio_background(
                 await db.commit()
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
 
 
 async def _get_session(db: AsyncSession, session_id: str) -> CasesheetSession:
@@ -1371,11 +1293,6 @@ def _num_or_none(value: Any):
 
 
 def _parse_measurement_to_cm(val: Any, raw_text: str = "", field_name: str = "") -> Optional[float]:
-    """
-    Robust unit-aware measurement parser for anthropometry.
-    Parses numbers, strings (e.g. '6.5 inches', '28 in', '176.0 Cms'),
-    converts inches to cm (val * 2.54), and falls back to scanning raw transcripts.
-    """
     if val not in (None, ""):
         if isinstance(val, (int, float)):
             num = float(val)
@@ -1412,10 +1329,6 @@ def _parse_measurement_to_cm(val: Any, raw_text: str = "", field_name: str = "")
 
 
 def _extract_blood_group(val: Any, raw_text: str = "") -> Optional[str]:
-    """
-    Extract and normalize blood group from structured JSON or raw text.
-    Handles 'AB+', 'AB Positive', 'AB plus', 'O negative', 'O-', etc.
-    """
     if val not in (None, "", "null"):
         v_str = str(val).strip()
         match = re.search(r"^(A|B|AB|O)\s*(\+|\-|\bpositive|\bnegative|\bplus|\bminus)", v_str, re.IGNORECASE)
@@ -1460,15 +1373,10 @@ def _clean_pulse_severity(val: Any) -> Optional[str]:
 
 
 def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") -> list:
-    """
-    Guarantees 100% pulse diagnosis extraction without data loss.
-    Handles clean LLM JSON, phonetic ASR mishearings, and fallback regex extraction.
-    """
     systems_map = {}
-    valid_codes_list = ["LI", "SI", "LISI", "CVS", "RB", "GIT", "IS", "PAN", "PRO", "LB", "GB", "RT", "LIV", "SS", "LSCS", "OBG", "KUB"]
+    valid_codes_list = ["LISI", "CVS", "RB", "GIT", "IS", "PAN", "PRO", "LB", "GB", "RT", "LIV", "SS", "LSCS", "OBG", "KUB"]
     valid_codes = set(valid_codes_list)
 
-    # 1. Inspect existing LLM output list
     items = pulse_raw if isinstance(pulse_raw, list) else []
     if isinstance(pulse_raw, dict):
         items = pulse_raw.get("systems") or []
@@ -1477,9 +1385,7 @@ def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") ->
         if isinstance(item, dict):
             sys_code = (item.get("system") or "").strip().upper()
             if sys_code in ["LV", "L V"]: sys_code = "LIV"
-            if sys_code in ["LI", "L I", "LARGE INTESTINE"]: sys_code = "LI"
-            if sys_code in ["SI", "S I", "SMALL INTESTINE"]: sys_code = "SI"
-            if sys_code in ["LISI", "L I S I", "LARGE AND SMALL INTESTINE"]: sys_code = "LISI"
+            if sys_code in ["LI", "SI", "L I", "S I", "LARGE INTESTINE", "SMALL INTESTINE"]: sys_code = "LISI"
             if sys_code == "R T": sys_code = "RT"
             if sys_code == "G B": sys_code = "GB"
             if sys_code == "S S": sys_code = "SS"
@@ -1502,15 +1408,14 @@ def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") ->
                 else:
                     systems_map[sys_code] = {"system": sys_code, "vata": v, "pitta": p, "kapha": k}
 
-    # 2. ASR Text Sanitizer & Transcript Segmenter Fallback Extraction
     if raw_transcript:
         cleaned = raw_transcript
         cleaned = re.sub(r'\bMILE\b', 'MILD', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\bMILE TO MODERATE\b', 'MILD TO MODERATE', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bLARGE INTESTINE\b', 'LI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bSMALL INTESTINE\b', 'SI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bL\s+I\b', 'LI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bS\s+I\b', 'SI', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\bL\s*I\b', 'LISI', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\bS\s*I\b', 'LISI', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\bLARGE INTESTINE\b', 'LISI', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\bSMALL INTESTINE\b', 'LISI', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\bR\s+T\b', 'RT', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\bG\s+B\b', 'GB', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\bL\s+V\b', 'LIV', cleaned, flags=re.IGNORECASE)
@@ -1530,10 +1435,6 @@ def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") ->
             next_pos = matches[idx + 1][0] if idx + 1 < len(matches) else len(cleaned)
             segment = cleaned[pos + len(code):next_pos].lower()
 
-            # FIX: Transcript is the authoritative source — reset dosha values
-            # to None and re-derive entirely from the raw text segment.
-            # This prevents LLM hallucinations (e.g. invented Pitta) from
-            # surviving into the final output when the transcript contradicts them.
             v_val = None
             p_val = None
             k_val = None
@@ -1552,11 +1453,8 @@ def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") ->
                     k_val = sev_key
 
             if v_val or p_val or k_val:
-                # Transcript parse succeeded — override LLM values for this system
                 systems_map[code] = {"system": code, "vata": v_val, "pitta": p_val, "kapha": k_val}
             elif code in systems_map:
-                # Transcript found the system code but detected no severity phrase —
-                # keep the LLM value as a best-effort fallback rather than losing data
                 pass
 
     return list(systems_map.values())
@@ -1721,19 +1619,13 @@ def _format_exam_dict(exam: Any, prefix: str = "") -> str:
     return f"{prefix}: {res}" if res and prefix else res
 
 def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Synthesize prescription_sheet (quick_summary, daily_regimen, diet_plan_weeks, review_after)
-    from existing consultation sections if not explicitly provided or to enrich partial entries.
-    """
     existing_rx = draft.get("prescription_sheet") if isinstance(draft.get("prescription_sheet"), dict) else {}
     existing_qs = existing_rx.get("quick_summary") if isinstance(existing_rx.get("quick_summary"), dict) else {}
     existing_dreg = existing_rx.get("daily_regimen") if isinstance(existing_rx.get("daily_regimen"), dict) else {}
 
-    # Collect diet_plan_weeks from prescription_sheet (new rich schema) or legacy schema
     raw_dietwk = existing_rx.get("diet_plan_weeks") if isinstance(existing_rx.get("diet_plan_weeks"), list) else []
 
     def _normalize_diet_week(dw: Any) -> dict:
-        """Normalize both old (diet_item/no_of_weeks) and new (week_range/diet_type/diet_items) schema."""
         if not isinstance(dw, dict):
             return {}
         return {
@@ -1758,7 +1650,6 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
     plan_fup = plan.get("follow_up") if isinstance(plan, dict) else {}
     plan_fup = plan_fup or {}
 
-    # Quick summary synthesis
     allopathic_meds = existing_qs.get("allopathy_medicines")
     if not allopathic_meds:
         allopathic_from_treat = _format_medicines_from_current(treat.get("current_medications") if isinstance(treat, dict) else [])
@@ -1784,11 +1675,8 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
     if not others_summary and isinstance(fup, dict):
         others_summary = _clean(fup.get("followup_instructions") or "") or None
 
-    # Daily regimen synthesis
     oils_list = []
     detox_list = []
-    # Helper: detect LLM schema-placeholder strings (e.g. "string", "string | null",
-    # pipe-delimited enum values echoed verbatim from the prompt).
     def _is_schema_placeholder(val: str) -> bool:
         if not val:
             return False
@@ -1806,8 +1694,6 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
         for d in _as_list(raw_items):
             if isinstance(d, dict):
                 name = _clean(d.get("name"))
-                # FIX: Discard items whose name is a literal schema placeholder
-                # ("string", "string | null") — the LLM echoed the prompt template.
                 if not name or _is_schema_placeholder(name):
                     continue
                 q = _clean(d.get("quantity")) or ""
@@ -1820,14 +1706,14 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
                 instr = _clean(d.get("instructions") or d.get("remarks")) or ""
 
                 header = f"• {name} ({q_f_str})" if q_f_str and q_f_str != "()" else f"• {name}"
-                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):  # keep in sync with print format
+                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):
                     oils_list.append(f"{header}: {instr}" if instr else (f"{header}: As prescribed" if "anutail" not in name.lower() else header))
                 else:
                     detox_list.append(f"{header}: {instr}" if instr else header)
             elif isinstance(d, str) and d.strip():
                 item_str = d.strip()
                 header = f"• {item_str}"
-                if any(k in item_str.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):  # keep in sync with print format
+                if any(k in item_str.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):
                     oils_list.append(header)
                 else:
                     detox_list.append(header)
@@ -1835,7 +1721,7 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
         for d in detox:
             if isinstance(d, str) and d.strip():
                 header = f"• {d.strip()}"
-                if any(k in d.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):  # keep in sync with print format
+                if any(k in d.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):
                     oils_list.append(header)
                 else:
                     detox_list.append(header)
@@ -1890,10 +1776,6 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_supplements_weeks(supplements: Any) -> list:
-    """
-    Ensure each Ayurvedic supplement object has quantity_mg and an 8-week dosage array
-    for seamless rendering in the ERPNext Jinja print template's 8-week grid.
-    """
     if not isinstance(supplements, list):
         if isinstance(supplements, dict) and isinstance(supplements.get("ayurvedic_supplements"), list):
             supplements = supplements["ayurvedic_supplements"]
@@ -1937,9 +1819,6 @@ def _normalize_supplements_weeks(supplements: Any) -> list:
             while len(existing) < 8:
                 existing.append(last)
             existing = existing[:8]
-            # FIX: If the LLM filled all weeks with the placeholder "1" but the
-            # dose field has a real value (e.g. "1.5", "1.4"), override the weeks
-            # array so the Rx grid shows the correct dose instead of "1" everywhere.
             dose_val = _clean(new_item.get("dose") or new_item.get("dose_morning") or "")
             all_placeholder = all(str(v).strip() in ("1", "1.0", "") for v in existing)
             if all_placeholder and dose_val and any(c.isdigit() for c in dose_val) and dose_val.strip() not in ("1", "1.0"):
@@ -1984,18 +1863,9 @@ def _map_draft_to_encounter(
     draft: Dict[str, Any],
     lead_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Map expanded case-sheet draft to SGP Encounter DocType fields.
-
-    Priority:
-    1. final composer erp_field_summaries, if present.
-    2. section-level structured JSON from expanded prompts.
-    3. older draft fields from the original implementation.
-    """
     import json as _json
     from app.casesheet.protocols import enrich_section_data
 
-    # Ensure protocols and procedures are enriched before mapping to ERP fields
     for sec_key in ["detox_procedures", "panchakarma", "exercises_yoga", "assessment_and_plan"]:
         if isinstance(draft.get(sec_key), dict):
             draft[sec_key] = enrich_section_data(sec_key, draft[sec_key])
@@ -2234,9 +2104,6 @@ def _map_draft_to_encounter(
         rx_quick_str = "\n\n".join(qs_parts)
 
     rx_regimen_str = _clean(erp.get("rx_daily_regimen"))
-    # We no longer synthesize rx_daily_regimen automatically.
-    # By leaving it empty, the print format will cleanly render the granular
-    # oil_applications, detox_procedures, and breathing_exercises fields in a beautiful grid.
 
     full_notes_payload = {
         **draft,
@@ -2327,9 +2194,6 @@ def _map_draft_to_encounter(
         ],
         "sgp_rx": _clean(erp.get("sgp_rx")) or sgp_rx,
         "allopathic_medicines": _clean(erp.get("allopathic_medicines")) or allopathic_medicines,
-        # Leave empty so print format renders rich card view from nd.panchakarma.sessions;
-        # only honour a manual doctor override from erp_field_summaries.
-        # Leave home_remedies empty by default so print format renders rich cards without duplicating
         "home_remedies": _clean(erp.get("home_remedies")) or None,
 
         "diet_include": _clean(erp.get("diet_include")) or _join([x for x in _as_list(diet.get("include") if isinstance(diet, dict) else []) if _clean(x) and not any(kw in _clean(x).lower() for kw in ["soup", "tea", "java", "fennel", "ragi", "tapioca", "jowar", "rice", "barley", "oil", "thailam"])]),
@@ -2351,10 +2215,7 @@ def _map_draft_to_encounter(
         "medication_history": _clean(erp.get("medication_history")) or medhist_text,
         "surgical_history": _clean(erp.get("surgical_history")) or surg_text,
         "menstrual_obstetric_history": _clean(erp.get("menstrual_obstetric_history")) or obgyn_text,
-        # Duplicate key removed (first occurrence at line ~2062 is the authoritative one).
         "investigation_reports": _clean(erp.get("investigation_reports")) or inv_reports_text,
-        # Leave empty so print format renders rich card view from nd.detox_procedures.detox_items;
-        # only honour a manual doctor override from erp_field_summaries.
         "detox_procedures": _clean(erp.get("detox_procedures")) or None,
         "oil_applications": _clean(erp.get("oil_applications")) or None,
         "breathing_exercises": _clean(erp.get("breathing_exercises")) or None,

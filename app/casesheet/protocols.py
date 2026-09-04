@@ -1,9 +1,3 @@
-"""
-SGP Clinical Protocol & Recipe Macro Engine
-===========================================
-Provides intelligent fuzzy keyword recognition, normalization, deduplication, and canonical instruction enrichment.
-Prevents recipe leakage into quantity/frequency fields and replaces hallucinated or garbled LLM instructions with canonical SGP medical procedures.
-"""
 
 import re
 from typing import Any, Dict, List
@@ -173,7 +167,6 @@ SGP_PROTOCOLS = {
 
 
 def match_protocol(name_or_text: str) -> str:
-    """Return the canonical protocol key if any keywords match."""
     if not name_or_text:
         return ""
     text_lower = str(name_or_text).lower().strip()
@@ -185,7 +178,6 @@ def match_protocol(name_or_text: str) -> str:
 
 
 def clean_recipe_leakage(val: str, backup: str = "") -> str:
-    """Check if recipe text or instructions leaked into quantity or frequency fields."""
     if not val or not isinstance(val, str):
         return backup
     val_clean = val.strip()
@@ -194,19 +186,16 @@ def clean_recipe_leakage(val: str, backup: str = "") -> str:
     leak_words = ["soaked", "cooked", "boiled", "simmered", "water", "seeds", "weight", "kilograms", "millimetres", "castor", "routine", "process", "ground", "jaggery"]
     if any(w in val_clean.lower() for w in leak_words):
         return backup
-    # Fix absurd LLM hallucination like '90 spoons' for fennel seeds (should be 9 teaspoons, but quantity is 2 liters)
     if "90 spoon" in val_clean.lower():
         return backup
     return val_clean
 
 
 def enrich_item_dict(item: Dict[str, Any]) -> Dict[str, Any]:
-    """Enrich a procedure/detox dictionary object with canonical SGP text and clean leaked quantities."""
     new_item = dict(item)
     name = str(new_item.get("name", "") or "").strip()
     instr = str(new_item.get("instructions", "") or new_item.get("remarks", "") or "").strip()
 
-    # Try matching on name first, then fallback to instructions if name is vague
     canon = match_protocol(name)
     if not canon and len(instr) < 60:
         canon = match_protocol(instr)
@@ -214,7 +203,6 @@ def enrich_item_dict(item: Dict[str, Any]) -> Dict[str, Any]:
     if canon:
         proto = SGP_PROTOCOLS[canon]
         new_item["name"] = canon
-        # Completely overwrite garbled or abbreviated instructions with authoritative SGP text
         if "instructions" in new_item or not "remarks" in new_item:
             new_item["instructions"] = proto["text"]
         if "remarks" in new_item:
@@ -227,7 +215,6 @@ def enrich_item_dict(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def enrich_string_item(text: str) -> str:
-    """Check if a simple string item matches a protocol and expand it."""
     if not text or not isinstance(text, str):
         return text
     canon = match_protocol(text)
@@ -241,10 +228,6 @@ def enrich_string_item(text: str) -> str:
 
 
 def enrich_section_data(section: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Post-process extracted section JSON to clean recipe leakage, deduplicate items,
-    and enrich with authoritative SGP clinical guidelines.
-    """
     if not isinstance(data, dict):
         return data
 

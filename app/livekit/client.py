@@ -1,9 +1,3 @@
-"""
-LiveKit Client
-Wraps the LiveKit Python SDK for room creation and JWT generation.
-All LiveKit-specific logic is isolated here so the rest of the app
-never imports the SDK directly.
-"""
 
 from livekit import api as livekit_api
 from livekit.api import AccessToken, VideoGrants
@@ -15,10 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class LiveKitClient:
-    """
-    Thin async wrapper around LiveKit REST API and token generation.
-    Uses the official livekit-server-sdk-python package.
-    """
 
     def __init__(self):
         self.api_key = settings.LIVEKIT_API_KEY
@@ -32,19 +22,13 @@ class LiveKitClient:
         display_name: str,
         is_host: bool = False,
     ) -> str:
-        """
-        Generate a signed LiveKit JWT.
-
-        - Hosts receive canPublish=True, canSubscribe=True, roomAdmin=True
-        - Patients receive canPublish=True (they can speak/show video), canSubscribe=True
-        """
         grants = VideoGrants(
             room_join=True,
             room=room_name,
-            can_publish=True,          # Both host and patient can publish
+            can_publish=True,
             can_subscribe=True,
             can_publish_data=True,
-            room_admin=is_host,        # Only host can manage room
+            room_admin=is_host,
         )
 
         token = (
@@ -58,10 +42,6 @@ class LiveKitClient:
         return token
 
     async def create_room(self, room_name: str, empty_timeout: int = 7200) -> dict:
-        """
-        Create a LiveKit room via REST API.
-        empty_timeout: seconds before empty room is automatically deleted (default 2h).
-        """
         lkapi = livekit_api.LiveKitAPI(
             url=self.url.replace("wss://", "https://"),
             api_key=self.api_key,
@@ -84,7 +64,6 @@ class LiveKitClient:
             await lkapi.aclose()
 
     async def delete_room(self, room_name: str) -> None:
-        """Delete a LiveKit room after session ends."""
         lkapi = livekit_api.LiveKitAPI(
             url=self.url.replace("wss://", "https://"),
             api_key=self.api_key,

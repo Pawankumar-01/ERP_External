@@ -1,8 +1,3 @@
-"""
-LiveKit Router — Webhook Handler
-Receives signed events from LiveKit Cloud and routes them to the orientation service.
-This is the bridge between LiveKit's event system and our attendance tracker.
-"""
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,23 +18,15 @@ async def livekit_webhook(
     authorization: str = Header(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    LiveKit webhook endpoint.
-    LiveKit signs all webhook payloads — we verify the signature before processing.
-
-    Configure this URL in your LiveKit project settings:
-    https://your-domain.com/api/v1/livekit/webhook
-    """
     body = await request.body()
 
-    # ── Signature verification ────────────────────────────────────────────────
     try:
         event = livekit_client.verify_webhook(body, authorization or "")
     except ValueError as e:
         logger.warning(f"Rejected unsigned webhook: {e}")
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    event_name = event.event  # e.g. "participant_joined"
+    event_name = event.event
     room = event.room
     participant = event.participant
 
@@ -48,7 +35,6 @@ async def livekit_webhook(
 
     logger.info(f"LiveKit event: {event_name} | room={room_name} | identity={identity}")
 
-    # ── Event Routing ─────────────────────────────────────────────────────────
     if event_name == "participant_joined" and room_name and identity:
         await orientation_service.record_join(db, room_name, identity)
 
@@ -72,7 +58,6 @@ async def livekit_webhook(
             payload={"room_name": room_name},
             triggered_by="livekit_webhook",
         )
-        # Finalize attendance for all participants
         await orientation_service.end_session_by_room(db, room_name)
 
     return {"status": "ok", "event": event_name}

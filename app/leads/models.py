@@ -1,17 +1,3 @@
-"""
-Lead Module — Schemas Only
-──────────────────────────
-ARCHITECTURE NOTE:
-  ERPNext is the system of record for all lead/CRM data.
-  There is NO SQLAlchemy ORM model here.
-  All lead data lives in ERPNext DocType: SGP Lead.
-  FastAPI reads and writes leads exclusively through ERPBridgeService.
-
-  PostgreSQL (local) stores ONLY:
-    - orientation_sessions
-    - orientation_participants
-    - event_logs
-"""
 
 from datetime import datetime
 from enum import Enum
@@ -20,10 +6,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-# ─── Enums ────────────────────────────────────────────────────────────────────
 
 class LeadStatus(str, Enum):
-    # Must exactly match SGP Lead -> status Select options in ERPNext
     NEW                    = "NEW"
     ORIENTATION_SCHEDULED  = "ORIENTATION_SCHEDULED"
     ORIENTATION_ATTENDED   = "ORIENTATION_ATTENDED"
@@ -51,10 +35,8 @@ class InterestedIn(str, Enum):
     BOTH         = "BOTH"
 
 
-# ─── Request Schemas (FastAPI → ERPNext) ──────────────────────────────────────
 
 class LeadCreate(BaseModel):
-    """Payload to create a new SGP Lead in ERPNext."""
     name:          str          = Field(..., min_length=2, max_length=200)
     phone:         str          = Field(..., min_length=7,  max_length=20)
     email:         Optional[str]  = None
@@ -64,19 +46,12 @@ class LeadCreate(BaseModel):
 
 
 class LeadStatusUpdate(BaseModel):
-    """Payload to update an SGP Lead status in ERPNext."""
     status: LeadStatus
     notes:  Optional[str] = None
 
 
-# ─── Response Schema (ERPNext → FastAPI → Client) ─────────────────────────────
 
 class LeadResponse(BaseModel):
-    """
-    Normalised lead response.
-    Field names match ERPNext SGP Lead DocType fields.
-    appointment_eligible is derived — not stored in ERP.
-    """
     id:                   str
     name:                 str
     phone:                str
@@ -92,15 +67,6 @@ class LeadResponse(BaseModel):
 
     @classmethod
     def from_erp(cls, data: dict) -> "LeadResponse":
-        """
-        Build a LeadResponse from the raw dict returned by ERPNext.
-        ERPNext uses field 'name' as the document primary key.
-        SGP Lead field mapping:
-            name        → id  (ERPNext doc ID)
-            lead_name   → name (display name)
-            mobile_number → phone
-            email_id      → email
-        """
         status = data.get("status", LeadStatus.NEW)
         return cls(
             id=data.get("name", ""),

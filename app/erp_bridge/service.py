@@ -1,23 +1,3 @@
-"""
-ERP Bridge Service
-──────────────────
-Single point of contact between FastAPI and ERPNext REST API.
-
-Rules:
-  - All HTTP calls to ERPNext go through this class only.
-  - Services NEVER import aiohttp or call HTTP directly.
-  - Includes retry logic, timeout, and structured error logging.
-  - Runs in placeholder mode when ERP credentials are not configured.
-
-ERPNext REST API format:
-    GET    /api/resource/{DocType}           → list
-    GET    /api/resource/{DocType}/{id}      → fetch
-    POST   /api/resource/{DocType}           → create
-    PUT    /api/resource/{DocType}/{id}      → update
-
-Authentication header:
-    Authorization: token API_KEY:API_SECRET
-"""
 
 import asyncio
 import aiohttp
@@ -29,12 +9,10 @@ from app.events.logger import event_logger, EventType
 
 logger = logging.getLogger(__name__)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
 TIMEOUT_SECONDS = 10
 MAX_RETRIES     = 3
-RETRY_DELAY     = 1.0   # seconds between retries
+RETRY_DELAY     = 1.0
 
-# ERPNext DocType names
 DOCTYPE_LEAD                 = "SGP Lead"
 DOCTYPE_ORIENTATION_SESSION  = "SGP Orientation Session"
 DOCTYPE_ORIENTATION_ATTEND   = "SGP Orientation Attendance"
@@ -44,19 +22,13 @@ DOCTYPE_ENCOUNTER            = "SGP Encounter"
 
 
 class ERPBridgeService:
-    """
-    Async HTTP client for all ERPNext operations.
-    Implements retry, timeout, placeholder mode, and structured event logging.
-    """
 
     def __init__(self):
-        self._configured: Optional[bool] = None   # lazily determined
+        self._configured: Optional[bool] = None
 
-    # ── Configuration check ───────────────────────────────────────────────────
 
     @property
     def is_configured(self) -> bool:
-        """True only when real ERP credentials are present in settings."""
         if self._configured is None:
             self._configured = bool(
                 settings.ERPNEXT_BASE_URL
@@ -80,7 +52,6 @@ class ERPBridgeService:
         base = settings.ERPNEXT_BASE_URL.rstrip("/")
         return f"{base}{path}"
 
-    # ── Core HTTP helpers ─────────────────────────────────────────────────────
 
     async def _request(
         self,
@@ -89,17 +60,11 @@ class ERPBridgeService:
         data: Optional[Dict] = None,
         params: Optional[Dict] = None,
     ) -> Optional[Dict]:
-        """
-        Execute an HTTP request against ERPNext with retry logic.
-        Returns parsed JSON dict or None on failure.
-        Logs every attempt, success, and failure as structured events.
-        """
         if not self.is_configured:
             logger.warning(
                 f"[ERP BRIDGE] Placeholder mode — skipping {method} {path} "
                 f"(ERPNext not configured)"
             )
-            # Return a minimal stub so callers don't crash in dev
             return {"name": "PLACEHOLDER", "_placeholder": True, **(data or {})}
 
         url = self._url(path)
@@ -123,21 +88,18 @@ class ERPBridgeService:
                             await self._emit_success(method, path, resp.status)
                             return body.get("data", body)
 
-                        # ERPNext encodes errors in the response body
                         err_msg = body.get("exception") or body.get("message") or str(body)
                         logger.error(
                             f"[ERP] {method} {path} → {resp.status} | "
                             f"attempt {attempt}/{MAX_RETRIES} | {err_msg}"
                         )
                         if resp.status in (400, 403, 404, 409, 417, 422):
-                            # Non-retryable client errors — raise so caller gets the real reason
                             await self._emit_failure(method, path, resp.status, err_msg)
                             raise RuntimeError(
                                 f"ERPNext {resp.status} error: {err_msg}"
                             )
 
             except RuntimeError:
-                # Re-raise explicit ERPNext errors directly to caller
                 raise
             except asyncio.TimeoutError:
                 last_exc = asyncio.TimeoutError(f"Timeout on {method} {path}")
@@ -152,7 +114,7 @@ class ERPBridgeService:
             except Exception as exc:
                 last_exc = exc
                 logger.error(f"[ERP] Unexpected error on attempt {attempt}: {exc}")
-                break   # Don't retry unexpected errors
+                break
 
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(RETRY_DELAY * attempt)
@@ -180,18 +142,8 @@ class ERPBridgeService:
             triggered_by="erp_bridge",
         )
 
-    # ── Lead operations ───────────────────────────────────────────────────────
 
     async def create_lead(self, data) -> Optional[Dict]:
-        """
-        POST /api/resource/SGP Lead
-        Maps LeadCreate fields to SGP Lead DocType fields.
-
-        Note: Frappe POST response sometimes echoes back input rather than
-        the created doc. We use the returned 'name' to do a follow-up GET
-        to guarantee we return the real created document with correct ID.
-        """
-        # Sanitize interested_in to ERPNext allowed select values: CONSULTATION, DEVICE, BOTH
         interested_in = getattr(data, "interested_in", "CONSULTATION")
         if interested_in not in ["CONSULTATION", "DEVICE", "BOTH"]:
             interested_in = "CONSULTATION"
@@ -213,7 +165,6 @@ class ERPBridgeService:
         result = await self._request("POST", f"/api/resource/{DOCTYPE_LEAD}", data=payload)
         if not result:
             return None
-        # Fetch the actual created document to get the real auto-generated name/ID
         created_name = result.get("name")
         if created_name and created_name != "PLACEHOLDER":
             fetched = await self._request("GET", f"/api/resource/{DOCTYPE_LEAD}/{created_name}")
@@ -221,7 +172,6 @@ class ERPBridgeService:
         return result
 
     async def get_lead(self, lead_id: str) -> Optional[Dict]:
-        """GET /api/resource/SGP Lead/{id}"""
         return await self._request("GET", f"/api/resource/{DOCTYPE_LEAD}/{lead_id}")
 
     async def list_leads(
@@ -229,10 +179,6 @@ class ERPBridgeService:
         status: Optional[str] = None,
         limit: int = 100,
     ) -> List[Dict]:
-        """
-        GET /api/resource/SGP Lead
-        Uses ERPNext list API with optional filters.
-        """
         params: Dict[str, Any] = {
             "limit_page_length": limit,
             "fields": '["name","lead_name","mobile_number","email","status","lead_source","interested_in","notes","creation","modified"]',
@@ -243,16 +189,11 @@ class ERPBridgeService:
         result = await self._request("GET", f"/api/resource/{DOCTYPE_LEAD}", params=params)
         if result is None:
             return []
-        # ERPNext list response: {"data": [...]} — already unwrapped by _request
         if isinstance(result, list):
             return result
         return result.get("data", [])
 
     async def update_lead_status(self, lead_id: str, update_data) -> Optional[Dict]:
-        """
-        PUT /api/resource/SGP Lead/{id}
-        Updates only status and notes fields.
-        """
         payload: Dict[str, Any] = {"status": update_data.status}
         if update_data.notes:
             payload["notes"] = update_data.notes
@@ -260,7 +201,6 @@ class ERPBridgeService:
             "PUT", f"/api/resource/{DOCTYPE_LEAD}/{lead_id}", data=payload
         )
 
-    # ── Orientation Session operations ────────────────────────────────────────
 
     async def create_orientation_session(
         self,
@@ -269,19 +209,8 @@ class ERPBridgeService:
         scheduled_at: Optional[str],
         status: str = "Scheduled",
     ) -> Optional[Dict]:
-        """
-        POST /api/resource/SGP Orientation Session
-        Mirrors the local session record in ERPNext for reporting.
-
-        Field mapping (FastAPI → ERPNext DocType):
-            title        → session_title  (Data, reqd)
-            scheduled_at → orientation_date + start_time
-            session_id   → room_name (used as external reference)
-            status       → status
-        """
         from datetime import datetime
 
-        # Parse scheduled_at into date and time components
         orientation_date = None
         start_time = None
         if scheduled_at:
@@ -294,7 +223,7 @@ class ERPBridgeService:
 
         payload = {
             "session_title":    title,
-            "room_name":        session_id,   # store automation ID here for lookup
+            "room_name":        session_id,
             "orientation_date": orientation_date,
             "start_time":       start_time,
             "status":           status,
@@ -306,10 +235,6 @@ class ERPBridgeService:
     async def update_orientation_session_status(
         self, session_id: str, status: str
     ) -> Optional[Dict]:
-        """
-        PUT /api/resource/SGP Orientation Session/{session_id}
-        Valid ERPNext status values: Scheduled, On Going, Completed, Cancelled
-        """
         return await self._request(
             "PUT",
             f"/api/resource/{DOCTYPE_ORIENTATION_SESSION}/{session_id}",
@@ -319,11 +244,6 @@ class ERPBridgeService:
     async def update_lead_orientation_scheduled(
         self, lead_id: str, session_title: str
     ) -> Optional[Dict]:
-        """
-        Mark an SGP Lead as scheduled for orientation.
-        Called when patient manager registers leads into a batch session.
-        Sets status → ORIENTATION_SCHEDULED so it appears in the orientation funnel.
-        """
         result = await self._request(
             "PUT",
             f"/api/resource/{DOCTYPE_LEAD}/{lead_id}",
@@ -336,7 +256,6 @@ class ERPBridgeService:
             )
         return result
 
-    # ── Orientation Attendance operations ─────────────────────────────────────
 
     async def create_orientation_attendance(
         self,
@@ -347,22 +266,8 @@ class ERPBridgeService:
         joined_at=None,
         left_at=None,
     ) -> bool:
-        """
-        POST /api/resource/SGP Orientation Attendance
-        Field mapping (FastAPI → ERPNext DocType):
-            lead_id      → lead        (Link: SGP Lead)
-            session_id   → orientation_session (Link: SGP Orientation Session)
-            watch_time   → total_watch_minutes (converted from seconds)
-            completed    → orientation_completed (Check)
-            eligible     → appointment_eligible (Check)
-        Note: orientation_session Link requires the ERPNext doc name (e.g. 40ue4r6gsa),
-        not the PostgreSQL UUID. Until ERP mirror stores the ERPNext name,
-        this field is omitted to avoid LinkValidationError.
-        """
         from app.config.settings import settings
         watch_minutes = int(watch_time / 60)
-        # min_required_minutes: 70% of a standard 60-min session = 42 mins
-        # This is stored on the attendance record for audit purposes
         min_required = int(settings.ORIENTATION_COMPLETION_THRESHOLD * 60)
         payload = {
             "lead":                  lead_id,
@@ -389,20 +294,8 @@ class ERPBridgeService:
             )
         return success
 
-    # ── Patient operations ────────────────────────────────────────────────────
 
     async def get_or_create_patient(self, lead_id: str) -> Optional[str]:
-        """
-        Idempotent: find the ERPNext Patient linked to this lead, or create one.
-        Returns the ERPNext Patient document name (e.g. 'PAT-0001'), or None on failure.
-
-        Field used for the lead → patient link: custom_sgp_lead
-        This must exist as a custom field on the ERPNext Patient DocType.
-
-        Safe to call from orientation completion AND appointment scheduling —
-        calling it twice will always return the same patient name.
-        """
-        # ① Search for existing Patient already linked to this lead
         existing = await self._request(
             "GET",
             f"/api/resource/{DOCTYPE_PATIENT}",
@@ -417,7 +310,6 @@ class ERPBridgeService:
             logger.info(f"[ERP] Existing patient '{patient_name}' found for lead {lead_id}")
             return patient_name
 
-        # ② Fetch lead data so we can populate the Patient record
         lead = await self.get_lead(lead_id)
         if not lead:
             logger.error(f"[ERP] Cannot create Patient — lead {lead_id} not found")
@@ -426,12 +318,10 @@ class ERPBridgeService:
         lead_name   = lead.get("lead_name") or lead.get("name", "")
         mobile      = lead.get("mobile_number") or lead.get("mobile_no", "")
         email       = lead.get("email") or lead.get("email_id") or ""
-        # Split full name into first_name + last_name
         name_parts = lead_name.strip().split(" ", 1)
         first_name = name_parts[0]
         last_name  = name_parts[1] if len(name_parts) > 1 else ""
 
-        # Extract address and pincode from lead or lead notes
         address = lead.get("address", "") or ""
         pincode = lead.get("pincode", "") or ""
         notes = lead.get("notes") or ""
@@ -442,15 +332,13 @@ class ERPBridgeService:
                 elif line.startswith("Pincode:"):
                     pincode = line.replace("Pincode:", "").strip()
 
-        # ③ Create new Patient record
-        # sex is mandatory in ERPNext Patient DocType.
         patient_payload = {
             "first_name":      first_name,
             "last_name":       last_name,
             "sex":             "Prefer not to say",
             "mobile":          mobile,
             "email":           email,
-            "custom_sgp_lead": lead_id,    # link back to SGP Lead
+            "custom_sgp_lead": lead_id,
             "status":          "Active",
         }
         if address:
@@ -474,7 +362,6 @@ class ERPBridgeService:
         patient_name = new_patient.get("name")
         logger.info(f"[ERP] Patient '{patient_name}' created from lead {lead_id}")
 
-        # Update lead status to CONVERTED in ERPNext
         try:
             await self._request(
                 "PUT",
@@ -501,10 +388,6 @@ class ERPBridgeService:
         return patient_name
 
     async def create_patient(self, lead_id: str, patient_data: Dict) -> Optional[Dict]:
-        """
-        POST /api/resource/Patient — low-level create with arbitrary patient_data.
-        Prefer get_or_create_patient() for the standard lead → patient promotion flow.
-        """
         payload = {
             "doctype":         DOCTYPE_PATIENT,
             "custom_sgp_lead": lead_id,
@@ -513,31 +396,19 @@ class ERPBridgeService:
         return await self._request("POST", f"/api/resource/{DOCTYPE_PATIENT}", data=payload)
 
     async def get_patient(self, erp_patient_id: str) -> Optional[Dict]:
-        """GET /api/resource/Patient/{id}"""
         return await self._request("GET", f"/api/resource/{DOCTYPE_PATIENT}/{erp_patient_id}")
 
-    # ── Appointment operations ────────────────────────────────────────────────
 
     async def create_patient_appointment(
         self, appointment_data: Dict
     ) -> Optional[Dict]:
-        """
-        POST /api/resource/Patient Appointment
-        Creates a doctor appointment for an orientation-eligible lead.
-        """
         payload = {"doctype": DOCTYPE_APPOINTMENT, **appointment_data}
         return await self._request(
             "POST", f"/api/resource/{DOCTYPE_APPOINTMENT}", data=payload
         )
 
-    # ── Encounter & Practitioner operations ───────────────────────────────────
 
     async def get_practitioners(self) -> List[Dict[str, Any]]:
-        """
-        GET /api/resource/Healthcare Practitioner
-        Fetch registered healthcare practitioners from ERPNext.
-        """
-        # Standard ERPNext Healthcare Practitioner fields
         params = {
             "fields": '["name", "practitioner_name", "department", "designation", "mobile_phone", "user_id"]',
             "limit_page_length": 200,
@@ -549,7 +420,6 @@ class ERPBridgeService:
         except Exception as err:
             logger.warning(f"Failed to fetch Healthcare Practitioners with field spec: {err}")
 
-        # Fallback: query without strict fields filter
         try:
             res = await self._request("GET", "/api/resource/Healthcare Practitioner", params={"limit_page_length": 200})
             if isinstance(res, list):
@@ -560,17 +430,12 @@ class ERPBridgeService:
         return []
 
     async def create_encounter(self, encounter_data: Dict) -> Optional[Dict]:
-        """
-        POST /api/resource/SGP Encounter
-        Creates a clinical encounter record for a doctor visit.
-        """
         payload = {"doctype": DOCTYPE_ENCOUNTER, **encounter_data}
         return await self._request(
             "POST", f"/api/resource/{DOCTYPE_ENCOUNTER}", data=payload
         )
 
     async def get_encounter(self, encounter_id: str) -> Optional[Dict]:
-        """GET /api/resource/SGP Encounter/{id}"""
         return await self._request(
             "GET", f"/api/resource/{DOCTYPE_ENCOUNTER}/{encounter_id}"
         )
@@ -578,7 +443,6 @@ class ERPBridgeService:
     async def update_encounter_status(
         self, encounter_id: str, status: str
     ) -> Optional[Dict]:
-        """PUT /api/resource/SGP Encounter/{id} — advance workflow status."""
         return await self._request(
             "PUT",
             f"/api/resource/{DOCTYPE_ENCOUNTER}/{encounter_id}",
@@ -592,9 +456,6 @@ class ERPBridgeService:
         file_bytes: bytes,
         is_private: int = 0,
     ) -> Optional[Dict]:
-        """
-        Upload a file attachment to an SGP Encounter doc in Frappe/ERPNext via /api/method/upload_file.
-        """
         if not self.is_configured:
             logger.warning(
                 f"[ERP BRIDGE] Placeholder mode — skipping file upload '{filename}' to encounter '{encounter_id}'"
@@ -627,16 +488,11 @@ class ERPBridgeService:
             return None
 
     async def get_appointment(self, appointment_id: str) -> Optional[Dict]:
-        """GET /api/resource/Patient Appointment/{id}"""
         return await self._request(
             "GET", f"/api/resource/{DOCTYPE_APPOINTMENT}/{appointment_id}"
         )
 
     async def close_appointment(self, appointment_id: str) -> Optional[Dict]:
-        """
-        Mark a Patient Appointment as Closed after the encounter is finalized.
-        Called automatically from casesheet finalize flow.
-        """
         result = await self._request(
             "PUT",
             f"/api/resource/{DOCTYPE_APPOINTMENT}/{appointment_id}",
@@ -649,11 +505,6 @@ class ERPBridgeService:
     async def get_payment_for_appointment(
         self, appointment_id: str
     ) -> Optional[Dict]:
-        """
-        Look up a posted Payment Entry linked to this appointment.
-        ERPNext Payment Entry stores reference in 'reference_name'.
-        Returns the payment entry dict if found, None if not yet paid.
-        """
         result = await self._request(
             "GET",
             "/api/resource/Payment Entry",
@@ -673,7 +524,6 @@ class ERPBridgeService:
     async def get_payment_for_patient(
         self, patient_id: str
     ) -> Optional[Dict]:
-        """Look up most recent posted Payment Entry for a patient (walk-in flow)."""
         result = await self._request(
             "GET",
             "/api/resource/Payment Entry",
@@ -693,7 +543,6 @@ class ERPBridgeService:
 
 
     async def get_patient_by_mobile(self, mobile: str) -> Optional[Dict]:
-        """Find patient by mobile number."""
         clean = mobile.strip().replace("+91", "").replace(" ", "").replace("-", "")
         if len(clean) == 10:
             search_nums = [clean, "91" + clean, "+91" + clean]
@@ -717,11 +566,6 @@ class ERPBridgeService:
     async def update_encounter_payment(
         self, encounter_id: str, payment_entry_id: str, paid_amount: float
     ) -> Optional[Dict]:
-        """
-        Link a verified payment entry to an SGP Encounter.
-        Stores payment reference and amount on the encounter record.
-        Requires custom fields on SGP Encounter: custom_payment_entry, custom_paid_amount.
-        """
         return await self._request(
             "PUT",
             f"/api/resource/{DOCTYPE_ENCOUNTER}/{encounter_id}",
@@ -731,15 +575,8 @@ class ERPBridgeService:
             },
         )
 
-    # ── Webhook verification (inbound: ERPNext → FastAPI) ─────────────────────
 
     def verify_erp_webhook(self, body: bytes, signature_header: str) -> bool:
-        """
-        Verify that an inbound webhook was sent by our ERPNext instance.
-        ERPNext signs with HMAC-SHA256 using ERP_WEBHOOK_SECRET.
-        Header: X-Frappe-Webhook-Signature
-        Returns True if valid, False otherwise.
-        """
         import hashlib
         import hmac as _hmac
 

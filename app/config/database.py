@@ -1,7 +1,3 @@
-"""
-Database Connection Pool
-Uses SQLAlchemy async engine backed by asyncpg for PostgreSQL.
-"""
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 try:
@@ -32,12 +28,10 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 class Base(DeclarativeBase):
-    """Shared declarative base for all ORM models."""
     pass
 
 
 async def get_db() -> AsyncSession:
-    """FastAPI dependency: yields an async DB session per request."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -50,6 +44,5 @@ async def get_db() -> AsyncSession:
 
 
 async def create_all_tables():
-    """Create all tables. Called on application startup."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

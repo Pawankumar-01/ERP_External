@@ -1,24 +1,3 @@
-"""
-ERP Bridge Router
-──────────────────
-Two categories of endpoints:
-
-1. OUTBOUND (FastAPI → ERPNext):
-   Manual trigger endpoints for admin use and backfill operations.
-
-2. INBOUND (ERPNext → FastAPI):
-   /webhook  receives Frappe Webhook events when ERPNext documents change.
-   This is how ERPNext notifies FastAPI of events it cares about —
-   e.g. appointment created, encounter status changed, lead manually updated.
-
-Frappe Webhook payload format:
-  {
-    "doctype":    "SGP Lead",
-    "name":       "SGP-LEAD-00001",
-    "event":      "on_update",     ← Frappe trigger name
-    "doc":        { ...full document fields... }
-  }
-"""
 
 import hashlib
 import hmac
@@ -36,17 +15,14 @@ router  = APIRouter()
 logger  = logging.getLogger(__name__)
 
 
-# ─── Inbound Webhook Schemas ──────────────────────────────────────────────────
 
 class ERPWebhookPayload(BaseModel):
-    """Shape of a Frappe Webhook POST body."""
     doctype: str
     name:    str
     event:   Optional[str] = None
     doc:     Optional[Dict] = None
 
 
-# ─── Outbound request schemas ─────────────────────────────────────────────────
 
 class AttendanceSyncRequest(BaseModel):
     lead_id:            str
@@ -59,7 +35,7 @@ class AttendanceSyncRequest(BaseModel):
 class AppointmentRequest(BaseModel):
     patient_id:       str
     practitioner:     str
-    appointment_date: str              # YYYY-MM-DD
+    appointment_date: str
     appointment_time: Optional[str] = None
     department:       Optional[str] = None
     notes:            Optional[str] = None
@@ -68,7 +44,7 @@ class AppointmentRequest(BaseModel):
 class EncounterRequest(BaseModel):
     patient_id:          str
     practitioner:        str
-    encounter_date:      str           # YYYY-MM-DD
+    encounter_date:      str
     lead_id:             Optional[str] = None
     appointment_id:      Optional[str] = None
     orientation_verified: bool         = False
@@ -76,31 +52,14 @@ class EncounterRequest(BaseModel):
     notes:               Optional[str] = None
 
 
-# ─── ①  INBOUND: ERPNext → FastAPI Webhook ───────────────────────────────────
 
 @router.post("/webhook")
 async def receive_erp_webhook(
     request: Request,
     x_frappe_webhook_signature: Optional[str] = Header(None),
 ):
-    """
-    Receive Frappe Webhook events from ERPNext.
-
-    Configure in ERPNext:
-      Integrations → Webhooks → New Webhook
-        DocType:  SGP Lead  (or any DocType)
-        Events:   on_update, after_insert
-        URL:      https://your-api.com/api/v1/erp/webhook
-        Secret:   <ERP_WEBHOOK_SECRET from .env>
-
-    Handled events:
-      SGP Lead + on_update        → check if status changed, sync if needed
-      Patient Appointment + after_insert  → log new appointment
-      SGP Encounter + on_update   → log encounter status changes
-    """
     body = await request.body()
 
-    # ── Signature verification ────────────────────────────────────────────────
     if x_frappe_webhook_signature:
         valid = erp_bridge_service.verify_erp_webhook(
             body, x_frappe_webhook_signature
@@ -122,15 +81,12 @@ async def receive_erp_webhook(
         f"name={payload.name} event={payload.event}"
     )
 
-    # ── Route by doctype + event ──────────────────────────────────────────────
     await _dispatch_webhook(payload)
 
-    # Always return 200 quickly — ERPNext retries on non-2xx
     return {"status": "received", "doctype": payload.doctype, "name": payload.name}
 
 
 async def _dispatch_webhook(payload: ERPWebhookPayload) -> None:
-    """Route inbound ERP webhook to the appropriate handler."""
     doc     = payload.doc or {}
     dtype   = payload.doctype
     event   = payload.event or "unknown"
@@ -145,7 +101,6 @@ async def _dispatch_webhook(payload: ERPWebhookPayload) -> None:
         await _handle_encounter_webhook(payload.name, event, doc)
 
     else:
-        # Log unknown doctypes — useful during development
         await event_logger.log(
             entity_type="erp_webhook",
             entity_id=payload.name,
@@ -156,12 +111,6 @@ async def _dispatch_webhook(payload: ERPWebhookPayload) -> None:
 
 
 async def _handle_lead_webhook(name: str, event: str, doc: Dict) -> None:
-    """
-    Handle SGP Lead webhooks from ERPNext.
-
-    Use case: A clinic admin manually changes a lead status in ERPNext.
-    FastAPI should log the event and react if needed (e.g. status → DORMANT).
-    """
     new_status = doc.get("status", "UNKNOWN")
     await event_logger.log(
         entity_type="lead",
@@ -179,10 +128,6 @@ async def _handle_lead_webhook(name: str, event: str, doc: Dict) -> None:
 
 
 async def _handle_appointment_webhook(name: str, event: str, doc: Dict) -> None:
-    """
-    Handle Patient Appointment webhooks.
-    Logs new appointments so FastAPI has an audit trail.
-    """
     await event_logger.log(
         entity_type="appointment",
         entity_id=name,
@@ -200,7 +145,6 @@ async def _handle_appointment_webhook(name: str, event: str, doc: Dict) -> None:
 
 
 async def _handle_encounter_webhook(name: str, event: str, doc: Dict) -> None:
-    """Handle SGP Encounter webhooks — status transitions, approvals."""
     await event_logger.log(
         entity_type="encounter",
         entity_id=name,
@@ -216,14 +160,9 @@ async def _handle_encounter_webhook(name: str, event: str, doc: Dict) -> None:
     logger.info(f"[ERP WEBHOOK] Encounter {name} status={doc.get('status')}")
 
 
-# ─── ②  OUTBOUND: Manual / Admin triggers ────────────────────────────────────
 
 @router.post("/sync-attendance")
 async def sync_attendance(req: AttendanceSyncRequest):
-    """
-    Manually create an SGP Orientation Attendance record in ERPNext.
-    Use to backfill records missed due to webhook delivery failures.
-    """
     success = await erp_bridge_service.create_orientation_attendance(
         lead_id=req.lead_id,
         session_id=req.session_id,
@@ -237,7 +176,6 @@ async def sync_attendance(req: AttendanceSyncRequest):
 
 @router.get("/lead/{lead_id}")
 async def get_erp_lead(lead_id: str):
-    """Fetch an SGP Lead directly from ERPNext."""
     lead = await erp_bridge_service.get_lead(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail=f"Lead {lead_id} not found in ERPNext")
@@ -246,7 +184,6 @@ async def get_erp_lead(lead_id: str):
 
 @router.get("/patient/{erp_patient_id}")
 async def get_erp_patient(erp_patient_id: str):
-    """Fetch a Patient record from ERPNext."""
     patient = await erp_bridge_service.get_patient(erp_patient_id)
     if not patient:
         raise HTTPException(
@@ -257,11 +194,6 @@ async def get_erp_patient(erp_patient_id: str):
 
 @router.post("/appointment")
 async def create_appointment(req: AppointmentRequest):
-    """
-    Create a Patient Appointment in ERPNext.
-    The patient must exist in ERPNext before calling this.
-    Lead status should be ORIENTATION_ATTENDED.
-    """
     result = await erp_bridge_service.create_patient_appointment({
         "patient":           req.patient_id,
         "practitioner":      req.practitioner,
@@ -277,10 +209,6 @@ async def create_appointment(req: AppointmentRequest):
 
 @router.post("/encounter")
 async def create_encounter(req: EncounterRequest):
-    """
-    Create an SGP Encounter record in ERPNext.
-    orientation_verified and consent_verified are governance requirements.
-    """
     result = await erp_bridge_service.create_encounter({
         "patient":               req.patient_id,
         "practitioner":          req.practitioner,
@@ -299,7 +227,6 @@ async def create_encounter(req: EncounterRequest):
 
 @router.get("/encounter/{encounter_id}")
 async def get_encounter(encounter_id: str):
-    """Fetch a single SGP Encounter from ERPNext."""
     enc = await erp_bridge_service.get_encounter(encounter_id)
     if not enc:
         raise HTTPException(status_code=404, detail=f"Encounter {encounter_id} not found")
@@ -308,10 +235,6 @@ async def get_encounter(encounter_id: str):
 
 @router.patch("/encounter/{encounter_id}/status")
 async def update_encounter_status(encounter_id: str, status: str):
-    """
-    Advance an SGP Encounter through its workflow:
-    Draft → Under Review → Approved → Closed
-    """
     valid_statuses = {"Draft", "Under Review", "Approved", "Closed"}
     if status not in valid_statuses:
         raise HTTPException(
@@ -326,10 +249,6 @@ async def update_encounter_status(encounter_id: str, status: str):
 
 @router.get("/status")
 async def bridge_status():
-    """
-    Check ERP Bridge configuration and connectivity.
-    Safe to call from health monitoring systems.
-    """
     return {
         "configured": erp_bridge_service.is_configured,
         "mode":       "live" if erp_bridge_service.is_configured else "placeholder",

@@ -3,11 +3,9 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("test_pipeline")
 
-# Import actual modules
 from app.whatsapp.bot_engine import WhatsAppBotEngine, WhatsAppLeadData
 
 class MockWhatsAppService:
@@ -25,7 +23,6 @@ class MockWhatsAppService:
         return True
 
     async def send_interactive_list(self, phone: str, body_text: str, button_label: str, sections: list, header_text: str = None, footer_text: str = None):
-        # Validate Meta Cloud API rules!
         if len(button_label) > 20:
             raise ValueError(f"Button label too long (>20 chars): '{button_label}'")
         for section in sections:
@@ -83,7 +80,6 @@ class MockERPBridgeService:
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else ""
         
-        # Verify email variable safety
         email = lead.get("email") or lead.get("email_id") or ""
         
         patient_doc = {
@@ -149,7 +145,6 @@ async def run_full_pipeline_test():
     mock_wa = MockWhatsAppService()
     mock_erp = MockERPBridgeService()
     
-    # Patch global services in bot_engine
     import app.whatsapp.bot_engine as bot_mod
     bot_mod.whatsapp_service = mock_wa
     bot_mod.erp_bridge_service = mock_erp
@@ -157,31 +152,24 @@ async def run_full_pipeline_test():
     engine = WhatsAppBotEngine()
     test_phone = "919618080752"
 
-    # Step 1: User sends "hi"
     logger.info("\n--- STEP 1: Main Menu Request ---")
     await engine.handle_webhook_payload(make_text_payload(test_phone, "hi"))
     
-    # Step 2: User clicks "📅 Book Appointment"
     logger.info("\n--- STEP 2: Click Book Appointment ---")
     await engine.handle_webhook_payload(make_interactive_payload(test_phone, "btn_book_appt", "📅 Book Appointment"))
     
-    # Step 3: User inputs Name "Bhanu Prakash"
     logger.info("\n--- STEP 3: Enter Full Name ---")
     await engine.handle_webhook_payload(make_text_payload(test_phone, "Bhanu Prakash"))
     
-    # Step 4: User inputs Health Concern "Abdominal pain"
     logger.info("\n--- STEP 4: Enter Health Concern ---")
     await engine.handle_webhook_payload(make_text_payload(test_phone, "Abdominal pain"))
 
-    # Step 5: User inputs Address & Pincode "H.No 12-3, Jubilee Hills, Hyderabad - 500033"
     logger.info("\n--- STEP 5: Enter Address & Pincode ---")
     await engine.handle_webhook_payload(make_text_payload(test_phone, "H.No 12-3, Jubilee Hills, Hyderabad - 500033"))
 
-    # Step 6: User selects Category "New Consultation"
     logger.info("\n--- STEP 6: Select Category ---")
     await engine.handle_webhook_payload(make_interactive_payload(test_phone, "consult_new", "New Consultation", int_type="list_reply"))
 
-    # Step 7: User selects Slot "Morning (10:00 - 11:30)"
     logger.info("\n--- STEP 7: Select Time Slot ---")
     await engine.handle_webhook_payload(make_interactive_payload(test_phone, "slot_morning_1", "Morning (10:00 - 11:30)", int_type="list_reply"))
 

@@ -1,19 +1,3 @@
-"""
-Alembic Environment Configuration
-Location: app/alembic/env.py
-
-Tables managed by this migration:
-  - orientation_sessions    (local analytics)
-  - orientation_participants (local attendance tracking)
-  - event_logs              (local audit trail)
-
-NOT managed here:
-  - leads  ← removed; SGP Lead lives in ERPNext only
-
-Run from project root:
-    alembic upgrade head
-    alembic revision --autogenerate -m "description"
-"""
 
 import asyncio
 import sys
@@ -24,18 +8,13 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
-# ── Ensure project root is on sys.path so `app.*` imports resolve ─────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-# ── Import all ORM models BEFORE accessing Base.metadata ─────────────────────
-# Only import models that represent LOCAL PostgreSQL tables.
-# Do NOT import Lead — it is managed by ERPNext, not this database.
-from app.config.database import Base                                            # noqa
-from app.orientation.models import OrientationSession, OrientationParticipant  # noqa
-from app.events.logger import EventLog                                          # noqa
-from app.casesheet.models import CasesheetSession, CasesheetDraft               # noqa
+from app.config.database import Base
+from app.orientation.models import OrientationSession, OrientationParticipant
+from app.events.logger import EventLog
+from app.casesheet.models import CasesheetSession, CasesheetDraft
 
-# ── Alembic config ────────────────────────────────────────────────────────────
 config = context.config
 
 if config.config_file_name is not None:
@@ -43,12 +22,10 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# ── Pull DB URL from app settings (single source of truth) ───────────────────
 from app.config.settings import settings
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 
-# ── Offline migrations ────────────────────────────────────────────────────────
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -61,7 +38,6 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-# ── Online migrations ─────────────────────────────────────────────────────────
 def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():

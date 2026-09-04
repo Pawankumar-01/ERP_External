@@ -1,14 +1,6 @@
-"""Add patient_name, last_error columns and doctor_status index to casesheet_sessions
-
-Revision ID: a3f1c9d2e4b7
-Revises: 21685b7714f1
-Create Date: 2026-08-14 11:40:00.000000
-
-"""
 from alembic import op
 import sqlalchemy as sa
 
-# revision identifiers, used by Alembic.
 revision = 'a3f1c9d2e4b7'
 down_revision = '21685b7714f1'
 branch_labels = None

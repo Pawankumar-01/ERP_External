@@ -1,9 +1,3 @@
-"""
-Assessment Module
-Handles MCQ quiz after orientation session ends.
-Questions are fixed. Results saved to PostgreSQL.
-After all answers submitted → lead marked ORIENTATION_ATTENDED in ERPNext.
-"""
 import logging
 import uuid
 from typing import List
@@ -24,7 +18,6 @@ from app.orientation.models import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# ── Sample Questions (English) ────────────────────────────────────────────────
 SEED_QUESTIONS = [
     {
         "id": "q-001",
@@ -80,7 +73,6 @@ SEED_QUESTIONS = [
 
 
 async def seed_questions_if_empty(db: AsyncSession) -> None:
-    """Insert seed questions if table is empty."""
     result = await db.execute(select(AssessmentQuestion).limit(1))
     if result.scalar_one_or_none():
         return
@@ -90,11 +82,9 @@ async def seed_questions_if_empty(db: AsyncSession) -> None:
     logger.info("Assessment questions seeded")
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/questions", response_model=List[AssessmentQuestionResponse])
 async def get_questions(db: AsyncSession = Depends(get_db)):
-    """Return all active MCQ questions (without correct answers)."""
     await seed_questions_if_empty(db)
     result = await db.execute(
         select(AssessmentQuestion)
@@ -111,15 +101,8 @@ async def submit_assessment(
     payload: AssessmentSubmitRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Submit answers for all questions.
-    Saves results to PostgreSQL.
-    Marks lead as ORIENTATION_ATTENDED in ERPNext regardless of score.
-    Returns correct answers so frontend can highlight them.
-    """
     await seed_questions_if_empty(db)
 
-    # Load all questions into a dict for fast lookup
     result = await db.execute(select(AssessmentQuestion))
     questions = {q.id: q for q in result.scalars().all()}
 
@@ -156,7 +139,6 @@ async def submit_assessment(
 
     await db.flush()
 
-    # Mark lead as ORIENTATION_ATTENDED in ERPNext regardless of score
     try:
         from app.leads.service import lead_service
         await lead_service.mark_orientation_attended(
@@ -167,9 +149,6 @@ async def submit_assessment(
     except Exception as e:
         logger.error(f"Failed to mark lead {payload.lead_id} as attended: {e}")
 
-    # Auto-promote lead → Patient in ERPNext.
-    # get_or_create_patient() is idempotent — if orientation webhook already
-    # created the Patient (70% rule path), this will just return the existing one.
     try:
         from app.erp_bridge.service import erp_bridge_service
         patient_id = await erp_bridge_service.get_or_create_patient(payload.lead_id)

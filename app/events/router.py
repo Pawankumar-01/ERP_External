@@ -1,8 +1,3 @@
-"""
-Events Router — Query Audit Logs
-Read-only endpoints for accessing the event log.
-Useful for compliance audits and debugging.
-"""
 
 from typing import List, Optional
 import json
@@ -25,10 +20,6 @@ async def list_events(
     limit: int = Query(100, le=1000),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Query the structured audit event log.
-    All system actions are captured here for compliance and debugging.
-    """
     query = select(EventLog).order_by(EventLog.timestamp.desc()).limit(limit)
 
     if entity_type:

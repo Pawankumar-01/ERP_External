@@ -1,15 +1,4 @@
-/**
- * SGP Orientation — Patient Client
- *
- * Flow:
- *   1. Join form (auto-filled from URL params)
- *   2. Meeting room — host in spotlight, self + others in sidebar
- *   3. Session end detected via:
- *        a. Data message from host  → show "Session ended" banner → quiz
- *        b. RoomEvent.Disconnected  → (fallback) → quiz
- *   4. MCQ assessment
- *   5. Results screen
- */
+
 
 const API_BASE = window.location.origin + '/api/v1';
 
@@ -23,9 +12,9 @@ let currentLeadId = null;
 let currentSessionId = null;
 let quizQuestions = [];
 let quizAnswers = {};
-let sessionEndedByHost = false;  // flag to distinguish intentional end from network drop
+let sessionEndedByHost = false;  
 
-// ── URL param pre-fill ─────────────────────────────────────────────────────────
+
 window.addEventListener('DOMContentLoaded', () => {
   const p = new URLSearchParams(window.location.search);
   if (p.get('session')) {
@@ -37,7 +26,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if (p.get('lead')) document.getElementById('input-lead-id').value = p.get('lead');
   if (p.get('name')) document.getElementById('input-name').value = decodeURIComponent(p.get('name'));
 
-  // Keyboard submit on join form
+  
   ['input-name','input-lead-id','input-session-id'].forEach(id => {
     document.getElementById(id)?.addEventListener('keydown', e => {
       if (e.key === 'Enter') joinSession();
@@ -45,7 +34,7 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// ── Screen management ─────────────────────────────────────────────────────────
+
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => {
     s.classList.remove('active');
@@ -96,7 +85,7 @@ function startTimer() {
   }, 1000);
 }
 
-// ── Join ──────────────────────────────────────────────────────────────────────
+
 async function joinSession() {
   const name      = document.getElementById('input-name').value.trim();
   const leadId    = document.getElementById('input-lead-id').value.trim();
@@ -145,7 +134,7 @@ async function joinSession() {
   }
 }
 
-// ── LiveKit connection ────────────────────────────────────────────────────────
+
 async function connectToLiveKit(token, livekitUrl, displayName) {
   const { Room, RoomEvent, Track, VideoPresets } = LivekitClient;
 
@@ -166,7 +155,7 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
 
   await room.connect(livekitUrl, token);
 
-  // Enable local camera + mic (gracefully handle no device)
+  
   try {
     await room.localParticipant.enableCameraAndMicrophone();
   } catch (e) {
@@ -174,10 +163,10 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
     try { await room.localParticipant.setMicrophoneEnabled(true); } catch (_) {}
   }
 
-  // Attach local video
+  
   attachLocalVideo();
 
-  // Render any already-present participants (host may be there already)
+  
   room.remoteParticipants.forEach(p => onParticipantJoined(p));
 
   updateParticipantCount();
@@ -190,7 +179,7 @@ function attachLocalVideo() {
   if (pub?.track) pub.track.attach(document.getElementById('local-video'));
 }
 
-// ── Room event handlers ───────────────────────────────────────────────────────
+
 function onParticipantJoined(participant) {
   if (participant.identity.startsWith('host:')) {
     const name = participant.identity.replace('host:', '').replace(/_/g, ' ');
@@ -198,7 +187,7 @@ function onParticipantJoined(participant) {
     document.querySelector('#host-tile .tile-placeholder').style.display = 'none';
     showBanner(`🩺 ${name} has joined as presenter`, 'success');
     setTimeout(hideBanner, 3000);
-    // Attach any already-published host tracks
+    
     participant.getTrackPublications().forEach(pub => {
       if (pub.track) onTrackSubscribed(pub.track, pub, participant);
     });
@@ -293,7 +282,7 @@ function onTrackUnsubscribed(track, publication, participant) {
   }
 }
 
-// Handles our own screen share track once it's published to the room
+
 function onLocalTrackPublished(publication) {
   const { Track } = LivekitClient;
   if (publication.source === Track.Source.ScreenShare && publication.track) {
@@ -310,7 +299,7 @@ async function onDataReceived(data) {
       clearInterval(timerInterval);
       document.getElementById('session-status').textContent = 'Session Ended';
       document.getElementById('session-status').classList.remove('pill-live');
-      // Disconnect cleanly — onRoomDisconnected will handle the rest
+      
       setTimeout(async () => {
         if (room) { try { await room.disconnect(); } catch (_) {} }
       }, 2000);
@@ -320,8 +309,8 @@ async function onDataReceived(data) {
 
 async function onRoomDisconnected() {
   clearInterval(timerInterval);
-  // Only show the assessment quiz if the HOST intentionally ended the session.
-  // If the patient clicked "Leave" voluntarily, go back to the join screen.
+  
+  
   if (sessionEndedByHost) {
     await loadAndShowQuiz();
   } else {
@@ -329,7 +318,7 @@ async function onRoomDisconnected() {
   }
 }
 
-// ── Participant tiles ─────────────────────────────────────────────────────────
+
 function addParticipantTile(participant) {
   if (document.getElementById(`tile-${participant.sid}`)) return;
   const name = participant.identity.includes(':')
@@ -353,7 +342,7 @@ function updateParticipantCount() {
     [...room.remoteParticipants.values()].filter(p => !p.identity.startsWith('host:')).length;
 }
 
-// ── Controls ──────────────────────────────────────────────────────────────────
+
 async function toggleMic() {
   if (!room) return;
   micEnabled = !micEnabled;
@@ -377,10 +366,10 @@ async function toggleCam() {
 async function leaveSession() {
   if (!confirm('Are you sure you want to leave? The session is still in progress.')) return;
   clearInterval(timerInterval);
-  // Ensure flag is NOT set so onRoomDisconnected goes back to join screen, not quiz
+  
   sessionEndedByHost = false;
   if (room) { try { await room.disconnect(); } catch (_) {} room = null; }
-  // onRoomDisconnected handles navigation, but room is already null so call directly
+  
   showScreen('join-screen');
 }
 
@@ -390,7 +379,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'v' && !e.ctrlKey) toggleCam();
 });
 
-// ── Quiz ──────────────────────────────────────────────────────────────────────
+
 async function loadAndShowQuiz() {
   try {
     const res = await fetch(`${API_BASE}/assessment/questions`);
@@ -425,7 +414,7 @@ function renderQuiz() {
 
 function selectAnswer(questionId, option) {
   quizAnswers[questionId] = option;
-  // Visual feedback — highlight selected option
+  
   ['A','B','C','D'].forEach(opt => {
     const label = document.getElementById(`label-${questionId}-${opt}`);
     if (label) label.classList.toggle('q-option-selected', opt === option);
@@ -438,7 +427,7 @@ async function submitQuiz() {
   if (unanswered.length > 0) {
     errEl.textContent = `Please answer all questions (${unanswered.length} remaining).`;
     errEl.classList.remove('hidden');
-    // Scroll to first unanswered
+    
     const firstQ = document.getElementById(`label-${unanswered[0].id}-A`);
     firstQ?.closest('.quiz-question')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;

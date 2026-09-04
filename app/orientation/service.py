@@ -1,17 +1,3 @@
-"""
-Orientation Service — Business Logic
-──────────────────────────────────────
-Manages session lifecycle, LiveKit rooms, participant tokens,
-and attendance calculation.
-
-Architecture notes:
-  - OrientationSession + OrientationParticipant are stored locally in PostgreSQL.
-    These are analytics/operational tables — not CRM data.
-  - When a session is created, it is ALSO mirrored to ERPNext via ERP Bridge.
-  - When attendance threshold is met, ERP Bridge creates the attendance record
-    and LeadService updates the SGP Lead status in ERPNext.
-  - LeadService no longer accepts a db session — it talks to ERP directly.
-"""
 
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -38,26 +24,16 @@ logger = logging.getLogger(__name__)
 
 class OrientationService:
 
-    # ── Session CRUD ──────────────────────────────────────────────────────────
 
     async def create_session(
         self, db: AsyncSession, data: "SessionCreate"
     ) -> OrientationSession:
-        """
-        1. Generate session ID + LiveKit room name.
-        2. Provision room on LiveKit Cloud.
-        3. Persist session record to local PostgreSQL.
-        4. Mirror session to ERPNext (non-blocking).
-        5. If lead_ids provided: auto-register all leads as participants and mark
-           each lead ORIENTATION_SCHEDULED in ERPNext (patient manager batch flow).
-        """
         import uuid
         from app.erp_bridge.service import erp_bridge_service
 
         session_id = str(uuid.uuid4())
         room_name  = f"orientation-{session_id[:8]}"
 
-        # Provision LiveKit room
         await livekit_client.create_room(room_name)
         scheduled_at_dt = None
         if data.scheduled_at:
@@ -66,7 +42,6 @@ class OrientationService:
             else:
                 scheduled_at_dt = data.scheduled_at
 
-        # Persist locally (analytics/operational data)
         session = OrientationSession(
             id=session_id,
             title=data.title,
@@ -77,7 +52,6 @@ class OrientationService:
         await db.flush()
         await db.refresh(session, ["participants"])
 
-        # Mirror to ERPNext (non-blocking)
         try:
             await erp_bridge_service.create_orientation_session(
                 session_id=session.id,
@@ -99,7 +73,6 @@ class OrientationService:
         )
         logger.info(f"Orientation session created: {session.id} | room: {room_name}")
 
-        # ── Pre-register leads if provided (patient manager batch scheduling) ──
         lead_ids = getattr(data, "lead_ids", []) or []
         for lead_id in lead_ids:
             try:
@@ -112,7 +85,6 @@ class OrientationService:
                 db.add(participant)
                 await db.flush()
 
-                # Mark lead as ORIENTATION_SCHEDULED in ERPNext
                 await erp_bridge_service.update_lead_orientation_scheduled(
                     lead_id=lead_id,
                     session_title=session.title,
@@ -151,12 +123,10 @@ class OrientationService:
         )
         return list(result.scalars().all())
 
-    # ── Participant Management ────────────────────────────────────────────────
 
     async def add_participant(
         self, db: AsyncSession, session_id: str, req: AddParticipantRequest
     ) -> OrientationParticipant:
-        """Register a lead as a participant. Lead ID comes from ERPNext."""
         session = await self.get_session(db, session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
@@ -183,42 +153,28 @@ class OrientationService:
         self, db: AsyncSession, session_id: str, lead_id: str, lead_name: str,
         mobile: str = None,
     ) -> dict:
-        """
-        Generate a LiveKit JWT for a patient participant.
-
-        Security checks (in order):
-          1. Session exists
-          2. lead_id exists in ERPNext as a real SGP Lead
-          3. If mobile provided → must match ERPNext mobile_number (identity proof)
-          4. Lead status must allow orientation (not already CONVERTED etc.)
-          5. Auto-register as participant if not already registered
-        """
         from app.erp_bridge.service import erp_bridge_service
 
         session = await self.get_session(db, session_id)
         if not session:
             raise ValueError("Session not found. Please check your link.")
 
-        # 1. Validate lead exists in ERPNext
         erp_lead = await erp_bridge_service.get_lead(lead_id)
         if not erp_lead:
             raise ValueError(
                 "Patient ID not found. Please contact the clinic to verify your registration."
             )
 
-        # 2. Verify mobile number if provided (primary identity proof)
         if mobile:
             erp_mobile = (erp_lead.get("mobile_number") or "").strip()
             submitted_mobile = mobile.strip().replace(" ", "").replace("-", "")
             erp_mobile_clean = erp_mobile.replace(" ", "").replace("-", "")
-            # Check last 10 digits to handle country code variations
             if erp_mobile_clean[-10:] != submitted_mobile[-10:]:
                 raise ValueError(
                     "Mobile number does not match our records. "
                     "Please contact the clinic for assistance."
                 )
 
-        # 3. Check lead status allows orientation
         lead_status = erp_lead.get("status", "")
         blocked_statuses = ["CONVERTED", "DORMANT"]
         if lead_status in blocked_statuses:
@@ -227,10 +183,8 @@ class OrientationService:
                 "Please contact the clinic."
             )
 
-        # 4. Use ERPNext lead_name as authoritative display name
         verified_name = erp_lead.get("lead_name") or lead_name
 
-        # 5. Auto-register as participant if not already registered
         existing = await self._get_participant(db, session.id, lead_id)
         if not existing:
             from app.orientation.models import AddParticipantRequest
@@ -257,7 +211,6 @@ class OrientationService:
     async def generate_host_token(
         self, db: AsyncSession, session_id: str, host_name: str
     ) -> dict:
-        """Generate a privileged host JWT for the doctor/presenter."""
         session = await self.get_session(db, session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
@@ -277,7 +230,6 @@ class OrientationService:
             "session_id": session_id,
         }
 
-    # ── Session Lifecycle ─────────────────────────────────────────────────────
 
     async def start_session(
         self, db: AsyncSession, session_id: str
@@ -292,7 +244,6 @@ class OrientationService:
         session.started_at = datetime.now(timezone.utc)
         await db.flush()
 
-        # Mirror status update to ERP — use ERPNext-valid status value
         try:
             from app.erp_bridge.service import erp_bridge_service
             await erp_bridge_service.update_orientation_session_status(
@@ -314,10 +265,6 @@ class OrientationService:
     async def end_session(
         self, db: AsyncSession, session_id: str
     ) -> OrientationSession:
-        """
-        End session, compute final attendance for all participants,
-        and trigger completion flow for anyone who crossed the threshold.
-        """
         session = await self.get_session(db, session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
@@ -336,7 +283,6 @@ class OrientationService:
 
         await self._finalize_attendance(db, session)
 
-        # Mirror to ERP (non-blocking) — use ERPNext-valid status value
         try:
             from app.erp_bridge.service import erp_bridge_service
             await erp_bridge_service.update_orientation_session_status(
@@ -361,7 +307,6 @@ class OrientationService:
         return session
 
     async def end_session_by_room(self, db: AsyncSession, room_name: str) -> None:
-        """Called by LiveKit room_finished webhook to finalize attendance."""
         session = await self._get_session_by_room(db, room_name)
         if not session:
             logger.warning(f"room_finished: no session found for room {room_name}")
@@ -371,12 +316,10 @@ class OrientationService:
         except Exception as e:
             logger.warning(f"end_session_by_room: {e} (may already be ended)")
 
-    # ── Attendance Processing (called by LiveKit webhooks) ────────────────────
 
     async def record_join(
         self, db: AsyncSession, room_name: str, identity: str
     ) -> None:
-        """Called by LiveKit webhook on participant_joined."""
         session = await self._get_session_by_room(db, room_name)
         if not session:
             logger.warning(f"Webhook: no session for room {room_name}")
@@ -384,7 +327,7 @@ class OrientationService:
 
         lead_id = identity.split(":")[0] if ":" in identity else identity
         if lead_id.startswith("host"):
-            return  # Hosts are not tracked for attendance
+            return
 
         participant = await self._get_participant(db, session.id, lead_id)
         if not participant:
@@ -408,10 +351,6 @@ class OrientationService:
     async def record_leave(
         self, db: AsyncSession, room_name: str, identity: str
     ) -> None:
-        """
-        Called by LiveKit webhook on participant_left.
-        Calculates watch time and applies the 70% completion rule.
-        """
         session = await self._get_session_by_room(db, room_name)
         if not session:
             return
@@ -429,7 +368,6 @@ class OrientationService:
         watch_seconds = int((now - participant.join_time).total_seconds())
         participant.watch_seconds += watch_seconds
 
-        # Percentage of session attended
         if session.duration_seconds and session.duration_seconds > 0:
             participant.watch_percentage = min(
                 participant.watch_seconds / session.duration_seconds, 1.0
@@ -464,15 +402,10 @@ class OrientationService:
         if completed:
             await self._trigger_completion(db, participant, session)
 
-    # ── Private: Finalize at session end ─────────────────────────────────────
 
     async def _finalize_attendance(
         self, db: AsyncSession, session: OrientationSession
     ) -> None:
-        """
-        At session end, handle participants still marked JOINED —
-        they stayed until the room closed without a leave event.
-        """
         result = await db.execute(
             select(OrientationParticipant)
             .where(OrientationParticipant.session_id == session.id)
@@ -499,7 +432,6 @@ class OrientationService:
 
         await db.flush()
 
-    # ── Private: Completion trigger ───────────────────────────────────────────
 
     async def _trigger_completion(
         self,
@@ -507,27 +439,9 @@ class OrientationService:
         participant: OrientationParticipant,
         session: OrientationSession,
     ) -> None:
-        """
-        Called when a participant crosses the attendance threshold (70%).
-
-        Flow (attendance-only — patient creation is deferred to post-assessment):
-          1. Create SGP Orientation Attendance in ERPNext.
-          2. Update SGP Lead status → ORIENTATION_ATTENDED in ERPNext.
-          3. Emit orientation_completed event.
-
-        NOTE: Patient creation (get_or_create_patient) is intentionally NOT done
-        here. It is triggered in assessment/router.py after the MCQ quiz is
-        submitted. This ensures:
-          - "Orientation Completed" is only marked after the patient actively
-            finishes the assessment, not just by sitting in the call.
-          - Patient record is always paired with a completed quiz submission.
-          - get_or_create_patient() in assessment/router.py is idempotent, so
-            re-runs from scheduled appointments are always safe.
-        """
         from app.leads.service import lead_service
         from app.erp_bridge.service import erp_bridge_service
 
-        # 1. Create attendance record in ERPNext
         try:
             await erp_bridge_service.create_orientation_attendance(
                 lead_id=participant.lead_id,
@@ -542,8 +456,6 @@ class OrientationService:
                 f"ERP attendance creation failed for lead {participant.lead_id}: {e}"
             )
 
-        # 2. Update lead status in ERPNext (marks ORIENTATION_ATTENDED so team knows
-        #    the patient attended but may still need to complete the assessment).
         try:
             await lead_service.mark_orientation_attended(
                 participant.lead_id,
@@ -554,7 +466,6 @@ class OrientationService:
                 f"ERPNext lead status update failed for {participant.lead_id}: {e}"
             )
 
-        # 3. Emit domain event
         await event_logger.log(
             entity_type="orientation_participant",
             entity_id=participant.id,
@@ -564,7 +475,7 @@ class OrientationService:
                 "session_id":           session.id,
                 "watch_seconds":        participant.watch_seconds,
                 "watch_percentage":     round(participant.watch_percentage * 100, 1),
-                "appointment_eligible": False,  # Will become True after assessment submit
+                "appointment_eligible": False,
             },
             triggered_by="system",
         )
@@ -574,7 +485,6 @@ class OrientationService:
             "Awaiting assessment completion to create Patient record."
         )
 
-    # ── Private: Query helpers ────────────────────────────────────────────────
 
     async def _get_session_by_room(
         self, db: AsyncSession, room_name: str

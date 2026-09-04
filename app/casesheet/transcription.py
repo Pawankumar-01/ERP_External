@@ -1,19 +1,3 @@
-"""
-Transcription Service
-──────────────────────
-Uses faster-whisper (CTranslate2) for local, optimized STT.
-
-CRITICAL: faster-whisper inference is CPU/GPU-bound and synchronous.
-It MUST be called via run_in_threadpool to avoid blocking the async event loop.
-
-Model is loaded once at module level (singleton) to avoid repeated
-disk reads. First call may take a few seconds to load the model.
-
-initial_prompt:
-  Pass a section-specific vocabulary hint so Whisper knows the domain
-  context *before* it starts decoding — dramatically reduces errors on
-  Ayurvedic terms, SGP medicine codes, and organ system abbreviations.
-"""
 
 import logging
 import os
@@ -24,21 +8,15 @@ from fastapi.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
-# ── Model singleton ────────────────────────────────────────────────────────────
-# Loaded lazily on first transcription request.
-# "small" is the minimum recommended size for medical/domain vocabulary.
-# It is ~244 MB vs 73 MB for "base" but dramatically more accurate for
-# Ayurvedic terms, mixed-language dictation, and abbreviated codes.
 _whisper_model = None
 
 
 def _get_model():
-    """Load faster-whisper model once and cache it in process memory."""
     global _whisper_model
     if _whisper_model is None:
         try:
             from faster_whisper import WhisperModel
-            model_size  = os.getenv("WHISPER_MODEL_SIZE", "small")   # upgraded from "base"
+            model_size  = os.getenv("WHISPER_MODEL_SIZE", "small")
             device      = os.getenv("WHISPER_DEVICE", "cpu")
             compute     = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
             logger.info(
@@ -59,37 +37,22 @@ def _transcribe_sync(
     language: Optional[str] = None,
     initial_prompt: Optional[str] = None,
 ) -> str:
-    """
-    Synchronous transcription — runs in threadpool.
-    Writes audio bytes to a temp file (faster-whisper requires a file path).
-    Returns the full transcript as a single string.
-
-    Args:
-        audio_bytes:    Raw WAV/WebM audio bytes from the Flutter app.
-        language:       Optional ISO language code (e.g. "en", "hi", "te").
-                        Pass None to let Whisper auto-detect.
-        initial_prompt: Section-specific vocabulary hint. Whisper conditions
-                        its first token predictions on this text, dramatically
-                        improving accuracy for domain-specific terms.
-    """
     model = _get_model()
 
-    # faster-whisper requires a file path, not raw bytes
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(audio_bytes)
         tmp_path = tmp.name
 
     try:
-        # Default to English ("en") to prevent Whisper from auto-switching to Hindi/Sanskrit on medical accents
         effective_lang = language or os.getenv("WHISPER_LANGUAGE", "en")
 
         transcribe_kwargs = dict(
             language=effective_lang,
             beam_size=2,
             temperature=0.0,
-            vad_filter=True,                              # skip silence safely without dropping trailing speech
+            vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 1000, "speech_pad_ms": 300},
-            condition_on_previous_text=False,             # prevents infinite looping on repetitive audio segments
+            condition_on_previous_text=False,
         )
         if initial_prompt:
             transcribe_kwargs["initial_prompt"] = initial_prompt
@@ -113,15 +76,6 @@ async def transcribe_audio(
     language: Optional[str] = None,
     initial_prompt: Optional[str] = None,
 ) -> str:
-    """
-    Async wrapper — dispatches blocking transcription to a threadpool.
-    Safe to call from FastAPI route handlers and background tasks.
-
-    Args:
-        audio_bytes:    Raw audio bytes from the Flutter app.
-        language:       Optional ISO code for forced language detection.
-        initial_prompt: Section-specific vocabulary hint for Whisper.
-    """
     if not audio_bytes:
         raise ValueError("Empty audio bytes received")
 

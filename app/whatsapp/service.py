@@ -1,7 +1,3 @@
-"""
-WhatsApp Service — Meta Cloud API
-Uses approved template: sgp_orientation_invite
-"""
 import logging
 import httpx
 from typing import Optional
@@ -20,16 +16,12 @@ class WhatsAppService:
         session_title: str,
         scheduled_at: Optional[str] = None,
     ) -> bool:
-        # Normalize phone
         clean_phone = phone.strip().replace("+", "").replace(" ", "").replace("-", "")
         if len(clean_phone) == 10:
             clean_phone = "91" + clean_phone
 
         date_time = scheduled_at or "To be confirmed"
 
-        # Join URL — /meet/ frontend page.
-        # Strip any accidental trailing slash from FRONTEND_BASE_URL so we never
-        # produce URLs like http://host/:8001/meet/... when the env var has a slash.
         base = settings.FRONTEND_BASE_URL.rstrip("/")
         join_url = f"{base}/meet/index.html?session={session_id}&lead={patient_id}"
 
@@ -44,11 +36,11 @@ class WhatsAppService:
                     {
                         "type": "body",
                         "parameters": [
-                            {"type": "text", "text": lead_name},    # {{1}} name
-                            {"type": "text", "text": patient_id},   # {{2}} patient id
-                            {"type": "text", "text": session_id},   # {{3}} session id
-                            {"type": "text", "text": date_time},    # {{4}} date time
-                            {"type": "text", "text": join_url},     # {{5}} join link
+                            {"type": "text", "text": lead_name},
+                            {"type": "text", "text": patient_id},
+                            {"type": "text", "text": session_id},
+                            {"type": "text", "text": date_time},
+                            {"type": "text", "text": join_url},
                         ],
                     },
                 ],
@@ -95,18 +87,18 @@ class WhatsAppService:
         self,
         phone: str,
         body_text: str,
-        buttons: list,  # [{"id": "btn_1", "title": "Book Appointment"}]
+        buttons: list,
         header_text: Optional[str] = None,
         footer_text: Optional[str] = None,
     ) -> bool:
         clean_phone = self._normalize_phone(phone)
         formatted_buttons = []
-        for btn in buttons[:3]:  # Meta allows max 3 quick reply buttons
+        for btn in buttons[:3]:
             formatted_buttons.append({
                 "type": "reply",
                 "reply": {
                     "id": str(btn.get("id")),
-                    "title": str(btn.get("title"))[:20],  # Max 20 chars
+                    "title": str(btn.get("title"))[:20],
                 }
             })
 
@@ -134,7 +126,7 @@ class WhatsAppService:
         phone: str,
         body_text: str,
         button_label: str,
-        sections: list,  # [{"title": "Section Title", "rows": [{"id": "1", "title": "Row Title", "description": "Desc"}]}]
+        sections: list,
         header_text: Optional[str] = None,
         footer_text: Optional[str] = None,
     ) -> bool:

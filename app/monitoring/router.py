@@ -1,7 +1,3 @@
-"""
-Monitoring Router - Health checks, metrics, and system status
-Provides comprehensive monitoring endpoints for production deployment.
-"""
 
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -26,7 +22,6 @@ logger = logging.getLogger(__name__)
 @router.get("/health", tags=["Health"])
 @limiter.limit("60/minute")
 async def health_check(request: Request):
-    """Basic health check endpoint."""
     return {
         "status": "healthy",
         "service": "hospital-automation-engine",
@@ -38,7 +33,6 @@ async def health_check(request: Request):
 @router.get("/health/detailed", tags=["Health"])
 @limiter.limit("30/minute")
 async def detailed_health_check(request: Request, db: AsyncSession = Depends(get_db)):
-    """Comprehensive health check with all system components."""
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -46,13 +40,12 @@ async def detailed_health_check(request: Request, db: AsyncSession = Depends(get
         "checks": {}
     }
     
-    # Database health check
     try:
         result = await db.execute(text("SELECT 1"))
         await result.fetchone()
         health_status["checks"]["database"] = {
             "status": "healthy",
-            "response_time_ms": 0  # Could be measured with time.perf_counter()
+            "response_time_ms": 0
         }
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
@@ -62,7 +55,6 @@ async def detailed_health_check(request: Request, db: AsyncSession = Depends(get
         }
         health_status["status"] = "degraded"
     
-    # Redis cache health check
     try:
         if cache_service.redis_client:
             await cache_service.redis_client.ping()
@@ -83,9 +75,7 @@ async def detailed_health_check(request: Request, db: AsyncSession = Depends(get
         }
         health_status["status"] = "degraded"
     
-    # LiveKit connection health check
     try:
-        # We could implement a lightweight LiveKit API check here
         health_status["checks"]["livekit"] = {
             "status": "healthy",
             "configured": bool(settings.LIVEKIT_API_KEY)
@@ -103,19 +93,14 @@ async def detailed_health_check(request: Request, db: AsyncSession = Depends(get
 @router.get("/metrics", tags=["Monitoring"])
 @limiter.limit("20/minute")
 async def system_metrics(request: Request):
-    """System performance metrics."""
     try:
-        # CPU metrics
         cpu_percent = psutil.cpu_percent(interval=1)
         cpu_count = psutil.cpu_count()
         
-        # Memory metrics
         memory = psutil.virtual_memory()
         
-        # Disk metrics
         disk = psutil.disk_usage('/')
         
-        # Process metrics
         process = psutil.Process()
         process_memory = process.memory_info()
         
@@ -160,9 +145,7 @@ async def system_metrics(request: Request):
 @router.get("/status", tags=["Monitoring"])
 @limiter.limit("30/minute")
 async def application_status(request: Request, db: AsyncSession = Depends(get_db)):
-    """Application status with session counts and statistics."""
     try:
-        # Get session statistics
         session_result = await db.execute(text("""
             SELECT 
                 COUNT(*) as total_sessions,
@@ -173,7 +156,6 @@ async def application_status(request: Request, db: AsyncSession = Depends(get_db
         """))
         session_stats = session_result.fetchone()
         
-        # Get participant statistics
         participant_result = await db.execute(text("""
             SELECT 
                 COUNT(*) as total_participants,
@@ -188,7 +170,7 @@ async def application_status(request: Request, db: AsyncSession = Depends(get_db
             "application": {
                 "environment": settings.APP_ENV,
                 "version": "1.0.0",
-                "uptime_seconds": 0  # Could be tracked from application start
+                "uptime_seconds": 0
             },
             "sessions": {
                 "total": session_stats.total_sessions or 0,
@@ -216,13 +198,11 @@ async def application_status(request: Request, db: AsyncSession = Depends(get_db
 @router.post("/cache/clear", tags=["Monitoring"])
 @limiter.limit("10/minute")
 async def clear_cache(request: Request, pattern: Optional[str] = None):
-    """Clear cache entries."""
     try:
         if pattern:
             cleared_count = await cache_service.clear_pattern(pattern)
             message = f"Cleared {cleared_count} cache entries matching pattern: {pattern}"
         else:
-            # This would need to be implemented in cache service
             message = "Cache clear not implemented for full cache"
             logger.warning("Full cache clear not implemented")
         
@@ -239,9 +219,6 @@ async def clear_cache(request: Request, pattern: Optional[str] = None):
 @router.get("/logs/recent", tags=["Monitoring"])
 @limiter.limit("20/minute")
 async def recent_logs(request: Request, lines: int = 50):
-    """Get recent application logs (for debugging)."""
-    # This would require log file access or structured logging
-    # For now, return a placeholder
     return {
         "message": "Log access not implemented in this version",
         "suggestion": "Use centralized logging service for production"

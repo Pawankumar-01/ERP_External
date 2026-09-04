@@ -1,13 +1,4 @@
-/**
- * SGP Orientation — Host Client
- *
- * Features:
- *  - See all patients joined (video tiles in sidebar)
- *  - Screen share (for playing orientation videos with audio)
- *  - Mute all patients
- *  - Mute/unmute self, camera toggle
- *  - End session for all → sends data message → navigates patients to quiz
- */
+
 
 const API_BASE = window.location.origin + '/api/v1';
 
@@ -19,7 +10,7 @@ let camEnabled  = true;
 let screenSharing = false;
 let currentSessionId = null;
 
-// ── URL param pre-fill ────────────────────────────────────────────────────────
+
 window.addEventListener('DOMContentLoaded', () => {
   const p = new URLSearchParams(window.location.search);
   if (p.get('session')) {
@@ -33,9 +24,9 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('input-name')
     ?.addEventListener('keydown', e => { if (e.key === 'Enter') joinHost(); });
 
-  // Warn immediately if browser won't allow camera/mic/screen share.
-  // navigator.mediaDevices is ONLY available on HTTPS or localhost.
-  // Plain HTTP (e.g. http://122.x.x.x:8001) will make it undefined.
+  
+  
+  
   if (!window.isSecureContext || !navigator.mediaDevices) {
     const warn = document.createElement('div');
     warn.style.cssText = `
@@ -55,7 +46,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// ── Screen management ─────────────────────────────────────────────────────────
+
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => {
     s.classList.remove('active');
@@ -112,7 +103,7 @@ function startTimer() {
   }, 1000);
 }
 
-// ── Join ──────────────────────────────────────────────────────────────────────
+
 async function joinHost() {
   const name      = document.getElementById('input-name').value.trim();
   const sessionId = document.getElementById('input-session-id').value.trim();
@@ -153,7 +144,7 @@ async function joinHost() {
   }
 }
 
-// ── LiveKit connection ────────────────────────────────────────────────────────
+
 async function connectToLiveKit(token, livekitUrl, displayName) {
   const { Room, RoomEvent, Track, VideoPresets } = LivekitClient;
 
@@ -178,9 +169,9 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
 
   await room.connect(livekitUrl, token);
 
-  // Enable camera + mic
-  // navigator.mediaDevices is only available on HTTPS/localhost.
-  // On plain HTTP it will be undefined — show a clear message instead of crashing.
+  
+  
+  
   if (!navigator.mediaDevices) {
     showHostBanner(
       '⚠️ Camera & mic blocked — page must be served over HTTPS. You are still connected as host.',
@@ -195,12 +186,12 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
     }
   }
 
-  // Attach host self-view
+  
   const localVideo = room.localParticipant.getTrackPublications()
     .find(p => p.track?.kind === Track.Kind.Video)?.track;
   if (localVideo) localVideo.attach(document.getElementById('host-self-video'));
 
-  // Render already-present patients
+  
   room.remoteParticipants.forEach(p => {
     if (!p.identity.startsWith('host:')) onPatientJoined(p);
   });
@@ -208,7 +199,7 @@ async function connectToLiveKit(token, livekitUrl, displayName) {
   updateCount();
 }
 
-// ── Patient event handlers ────────────────────────────────────────────────────
+
 function onPatientJoined(participant) {
   if (participant.identity.startsWith('host:')) return;
   if (document.getElementById(`tile-${participant.sid}`)) return;
@@ -269,7 +260,7 @@ function updateCount() {
   document.getElementById('sidebar-count').textContent = patients.length;
 }
 
-// ── Host controls ─────────────────────────────────────────────────────────────
+
 async function toggleMic() {
   if (!room) {
     showHostBanner('⚠️ Not connected to meeting room.', 'warn');
@@ -315,8 +306,8 @@ async function toggleScreenShare() {
     return;
   }
 
-  // Screen sharing requires a secure context (HTTPS or localhost).
-  // On plain HTTP, navigator.mediaDevices is undefined and getDisplayMedia will crash.
+  
+  
   if (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia) {
     showHostBanner(
       '⚠️ Screen sharing requires HTTPS. ' +
@@ -350,7 +341,7 @@ async function toggleScreenShare() {
       btn.querySelector('.ctrl-icon').textContent  = 'SCR';
       btn.querySelector('.ctrl-label').textContent = 'Stop Share';
       document.getElementById('screen-share-indicator')?.classList.remove('hidden');
-      // Track attached via onLocalTrackPublished once LiveKit confirms it's published
+      
     } else {
       await room.localParticipant.setScreenShareEnabled(false);
       screenSharing = false;
@@ -376,7 +367,7 @@ async function toggleScreenShare() {
   }
 }
 
-// Attach our own screen share track once it's confirmed published to the room
+
 function onLocalTrackPublished(publication) {
   const { Track } = LivekitClient;
   if (publication.source === Track.Source.ScreenShare && publication.track) {
@@ -415,21 +406,21 @@ async function endSessionForAll() {
   btn.disabled = true;
   btn.innerHTML = '<span class="ctrl-icon">⟳</span><span class="ctrl-label">Ending…</span>';
 
-  // 1. Send session_ending data message — patients navigate to quiz on disconnect
+  
   if (room) {
     try {
       const msg = new TextEncoder().encode(JSON.stringify({ type: 'session_ending' }));
       await room.localParticipant.publishData(msg, { reliable: true });
     } catch (e) { console.error('Data message error:', e); }
 
-    // 2. Wait briefly for message to propagate, then disconnect
+    
     await new Promise(r => setTimeout(r, 1500));
     try { await room.disconnect(); } catch (_) {}
   }
 
   clearInterval(timerInterval);
 
-  // 3. Call FastAPI to finalize attendance (fire and forget from UI perspective)
+  
   fetch(`${API_BASE}/orientation/sessions/${currentSessionId}/end`, { method: 'POST' })
     .catch(e => console.warn('FastAPI end session (non-critical):', e));
 

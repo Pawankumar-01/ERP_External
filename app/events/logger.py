@@ -1,14 +1,3 @@
-"""
-Event Logger — Structured Audit Trail
-──────────────────────────────────────
-Every significant action in the system emits a domain event.
-Events are:
-  1. Logged to console (always)
-  2. Persisted to PostgreSQL event_logs table (when DB is available)
-
-This provides a full, immutable audit trail for healthcare compliance.
-Event logging NEVER raises — it catches all exceptions internally.
-"""
 
 import json
 import logging
@@ -26,54 +15,42 @@ from app.config.database import Base
 logger = logging.getLogger(__name__)
 
 
-# ─── Event Types ──────────────────────────────────────────────────────────────
 
 class EventType(str, Enum):
-    # Lead lifecycle
     LEAD_CREATED              = "lead_created"
     LEAD_STATUS_UPDATED       = "lead_status_updated"
-    ORIENTATION_SCHEDULED     = "orientation_scheduled"   # lead added to batch session
+    ORIENTATION_SCHEDULED     = "orientation_scheduled"
 
-    # Orientation session lifecycle
     ORIENTATION_SESSION_CREATED = "orientation_session_created"
     ORIENTATION_SESSION_STARTED = "orientation_session_started"
     ORIENTATION_SESSION_ENDED   = "orientation_session_ended"
 
-    # Participant attendance
     ORIENTATION_PARTICIPANT_REGISTERED = "orientation_participant_registered"
     ORIENTATION_PARTICIPANT_JOINED     = "orientation_participant_joined"
     ORIENTATION_PARTICIPANT_LEFT       = "orientation_participant_left"
     ORIENTATION_COMPLETED              = "orientation_completed"
 
-    # LiveKit room events (from webhook)
     ROOM_STARTED  = "room_started"
     ROOM_FINISHED = "room_finished"
 
-    # ERP Bridge calls
     ERP_CALL_SUCCESS       = "erp_call_success"
     ERP_CALL_FAILED        = "erp_call_failed"
     ERP_ATTENDANCE_CREATED = "erp_attendance_created"
 
-    # Patient lifecycle
-    PATIENT_CREATED = "patient_created"   # lead auto-promoted to patient
+    PATIENT_CREATED = "patient_created"
 
-    # Payment & finance
-    PAYMENT_VERIFIED = "payment_verified"  # payment confirmed before casesheet
+    PAYMENT_VERIFIED = "payment_verified"
 
-    # Clinical encounter
-    CASESHEET_STARTED  = "casesheet_started"  # doctor opens casesheet session
-    ENCOUNTER_CREATED  = "encounter_created"  # finalized and pushed to ERPNext
+    CASESHEET_STARTED  = "casesheet_started"
+    ENCOUNTER_CREATED  = "encounter_created"
 
-    # Downstream clinical events
     APPOINTMENT_CREATED        = "appointment_created"
     APPOINTMENT_STATUS_UPDATED = "appointment_status_updated"
     REORIENTATION_TRIGGERED    = "reorientation_triggered"
 
 
-# ─── ORM Model ────────────────────────────────────────────────────────────────
 
 class EventLog(Base):
-    """Persistent event log stored in PostgreSQL for audit and compliance."""
     __tablename__ = "event_logs"
 
     id: Mapped[str] = mapped_column(
@@ -82,14 +59,13 @@ class EventLog(Base):
     entity_type:  Mapped[str]          = mapped_column(String(100), nullable=False)
     entity_id:    Mapped[str]          = mapped_column(String(100), nullable=False)
     event_type:   Mapped[str]          = mapped_column(String(100), nullable=False)
-    payload:      Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # JSON
+    payload:      Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     triggered_by: Mapped[str]          = mapped_column(String(100), nullable=False)
     timestamp:    Mapped[datetime]     = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
 
-# ─── Pydantic Response Schema ─────────────────────────────────────────────────
 
 class EventLogResponse(BaseModel):
     id:           str
@@ -103,19 +79,13 @@ class EventLogResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ─── Logger Service ───────────────────────────────────────────────────────────
 
 class EventLogger:
-    """
-    Emits structured domain events to console and PostgreSQL.
-    Safe to call from any context — never raises.
-    """
 
     def __init__(self):
         self._db_enabled = False
 
     async def initialize(self):
-        """Called at app startup. Creates tables and enables DB persistence."""
         try:
             from app.config.database import create_all_tables
             await create_all_tables()
@@ -135,21 +105,14 @@ class EventLogger:
         payload:      Dict[str, Any],
         triggered_by: str = "system",
     ) -> None:
-        """
-        Emit a structured domain event.
-        Always writes to console. Persists to DB when available.
-        Exceptions are caught and logged — never propagated.
-        """
         payload_str = json.dumps(payload, default=str)
 
-        # 1. Console (always)
         logger.info(
             f"[EVENT] {event_type.value} | "
             f"entity={entity_type}:{entity_id} | "
             f"by={triggered_by} | {payload_str}"
         )
 
-        # 2. PostgreSQL (when available)
         if self._db_enabled:
             try:
                 from app.config.database import AsyncSessionLocal
@@ -163,7 +126,6 @@ class EventLogger:
                     ))
                     await db.commit()
             except Exception as e:
-                # Never crash the main request flow due to logging failure
                 logger.error(f"Failed to persist event to DB: {e}")
 
 

@@ -1,18 +1,3 @@
-"""
-LLM Service V1 - Clinical Section Extraction + Case Sheet Composition
-=====================================================================
-
-Drop-in replacement candidate for:
-    app/casesheet/llm_service.py
-
-Compatible with the existing router because extract_section(section, transcript)
-keeps the same signature. Adds:
-    - dynamic max_tokens from prompts.SECTION_MAX_TOKENS
-    - compose_from_draft(prompt_name, draft, patient_context=None)
-    - run_quality_check(check_name, draft, patient_context=None)
-
-All failures return usable JSON instead of raising to the caller.
-"""
 
 from __future__ import annotations
 
@@ -46,14 +31,12 @@ logger = logging.getLogger(__name__)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-# Tier 1: Gemini (Google AI Studio - Active Production Models)
 GEMINI_MODELS = [
     "gemini-3.5-flash",
     "gemini-3.1-pro-preview",
     "gemini-2.5-flash",
 ]
 
-# Tier 2: Groq (Ultra-Fast Inference Engine)
 GROQ_MODELS = [
     "qwen/qwen3.8-27b",
     "groq/compound-mini",
@@ -62,7 +45,6 @@ GROQ_MODELS = [
     "openai/gpt-oss-120b",
 ]
 
-# Tier 3: OpenRouter (Fallback Routing Tier)
 PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "openrouter/auto")
 
 _raw_candidates = [
@@ -82,18 +64,11 @@ DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS_DEFAULT", "1200"))
 
 
 class LLMService:
-    """Async service for extraction, quality checks and full case-sheet composition."""
 
     def __init__(self):
-        # Allow 2 concurrent LLM calls — safe for Groq free tier rate limits.
-        # Ambient pipeline processes section groups sequentially in pairs.
         self._semaphore = asyncio.Semaphore(2)
 
     async def extract_section(self, section: str, transcript: str) -> Dict[str, Any]:
-        """
-        Send a single section transcript to LLM and return structured JSON.
-        This preserves the existing service contract used by router.py.
-        """
         if not transcript.strip():
             return {"_raw": "", "_error": "empty transcript"}
 
@@ -127,12 +102,6 @@ class LLMService:
         batch_index: int,
         transcript: str,
     ) -> Dict[str, Any]:
-        """
-        Stage 1: Middleware Clinical Normalizer & Section Segmenter.
-        1. Corrects ASR phonetic errors (e.g. 'finite mg' -> '500mg', 'LSI' -> 'LISI', 'LV' -> 'LB').
-        2. Normalizes stuttering, word repetitions, and out-of-order spoken observations.
-        3. Segments the transcript into section-specific targeted snippets for the batch sections.
-        """
         if len(transcript.strip()) < 20:
             return {}
 
@@ -166,12 +135,6 @@ class LLMService:
         transcript: str,
         on_section_done: Any = None,
     ) -> Dict[str, Dict[str, Any]]:
-        """
-        Extract clinical data for a specific 1-indexed domain batch (1, 2, or 3).
-        Batch 1: Demographics & History (12 sections)
-        Batch 2: Examination, Vitals & Pulse Diagnosis (6 sections)
-        Batch 3: Ayurvedic Protocols, Remedies & Plan (6 sections)
-        """
         if not transcript.strip():
             return {}
 
@@ -181,15 +144,12 @@ class LLMService:
             logger.warning("Invalid batch_index: %s", batch_index)
             return {}
 
-        # Stage 1: Middleware Normalizer & Section Segmenter
         segmented_map = await self._preprocess_and_segment_batch_transcript(batch_index, transcript)
         full_cleaned = segmented_map.get("full_cleaned_transcript")
-        # Non-truncation safeguard: ensure full_cleaned is never empty or truncated relative to original audio transcript
         if not full_cleaned or len(full_cleaned.strip()) < (0.8 * len(transcript.strip())):
             logger.info(f"Stage 1 full_cleaned_transcript missing or truncated ({len(full_cleaned or '')} vs {len(transcript)} chars). Using full raw transcript.")
             full_cleaned = transcript
 
-        # Stage 2: Extract structured domain schema from normalized transcript
         messages = [
             {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
             {
@@ -220,7 +180,6 @@ class LLMService:
                 sec_data = batch_res.get(sec_key)
                 sec_snippet = segmented_map.get(sec_key) if isinstance(segmented_map, dict) else None
 
-                # Targeted Section Re-extraction Fallback: if domain extraction missed or under-extracted a section
                 if sec_snippet and isinstance(sec_snippet, str) and len(sec_snippet.strip()) > 10:
                     if not sec_data or (isinstance(sec_data, dict) and len(sec_data) <= 1):
                         logger.info(f"Targeted re-extraction for section '{sec_key}' using Stage 1 segmented snippet...")
@@ -233,7 +192,6 @@ class LLMService:
                 enriched = enrich_section_data(sec_key, sec_data)
                 results[sec_key] = enriched
 
-                # Save clean section snippet for raw transcripts display
                 raw_section_transcripts[sec_key] = sec_snippet.strip() if (sec_snippet and isinstance(sec_snippet, str) and sec_snippet.strip()) else full_cleaned
 
                 if on_section_done:
@@ -247,10 +205,6 @@ class LLMService:
         transcript: str,
         on_section_done: Any = None,
     ) -> Dict[str, Dict[str, Any]]:
-        """
-        Extract all 24 clinical sections from a single full consultation monologue transcript
-        by running 3 domain batch extractors in parallel via asyncio.gather().
-        """
         if not transcript.strip():
             return {}
 
@@ -280,11 +234,6 @@ class LLMService:
         image_bytes: bytes,
         filename: str = "image.jpg",
     ) -> Dict[str, Any]:
-        """
-        Process both audio transcript AND captured image for a clinical section.
-        Extracts lab values, diagnostic findings, and visual observations from the image,
-        combines them with the audio dictation, and summarizes into structured JSON.
-        """
         import base64
         base64_img = base64.b64encode(image_bytes).decode("utf-8")
         data_url = f"data:image/jpeg;base64,{base64_img}"
@@ -324,7 +273,6 @@ class LLMService:
         except Exception as err:
             logger.warning("Vision AI call failed for section '%s' (%s) — using text extraction fallback", section, err)
 
-        # Fallback: Process using Groq/OpenRouter text pipeline
         fallback_prompt = (
             f"DOCTOR'S DICTATION & CAPTURED REPORT IMAGE ('{filename}'):\n\n"
             f"Transcript: {transcript if transcript else 'Captured report image uploaded.'}\n\n"
@@ -338,14 +286,6 @@ class LLMService:
         draft: Dict[str, Any],
         patient_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Compose a full case sheet, doctor review summary or ERP field mapper output.
-        prompt_name examples:
-            - final_case_sheet
-            - doctor_review_summary
-            - patient_friendly_summary
-            - erpnext_field_mapper
-        """
         prompt = COMPOSER_PROMPTS.get(prompt_name)
         if not prompt:
             return {"_error": f"unknown composer prompt: {prompt_name}"}
@@ -380,13 +320,6 @@ class LLMService:
         draft: Dict[str, Any],
         patient_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Run a full-draft quality check.
-        check_name examples:
-            - missing_information_check
-            - contradiction_check
-            - red_flag_check
-        """
         prompt = QUALITY_PROMPTS.get(check_name)
         if not prompt:
             return {"_error": f"unknown quality prompt: {check_name}"}
@@ -465,7 +398,6 @@ class LLMService:
 
         async with self._semaphore:
             async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-                # ── Tier 1 Primary Engine: Groq (Ultra-Fast <300ms Inference) ──
                 if groq_key:
                     groq_headers = {
                         "Authorization": f"Bearer {groq_key}",
@@ -501,7 +433,6 @@ class LLMService:
                             continue
                     logger.warning("All Groq models failed. Falling back to OpenRouter...")
 
-                # ── Tier 2 Engine: OpenRouter (Robust Multi-Provider Fallback) ──
                 if openrouter_key:
                     headers = {
                         "Authorization": f"Bearer {openrouter_key}",
@@ -535,7 +466,6 @@ class LLMService:
                             continue
                     logger.warning("All OpenRouter models failed. Falling back to Gemini...")
 
-                # ── Tier 3 Fallback: Google Gemini API ──
                 if gemini_key:
                     gemini_headers = {
                         "Authorization": f"Bearer {gemini_key}",
@@ -618,7 +548,6 @@ class LLMService:
                 except Exception:
                     pass
 
-        # Fallback: Merge multiple individual JSON objects if LLM emitted separate blocks
         combined = {}
         for match in re.finditer(r'\{[^{}]*"(?:[a-zA-Z0-9_]+)":\s*[^{}]*\}', cleaned, re.DOTALL):
             try:

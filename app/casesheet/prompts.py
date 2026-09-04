@@ -1,29 +1,6 @@
-"""
-Clinical Section Prompts V1 - SGP / Docture Poly Case Sheet Automation
-======================================================================
-
-Drop-in replacement candidate for:
-    app/casesheet/prompts.py
-
-Design:
-1. WHISPER_INITIAL_PROMPTS: section vocabulary hints for faster-whisper.
-2. SECTION_PROMPTS: transcript-to-JSON extraction prompts.
-3. QUALITY_PROMPTS: full draft quality checks.
-4. COMPOSER_PROMPTS: full draft-to-elaborate-case-sheet prompts.
-5. SECTION_MAX_TOKENS: token budget per operation.
-6. DISPLAY_SECTION_ORDER: suggested UI order.
-
-Clinical safety rule:
-This prompt pack is for clinical documentation and clinician-reviewed case-sheet
-automation. It must not autonomously diagnose, prescribe, order investigations,
-or finalize care decisions.
-"""
 
 from __future__ import annotations
 
-# -----------------------------------------------------------------------------
-# Shared speech vocabulary for faster-whisper initial_prompt
-# -----------------------------------------------------------------------------
 
 _AYU_BASE = (
     "SGP Ayurvedic Integrative Medicine clinic. Docture Poly case sheet automation. "
@@ -69,10 +46,6 @@ _PANCHAKARMA_BASE = (
     "Exercises yoga: Naukasanam Bhujangasanam Stretching Pranayama."
 )
 
-# -----------------------------------------------------------------------------
-# SGP Medicine Canonical Name Correction Table
-# Embedded into LLM prompts to fix speech-to-text spelling errors
-# -----------------------------------------------------------------------------
 
 _SGP_MEDICINE_KNOWLEDGE = """\
 SGP PROPRIETARY MEDICINE CANONICAL NAME CORRECTION TABLE:
@@ -98,9 +71,6 @@ CRITICAL: Always use the canonical name. If uncertain between a known SGP canoni
 and an unknown name, prefer the canonical SGP name and note uncertainty in needs_doctor_confirmation.
 """
 
-# -----------------------------------------------------------------------------
-# SGP Procedure and Therapy Canonical Name Correction Table
-# -----------------------------------------------------------------------------
 
 _SGP_PROCEDURE_KNOWLEDGE = """\
 SGP PROCEDURE AND THERAPY CANONICAL NAME CORRECTION TABLE:
@@ -218,9 +188,6 @@ WHISPER_INITIAL_PROMPTS: dict[str, str] = {
     ),
 }
 
-# Full-consultation Whisper prompt used for ambient/monologue recording mode.
-# Combines all domain vocabulary into a single initial_prompt to give Whisper
-# the widest possible context when transcribing an entire consultation.
 WHISPER_AMBIENT_PROMPT = (
     _AYU_BASE + _MEDICAL_BASE + _MEDICINE_BASE + _PANCHAKARMA_BASE +
     "Full clinical consultation. Doctor dictating patient identity, chief complaint, "
@@ -233,30 +200,17 @@ WHISPER_AMBIENT_PROMPT = (
     "CAG Nuts RESERVE CISSUES QUADRANGULARIES."
 )
 
-# Section groups for parallel extraction from a full consultation transcript.
-# Each group is processed as one LLM call, extracting multiple related sections.
 AMBIENT_SECTION_GROUPS = [
-    # Group A: Patient demographics & encounter setup
     ["patient_identity", "encounter_context", "followup_details"],
-    # Group B: Primary complaint and history of present illness
     ["chief_complaint", "anamnesis"],
-    # Group C: Past histories & medication
     ["past_medical_history", "surgical_history", "medication_history", "allergy_history"],
-    # Group D: Family, personal & gender-specific history
     ["family_history_detailed", "personal_history", "menstrual_obstetric_history"],
-    # Group E: Clinical examination & investigations
     ["vitals_anthropometry", "general_examination", "systemic_examination", "investigation_reports"],
-    # Group F: Ayurvedic diagnostics
     ["pulse_diagnosis", "ayurvedic_assessment_extended"],
-    # Group G: Ayurvedic treatment protocols
     ["ayurvedic_supplements", "panchakarma", "detox_procedures", "exercises_yoga"],
-    # Group H: Final assessment & prescription
     ["treatment_and_background", "assessment_and_plan", "prescription_sheet"],
 ]
 
-# -----------------------------------------------------------------------------
-# Shared LLM instruction rules
-# -----------------------------------------------------------------------------
 
 BASE_RULES = """\
 You are a clinical documentation assistant for SGP Ayurvedic Integrative Medicine clinic.
@@ -328,9 +282,6 @@ Safety boundary:
 This is documentation support only. Do not act as an autonomous clinician.
 """
 
-# -----------------------------------------------------------------------------
-# Reusable schema fragments in prompt text
-# -----------------------------------------------------------------------------
 
 _SECTION_FOOTER = """\
 VALIDATION:
@@ -1650,9 +1601,6 @@ Schema:
 """ + _SECTION_FOOTER,
 }
 
-# -----------------------------------------------------------------------------
-# Quality prompts - operate on the complete draft JSON, not on a transcript
-# -----------------------------------------------------------------------------
 
 QUALITY_PROMPTS: dict[str, str] = {
     "missing_information_check": BASE_RULES + """\
@@ -1745,9 +1693,6 @@ Rules:
 """,
 }
 
-# -----------------------------------------------------------------------------
-# Composer prompts - operate on complete draft JSON
-# -----------------------------------------------------------------------------
 
 COMPOSER_PROMPTS: dict[str, str] = {
     "final_case_sheet": BASE_RULES + """\
@@ -1922,9 +1867,6 @@ Return JSON schema:
 """,
 }
 
-# -----------------------------------------------------------------------------
-# Token budgets
-# -----------------------------------------------------------------------------
 
 SECTION_MAX_TOKENS: dict[str, int] = {
     "patient_identity": 1200,
@@ -1962,9 +1904,6 @@ SECTION_MAX_TOKENS: dict[str, int] = {
     "erpnext_field_mapper": 3500,
 }
 
-# -----------------------------------------------------------------------------
-# UI / orchestration metadata
-# -----------------------------------------------------------------------------
 
 DISPLAY_SECTION_ORDER: list[str] = [
     "patient_identity",
@@ -1998,7 +1937,6 @@ COMPOSER_SECTIONS = set(COMPOSER_PROMPTS.keys())
 QUALITY_SECTIONS = set(QUALITY_PROMPTS.keys())
 VALID_SECTIONS = set(SECTION_PROMPTS.keys())
 
-# These are not audio sections; they operate on the entire draft.
 NON_AUDIO_SECTIONS = COMPOSER_SECTIONS | QUALITY_SECTIONS
 
 ERP_FIELD_MAPPING_RULES: dict[str, str] = {
@@ -2042,9 +1980,6 @@ ERP_FIELD_MAPPING_RULES: dict[str, str] = {
 }
 
 
-# -----------------------------------------------------------------------------
-# 3-Domain Monologue Dictation Batch Definitions & Prompts
-# -----------------------------------------------------------------------------
 
 AMBIENT_BATCH_GROUPS: dict[int, list[str]] = {
     1: [
@@ -2261,9 +2196,6 @@ Rules:
 }
 
 
-# -----------------------------------------------------------------------------
-# Stage 1 Middleware Normalizer & Section Segmenter Prompts
-# -----------------------------------------------------------------------------
 
 MIDDLEWARE_SEGMENTER_PROMPTS = {
     1: f"""\

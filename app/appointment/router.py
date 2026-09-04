@@ -1,21 +1,3 @@
-"""
-Appointment Module
-─────────────────
-Handles the full lead → patient → appointment flow.
-
-Flow:
-  1. Validate lead exists and status = ORIENTATION_ATTENDED (70% orientation required)
-  2. Convert lead to Patient in ERPNext (if not already converted)
-  3. Create Patient Appointment in ERPNext
-  4. Update SGP Lead: status=APPOINTMENT_SCHEDULED, appointment=<name>
-  5. Emit event log
-  6. Return appointment details
-
-Gating rule (confirmed):
-  Appointments are LOCKED until orientation completion (70% watch time).
-  Assessment is optional — NOT required for appointment scheduling.
-  FastAPI enforces this independently of ERPNext validation.
-"""
 
 import logging
 from typing import Optional
@@ -31,20 +13,15 @@ from app.events.logger import event_logger, EventType
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# ── Request / Response schemas ─────────────────────────────────────────────────
 
 class ScheduleAppointmentRequest(BaseModel):
-    """
-    All fields needed to schedule a consultation appointment.
-    lead_id is the primary key — patient conversion happens automatically.
-    """
     lead_id:          str
-    practitioner:     str            # ERPNext Healthcare Practitioner name
-    appointment_date: str            # YYYY-MM-DD
-    appointment_time: Optional[str] = None   # HH:MM:SS
+    practitioner:     str
+    appointment_date: str
+    appointment_time: Optional[str] = None
     department:       Optional[str] = None
     notes:            Optional[str] = None
-    duration:         int            = 30    # minutes
+    duration:         int            = 30
 
 
 class AppointmentResponse(BaseModel):
@@ -60,22 +37,16 @@ class AppointmentResponse(BaseModel):
 
 
 class AppointmentStatusUpdate(BaseModel):
-    status: str   # Open, Closed, Cancelled, No Show
+    status: str
     notes: Optional[str] = None
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.post("/", response_model=AppointmentResponse, status_code=201)
 async def schedule_appointment(
     req: ScheduleAppointmentRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Full lead → patient → appointment flow.
-    Enforces orientation completion gate.
-    """
-    # 1. Fetch lead and validate eligibility
     lead = await erp_bridge_service.get_lead(req.lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail=f"Lead {req.lead_id} not found")
@@ -95,10 +66,8 @@ async def schedule_appointment(
     lead_mobile  = lead.get("mobile_number", "")
     lead_email   = lead.get("email_id") or lead.get("email", "")
 
-    # 2. Get or create Patient record
     patient_id = await _get_or_create_patient(req.lead_id, lead_name, lead_mobile, lead_email)
 
-    # 3. Create Patient Appointment in ERPNext
     appointment = await erp_bridge_service.create_patient_appointment({
         "patient":          patient_id,
         "practitioner":     req.practitioner,
@@ -109,7 +78,6 @@ async def schedule_appointment(
         "notes":            req.notes,
         "billing_item": "Consultation Fee",
         "status":           "Open",
-        # Link back to SGP Lead via reference fields
         "reference_doctype": "SGP Lead",
         "reference_docname": req.lead_id,
     })
@@ -122,10 +90,8 @@ async def schedule_appointment(
 
     appointment_name = appointment.get("name")
 
-    # 4. Update SGP Lead status + link appointment
     await _update_lead_after_appointment(req.lead_id, appointment_name)
 
-    # 5. Emit event
     await event_logger.log(
         entity_type="appointment",
         entity_id=appointment_name,
@@ -160,7 +126,6 @@ async def schedule_appointment(
 
 @router.get("/lead/{lead_id}")
 async def get_lead_appointments(lead_id: str):
-    """Get all appointments for a lead, looked up via reference_docname in ERPNext."""
     result = await erp_bridge_service._request(
         "GET",
         "/api/resource/Patient Appointment",
@@ -174,11 +139,6 @@ async def get_lead_appointments(lead_id: str):
 
 @router.get("/by-patient/{patient_id}")
 async def get_appointments_by_patient(patient_id: str):
-    """
-    List all appointments for a Patient in ERPNext.
-    Used by Flutter to show appointment history and pre-fill casesheet sessions.
-    Returns appointments ordered by date descending.
-    """
     result = await erp_bridge_service._request(
         "GET",
         "/api/resource/Patient Appointment",
@@ -197,7 +157,6 @@ async def get_appointments_by_patient(patient_id: str):
 
 @router.get("/{appointment_id}")
 async def get_appointment(appointment_id: str):
-    """Fetch appointment details from ERPNext."""
     appt = await erp_bridge_service.get_appointment(appointment_id)
     if not appt:
         raise HTTPException(status_code=404, detail=f"Appointment {appointment_id} not found")
@@ -210,12 +169,6 @@ async def update_appointment_status(
     req: AppointmentStatusUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Update appointment status.
-    Valid statuses: Open, Closed, Cancelled, No Show
-
-    No Show → triggers reorientation flag on the lead.
-    """
     valid_statuses = {"Open", "Closed", "Cancelled", "No Show"}
     if req.status not in valid_statuses:
         raise HTTPException(
@@ -231,7 +184,6 @@ async def update_appointment_status(
     if not result:
         raise HTTPException(status_code=502, detail="Failed to update appointment status")
 
-    # No Show → trigger reorientation on the lead
     if req.status == "No Show":
         lead_id = result.get("reference_docname")
         if lead_id:
@@ -248,22 +200,14 @@ async def update_appointment_status(
     return {"appointment_id": appointment_id, "status": req.status}
 
 
-# ── Private helpers ────────────────────────────────────────────────────────────
 
 async def _get_or_create_patient(
     lead_id: str, lead_name: str, mobile: str, email: str
 ) -> str:
-    """
-    Find existing Patient linked to this lead, or create one.
-    Delegates to erp_bridge_service with safe fallback handling first_name and sex fields.
-    Returns ERPNext Patient document name.
-    """
-    # Prefer robust bridge service which handles full Lead attribute mapping & idempotency
     patient_id = await erp_bridge_service.get_or_create_patient(lead_id)
     if patient_id:
         return patient_id
 
-    # Fallback: Create new Patient directly if bridge service lookup needed explicit local params
     name_parts = (lead_name or "Walk-in Patient").strip().split(maxsplit=1)
     first_name = name_parts[0]
     last_name  = name_parts[1] if len(name_parts) > 1 else ""
@@ -295,7 +239,6 @@ async def _get_or_create_patient(
 
 
 async def _update_lead_after_appointment(lead_id: str, appointment_name: str) -> None:
-    """Update SGP Lead status to APPOINTMENT_SCHEDULED and link the appointment."""
     try:
         await erp_bridge_service._request(
             "PUT",
@@ -307,15 +250,10 @@ async def _update_lead_after_appointment(lead_id: str, appointment_name: str) ->
         )
         logger.info(f"Lead {lead_id} updated → APPOINTMENT_SCHEDULED, appt={appointment_name}")
     except Exception as e:
-        # Non-blocking — appointment was created, lead update failure is logged not raised
         logger.error(f"Failed to update lead {lead_id} after appointment creation: {e}")
 
 
 async def _trigger_reorientation(lead_id: str, appointment_id: str, db) -> None:
-    """
-    No-show detected → set lead status to REORIENTATION_REQUIRED.
-    This triggers the manager to re-schedule orientation for this patient.
-    """
     try:
         await erp_bridge_service._request(
             "PUT",

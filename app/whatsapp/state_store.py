@@ -1,14 +1,9 @@
-"""
-WhatsApp Session State Manager
-Tracks multi-turn conversation state per phone number.
-"""
 import time
 import logging
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Session timeout: 15 minutes of inactivity
 SESSION_TIMEOUT_SECONDS = 900
 
 

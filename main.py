@@ -1,7 +1,3 @@
-"""
-Hospital Automation Engine - Main Application Entry Point
-FastAPI-based external automation layer for ERPNext Hospital ERP.
-"""
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -30,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: startup and shutdown hooks."""
     logger.info("🏥 Hospital Automation Engine starting up...")
     await event_logger.initialize()
     logger.info("✅ Event logger initialized")
@@ -48,10 +43,9 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ─── CORS ────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows Flutter Web (Chrome) to connect locally
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,7 +53,6 @@ app.add_middleware(
 
 from app.casesheet.router import router as casesheet_router
 
-# ─── Routers ─────────────────────────────────────────────────────────────────
 app.include_router(leads_router,       prefix="/api/v1/leads",       tags=["Leads"])
 app.include_router(orientation_router, prefix="/api/v1/orientation",  tags=["Orientation"])
 app.include_router(livekit_router,     prefix="/api/v1/livekit",      tags=["LiveKit"])
@@ -74,7 +67,6 @@ import os
 os.makedirs("uploads/lab_reports", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-# ─── Static files (frontend) ─────────────────────────────────────────────────
 app.mount("/meet", StaticFiles(directory="frontend/orientation_meet", html=True), name="meet")
 
 

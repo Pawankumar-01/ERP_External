@@ -1,7 +1,3 @@
-"""
-WhatsApp Router
-POST /api/v1/whatsapp/notify-orientation → send join links to leads
-"""
 
 import logging
 from typing import List, Optional
@@ -26,10 +22,6 @@ class OrientationNotifyRequest(BaseModel):
 
 @router.post("/notify-orientation")
 async def notify_orientation(req: OrientationNotifyRequest):
-    """
-    Fetch each lead's phone from ERPNext and send WhatsApp join link.
-    Returns count of successful sends.
-    """
     sent = 0
     failed = []
 
@@ -82,10 +74,6 @@ async def verify_webhook(
     hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
     hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
 ):
-    """
-    Meta Webhook verification endpoint.
-    Meta sends GET request to verify domain ownership and secret token.
-    """
     if hub_mode == "subscribe" and hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN:
         logger.info("[WHATSAPP WEBHOOK] Domain & token verified successfully!")
         return Response(content=hub_challenge, media_type="text/plain")
@@ -96,10 +84,6 @@ async def verify_webhook(
 
 @router.post("/webhook")
 async def receive_webhook(request: Request):
-    """
-    Meta Webhook payload listener.
-    Receives incoming WhatsApp messages, quick-reply button taps, and list selections.
-    """
     try:
         payload = await request.json()
         await bot_engine.handle_webhook_payload(payload)

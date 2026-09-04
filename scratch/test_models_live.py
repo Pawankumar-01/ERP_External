@@ -18,7 +18,6 @@ async def test_live_models():
     ]
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # Test Gemini models via Native & OpenAI endpoint
         gemini_test_models = [
             "gemini-1.5-flash",
             "gemini-1.5-pro",
@@ -28,7 +27,6 @@ async def test_live_models():
         print("\n--- TESTING GEMINI MODELS ---")
         if gemini_key:
             for m in gemini_test_models:
-                # 1. Test OpenAI path
                 url_openai = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
                 headers = {"Authorization": f"Bearer {gemini_key}", "Content-Type": "application/json"}
                 payload = {"model": m, "messages": test_messages, "temperature": 0.1}
@@ -38,7 +36,6 @@ async def test_live_models():
                 except Exception as e:
                     print(f"Gemini OpenAI [{m}]: EXCEPTION {e}")
 
-                # 2. Test Native REST path
                 url_native = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={gemini_key}"
                 native_payload = {
                     "contents": [{"parts": [{"text": "Extract chief complaint from: Patient complains of severe headache for 3 days."}]}],
