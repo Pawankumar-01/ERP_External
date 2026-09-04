@@ -348,6 +348,22 @@ class LLMService:
             max_tokens=SECTION_MAX_TOKENS.get(check_name, 3000),
         )
 
+    async def generate_text(
+        self,
+        system_prompt: str,
+        user_content: str,
+        max_tokens: int = 500,
+    ) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        try:
+            return await self._call_llm(messages=messages, max_tokens=max_tokens)
+        except Exception as exc:
+            logger.error("generate_text failed: %s", exc)
+            raise
+
     async def _safe_json_call(
         self,
         messages: list,

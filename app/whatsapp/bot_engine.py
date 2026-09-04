@@ -182,8 +182,9 @@ class WhatsAppBotEngine:
         greeting = f"Welcome *{patient_name}*" if patient_name else "Welcome"
 
         body_text = (
-            f"🌿 *{greeting} to SGP Ayurvedic Healthcare Center!*\n\n"
-            "I am your automated AI care assistant. How can we assist you today?"
+            f"🌿 *{greeting} to Novadigm Health — by SGP Hospitals*\n\n"
+            "Integrative & personalized clinical care for complex and progressive conditions.\n"
+            "I am your automated AI care assistant. How can we help you today?"
         )
         buttons = [
             {"id": "btn_book_consultation", "title": "📅 Book Consultation"},
@@ -194,8 +195,8 @@ class WhatsAppBotEngine:
             phone=phone,
             body_text=body_text,
             buttons=buttons,
-            header_text="SGP Healthcare Assistant",
-            footer_text="Select an option below to continue"
+            header_text="Novadigm Health | SGP Hospitals",
+            footer_text="🌐 novadigm.health | 📞 7331109988"
         )
         session.update_state("MAIN_MENU")
 
@@ -418,31 +419,39 @@ class WhatsAppBotEngine:
     async def _handle_faq_selection(self, phone: str, session, action_id: str):
         if action_id == "faq_timings":
             msg = (
-                "🏥 *SGP Ayurvedic Healthcare Center*\n\n"
+                "🏥 *Novadigm Health — SGP Hospitals*\n\n"
                 "⏰ *Clinic Hours:* Monday – Saturday (9:00 AM – 7:00 PM)\n"
-                "📍 *Location:* SGP Regional Centers & Online Tele-Consultations\n"
-                "📞 *Patient Care Desk:* Managed directly by our dedicated Patient Managers.\n\n"
+                "📍 *Address:* BO-1, B Block, Indu Fortune Fields The Annexe, Besides Indu Villa's, "
+                "13th Phase Rd, Kukatpally Housing Board Colony, Hyderabad, Telangana – 500085\n"
+                "📞 *Contact:* 7331109988\n"
+                "📧 *Email:* info@sgprs.com\n\n"
+                "🌐 *Website:* novadigm.health\n"
+                "🔗 *Group:* saigangapanakeia.in\n\n"
                 "_Type 'book' to request a consultation, or 'menu' for main options._"
             )
             await whatsapp_service.send_text_message(phone, msg)
 
         elif action_id in ["faq_consultation", "faq_fees"]:
             msg = (
-                "🩺 *SGP 3-Step Clinical Process*\n\n"
-                "1. *Request Consultation:* Share your health details via this bot.\n"
-                "2. *Manager Call:* Our Patient Manager contacts you to confirm your orientation & consultation slot.\n"
-                "3. *Holistic Assessment:* Complete Nadi Pariksha, VPK diagnosis, and receive your personalized 8-week regimen.\n\n"
+                "🩺 *Novadigm 3-Step Clinical Journey*\n\n"
+                "1️⃣ *Request Consultation:* Share your health details via this bot.\n"
+                "2️⃣ *Manager Call:* Our Patient Manager calls you on *7331109988* to confirm your orientation & consultation slot.\n"
+                "3️⃣ *Holistic Assessment:* Led by *Dr. Ravishankar Polisetty* — Nadi Pariksha, VPK diagnosis, and your personalized 8-week integrative regimen.\n\n"
+                "🌐 *Learn more:* novadigm.health\n"
+                "🔖 *Book online:* novadigm.health/book-appointment\n\n"
                 "_Type 'book' to get started!_"
             )
             await whatsapp_service.send_text_message(phone, msg)
 
         elif action_id == "faq_panchakarma":
             msg = (
-                "🌿 *Panchakarma & Therapy Procedures*\n\n"
-                "SGP specializes in authentic Panchakarma & detoxification therapies:\n"
+                "🌿 *Panchakarma & Integrative Therapies*\n\n"
+                "Novadigm specializes in authentic Panchakarma & detoxification therapies:\n"
                 "• *Basti & Vasthi:* Januvasthi, Kati Vasthi, Greeva Vasthi\n"
                 "• *Detox Cleanses:* Nithya & Prathivaara Virechana\n"
-                "• *Home Protocols:* Anutailam nasal drops, Steam Inhalation & Gandusham\n\n"
+                "• *Home Protocols:* Anutailam nasal drops, Steam Inhalation & Gandusham\n"
+                "• *Specializations:* Oncology, Cardiology, Neurology, Orthopedics, Nephrology, Endocrinology, Dermatology & more\n\n"
+                "🌐 novadigm.health/disease-condition\n\n"
                 "_Type 'book' to request a consultation with our Patient Manager._"
             )
             await whatsapp_service.send_text_message(phone, msg)
@@ -453,7 +462,9 @@ class WhatsAppBotEngine:
                 "• *Medicine Timings:* Morning (6-8 AM), Evening (6-8 PM) before food unless prescribed.\n"
                 "• *Special Intake:* D-Tox (2h after food), Lithozen (20m after food with ginger tea).\n"
                 "• *Diet Rule (CCRSTT to avoid):* Avoid Cabbage, Cauliflower, Radish, Spinach, Tomato, Tamarind.\n"
-                "• *Recommended Soups:* Barley, Tapioca (Sabu Dana), Rice, and Finger Millet (Ragi).\n\n"
+                "• *Recommended Soups:* Barley, Tapioca (Sabu Dana), Rice, and Finger Millet (Ragi).\n"
+                "• *Nuts:* 5 Cashews, 5 Almonds, 2 tbsp Groundnuts soaked overnight.\n\n"
+                "📖 *More on our protocols:* saigangapanakeia.in/blogs\n\n"
                 "_Type 'menu' to return to options._"
             )
             await whatsapp_service.send_text_message(phone, msg)
@@ -461,9 +472,10 @@ class WhatsAppBotEngine:
         elif action_id in ["faq_ai", "faq_custom_ai"]:
             session.update_state("ASKING_AI_QUESTION")
             msg = (
-                "🤖 *SGP AI Care Assistant*\n\n"
-                "Please type your health query or question below. "
-                "Our AI assistant will answer based on official SGP clinical knowledge guidelines!"
+                "🤖 *Novadigm AI Care Assistant*\n\n"
+                "Ask me anything about your health, our treatments, diet protocols, or medicines. "
+                "I'm trained on Novadigm's official SGP clinical knowledge base.\n\n"
+                "_Type 'menu' anytime to return to main options._"
             )
             await whatsapp_service.send_text_message(phone, msg)
         else:
@@ -482,32 +494,59 @@ class WhatsAppBotEngine:
         await whatsapp_service.send_text_message(phone, "⏳ *Consulting SGP Clinical Knowledge Base...*")
 
         system_prompt = (
-            "You are a friendly, compassionate clinical AI assistant for SGP Ayurvedic Healthcare. "
-            "You strictly follow SGP's official patient clinical guidelines:\n"
-            "1. Medicines: Morning (6-8 AM), Evening (6-8 PM) before food unless specified. D-Tox (2h after food), Lithozen (20m after food with ginger tea), Carcincure R (2h after food). Keep 15m gap after APD, 5m gap between others.\n"
-            "2. Never alter prescription, medium (milk/water), or doses independently.\n"
-            "3. Diet (CCRSTT to avoid): Cabbage, Cauliflower, Radish, Spinach, Tomato, Tamarind. Alternatives: Raw mango, Aamchur, Amla, Ginger, Ajwain, Cinnamon.\n"
-            "4. Soups: Barley, Sabudana/Tapioca, Rice, Broccoli. Nuts: 5 Cashews, 5 Almonds, 2 tbsp Groundnuts soaked overnight.\n"
-            "5. Breathing: DNB left-to-right (10m morning, 10m night). Suryanamaskar only after holding Naukasan for 40s without pain.\n"
-            "6. Oils: Anutailam (2 drops nostril/ear daily x2 weeks), Steam inhalation (1x daily x2 weeks), Gandusham/Oil Pulling (sesame oil 1x daily x2 weeks).\n"
-            "7. RED-FLAG SAFETY: Never diagnose, promise guaranteed cure/duration, or stop allopathic/BP/diabetes medicines without doctor review.\n"
-            "Keep answers concise (max 3-4 sentences) and encourage consulting the SGP Patient Manager for personalized appointment scheduling."
+            "You are a warm, knowledgeable AI Care Assistant for Novadigm Health, a hospital brand "
+            "under Sai Ganga Panakeia (SGP) Group — India's pioneer in Integrative Regenerative Medicine "
+            "combining modern allopathy and ancient Ayurveda.\n\n"
+            "ABOUT NOVADIGM & SGP:\n"
+            "- Novadigm Health offers personalized, evidence-informed integrative care for complex, "
+            "refractory and progressive conditions. Led by Dr. Ravishankar Polisetty (MD, ND, DNM, Watson Data Scientist).\n"
+            "- Address: BO-1, B Block, Indu Fortune Fields, Kukatpally, Hyderabad – 500085.\n"
+            "- Contact: 7331109988 | Email: info@sgprs.com\n"
+            "- Website: novadigm.health | Group site: saigangapanakeia.in\n"
+            "- Specializations: Oncology, Cardiology, Neurology, Orthopedics, Nephrology, Endocrinology, "
+            "Dermatology, Gastroenterology, Gynecology, Haematology, Allergology, Autoimmunology.\n\n"
+            "SGP CLINICAL PROTOCOLS (follow strictly):\n"
+            "1. Medicines: Morning (6-8 AM) & Evening (6-8 PM) before food unless specified. "
+            "D-Tox: 2h after food. Lithozen: 20 min after food with ginger tea. Carcincure R: 2h after food. "
+            "Keep 15 min gap after APD, 5 min gap between other medicines.\n"
+            "2. Never alter prescription, medium (milk/water), or doses independently — always consult doctor.\n"
+            "3. Diet CCRSTT (avoid): Cabbage, Cauliflower, Radish, Spinach, Tomato, Tamarind. "
+            "Safe alternatives: Raw mango, Aamchur, Amla, Ginger, Ajwain, Cinnamon.\n"
+            "4. Recommended Soups: Barley, Sabudana/Tapioca, Rice, Broccoli. "
+            "Nuts: 5 Cashews, 5 Almonds, 2 tbsp Groundnuts (soaked overnight).\n"
+            "5. Breathing: DNB left-to-right (10 min morning, 10 min night). "
+            "Suryanamaskar only after holding Naukasan for 40s without pain.\n"
+            "6. Oils & Home Therapies: Anutailam (2 drops nostril/ear, twice daily x2 weeks), "
+            "Steam inhalation (once daily x2 weeks), Gandusham/Oil Pulling with sesame oil (once daily x2 weeks).\n"
+            "7. 30 natural, non-invasive, patent-pending formulations developed by SGP for restoring health.\n\n"
+            "RED-FLAG SAFETY RULES:\n"
+            "- Never diagnose or promise guaranteed cure or specific recovery timelines.\n"
+            "- Never advise stopping allopathic, BP, or diabetes medicines without doctor review.\n"
+            "- For serious or emergency symptoms, always direct to in-person consultation.\n\n"
+            "COMMUNICATION STYLE:\n"
+            "- Keep responses concise (max 4 sentences). Use simple, warm, reassuring language.\n"
+            "- Always end by encouraging the patient to book a consultation: "
+            "'Call us on 7331109988 or visit novadigm.health/book-appointment'"
         )
         try:
-            answer = await llm_service.generate_completion(
+            answer = await llm_service.generate_text(
                 system_prompt=system_prompt,
                 user_content=query
             )
             reply = (
-                f"🤖 *SGP Assistant Response:*\n\n{answer}\n\n"
-                f"📞 *Would you like our Patient Manager to contact you?*\n"
-                f"Type 'book' to request a consultation, or 'menu' for options."
+                f"🤖 *Novadigm AI Assistant:*\n\n{answer}\n\n"
+                f"📞 *Talk to our Patient Manager:* 7331109988\n"
+                f"🌐 *Book online:* novadigm.health/book-appointment\n"
+                f"_Type 'book' here or 'menu' for options._"
             )
         except Exception as e:
             logger.error(f"AI error for WA query: {e}")
             reply = (
-                "SGP Healthcare provides personalized consultations, 8-week diet & supplement plans, "
-                "and therapy guidance. Please type 'book' or 'menu' to request a callback from our Patient Manager!"
+                "Novadigm Health provides personalized integrative consultations, 8-week diet & supplement plans, "
+                "Panchakarma therapies, and care for complex conditions.\n\n"
+                "📞 *Call us:* 7331109988\n"
+                "🌐 *Visit:* novadigm.health\n"
+                "_Type 'book' to request a callback or 'menu' for options._"
             )
 
         await whatsapp_service.send_text_message(phone, reply)
