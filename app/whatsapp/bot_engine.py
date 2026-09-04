@@ -76,9 +76,51 @@ class WhatsAppBotEngine:
                 await self.send_main_menu(sender_phone)
                 return
 
-            if session.state == "MAIN_MENU":
-                await self._handle_main_menu_action(sender_phone, session, text_body, action_id)
-            elif session.state == "AWAITING_NAME":
+            if action_id in ["btn_book_consultation", "btn_book_appt"] or text_clean in ["book consultation", "book appointment"]:
+                session.update_state("AWAITING_NAME")
+                await whatsapp_service.send_text_message(
+                    sender_phone,
+                    "🌿 Welcome to SGP Healthcare!\n\n"
+                    "Let's get your details for our Patient Manager.\n"
+                    "Please reply with your *Full Name*:"
+                )
+                return
+
+            if action_id in ["btn_talk_manager", "btn_support"] or "talk to manager" in text_clean or "talk to specialist" in text_clean or "support" in text_clean:
+                await self._process_manager_callback_request(sender_phone, session)
+                return
+
+            if action_id == "btn_faqs" or text_clean in ["faqs", "faq", "services", "faqs & services"]:
+                await self._send_faq_list_menu(sender_phone)
+                return
+
+            if action_id in ["faq_ai", "faq_custom_ai", "faq_ai_assistant"] or "ask ai" in text_clean or "ai care" in text_clean:
+                session.update_state("ASKING_AI_QUESTION")
+                msg = (
+                    "🤖 *SGP AI Care Assistant*\n\n"
+                    "Please type your health query or question below. "
+                    "Our AI assistant will answer based on official SGP clinical knowledge guidelines!"
+                )
+                await whatsapp_service.send_text_message(sender_phone, msg)
+                return
+
+            if action_id == "faq_timings" or "clinic hours" in text_clean or "location" in text_clean:
+                await self._handle_faq_selection(sender_phone, session, "faq_timings")
+                return
+
+            if action_id in ["faq_consultation", "faq_fees"] or "consultation process" in text_clean or "fees" in text_clean:
+                await self._handle_faq_selection(sender_phone, session, "faq_consultation")
+                return
+
+            if action_id == "faq_panchakarma" or "panchakarma" in text_clean:
+                await self._handle_faq_selection(sender_phone, session, "faq_panchakarma")
+                return
+
+            if action_id == "faq_diet_meds" or "diet" in text_clean or "medication" in text_clean:
+                await self._handle_faq_selection(sender_phone, session, "faq_diet_meds")
+                return
+
+            if session.state == "AWAITING_NAME":
                 await self._handle_name_input(sender_phone, session, text_body)
             elif session.state == "AWAITING_HEALTH_CONCERN":
                 await self._handle_health_concern_input(sender_phone, session, text_body)
@@ -126,27 +168,6 @@ class WhatsAppBotEngine:
             footer_text="Select an option below to continue"
         )
         session.update_state("MAIN_MENU")
-
-    async def _handle_main_menu_action(self, phone: str, session, text_body: str, action_id: str):
-        if action_id == "btn_book_consultation" or "book" in text_body.lower() or "consult" in text_body.lower():
-            session.update_state("AWAITING_NAME")
-            await whatsapp_service.send_text_message(
-                phone,
-                " Welcome to SGP Healthcare!\n\n"
-                "Let's get your details for our Patient Manager.\n"
-                "Please reply with your *Full Name*:"
-            )
-
-        elif action_id == "btn_faqs" or "faq" in text_body.lower() or "service" in text_body.lower():
-            await self._send_faq_list_menu(phone)
-
-        elif action_id == "btn_talk_manager" or "talk" in text_body.lower() or "manager" in text_body.lower() or "call" in text_body.lower():
-            await self._process_manager_callback_request(phone, session)
-        else:
-            if "faq_" in action_id:
-                await self._handle_faq_selection(phone, session, action_id)
-            else:
-                await self.send_main_menu(phone)
 
     async def _handle_name_input(self, phone: str, session, name: str):
         if len(name.strip()) < 2:
@@ -274,7 +295,7 @@ class WhatsAppBotEngine:
 
     async def _process_manager_callback_request(self, phone: str, session):
         patient_name = session.data.get("patient_name") or session.data.get("wa_profile_name") or "Valued Patient"
-        
+
         lead_notes = (
             f"Requested direct callback from Patient Manager via WhatsApp Bot.\n"
             f"Action Required: Patient Manager to call back patient on priority."
@@ -328,8 +349,8 @@ class WhatsAppBotEngine:
                         "description": "Ayurvedic dosage timing & CCRSTT diet rules"
                     },
                     {
-                        "id": "faq_ai",
-                        "title": "🤖 Ask AI Care Assistant",
+                        "id": "faq_custom_ai",
+                        "title": "Ask AI Care Assistant",
                         "description": "Type any health question for instant clinical answers"
                     },
                 ]
@@ -354,7 +375,7 @@ class WhatsAppBotEngine:
             )
             await whatsapp_service.send_text_message(phone, msg)
 
-        elif action_id == "faq_consultation":
+        elif action_id in ["faq_consultation", "faq_fees"]:
             msg = (
                 "🩺 *SGP 3-Step Clinical Process*\n\n"
                 "1. *Request Consultation:* Share your health details via this bot.\n"
@@ -386,7 +407,7 @@ class WhatsAppBotEngine:
             )
             await whatsapp_service.send_text_message(phone, msg)
 
-        elif action_id == "faq_ai":
+        elif action_id in ["faq_ai", "faq_custom_ai"]:
             session.update_state("ASKING_AI_QUESTION")
             msg = (
                 "🤖 *SGP AI Care Assistant*\n\n"
