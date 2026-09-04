@@ -235,6 +235,37 @@ class WhatsAppBotEngine:
 
         session.data["patient_address"] = location_text.strip()
         session.data["patient_pincode"] = pincode
+
+        patient_name = session.data.get("patient_name", "Valued Patient")
+        health_concern = session.data.get("health_concern", "General Consultation")
+
+        lead_notes = (
+            f"Created via SGP WhatsApp Bot.\n"
+            f"Primary Health Concern: {health_concern}\n"
+            f"Location/Address: {location_text.strip()}\n"
+            f"Pincode: {pincode}\n"
+            f"Action Required: Patient Manager to contact patient and confirm consultation & orientation slot."
+        )
+
+        lead_created = None
+        try:
+            lead_created = await erp_bridge_service.create_lead(
+                WhatsAppLeadData(
+                    name=patient_name,
+                    phone=phone,
+                    address=location_text.strip(),
+                    pincode=pincode,
+                    interested_in="CONSULTATION",
+                    notes=lead_notes
+                )
+            )
+            if lead_created:
+                lead_id = lead_created.get("name")
+                session.data["lead_id"] = lead_id
+                logger.info(f"SGP Lead created for WA user {phone}: {lead_id}")
+        except Exception as e:
+            logger.error(f"Error creating SGP Lead for {phone}: {e}")
+
         session.update_state("SELECTING_PREFERRED_TIME")
 
         sections = [
@@ -266,9 +297,7 @@ class WhatsAppBotEngine:
         ]
         await whatsapp_service.send_interactive_list(
             phone=phone,
-            body_text=(
-                f"Thank you! Please select your preferred time window for our *Patient Manager* to call you:"
-            ),
+            body_text="One last step! Select your preferred time for our *Patient Manager* to call you:",
             button_label="Select Call Window",
             sections=sections,
             header_text="SGP Consultation Request"
@@ -281,33 +310,25 @@ class WhatsAppBotEngine:
         patient_name = session.data.get("patient_name", "Valued Patient")
         health_concern = session.data.get("health_concern", "General Consultation")
         address = session.data.get("patient_address", "")
-        pincode = session.data.get("patient_pincode", "")
+        lead_id = session.data.get("lead_id")
 
-        lead_notes = (
-            f"Created via SGP WhatsApp Bot.\n"
-            f"Primary Health Concern: {health_concern}\n"
-            f"Location/Address: {address}\n"
-            f"Pincode: {pincode}\n"
-            f"Preferred Call Window: {preferred_time}\n"
-            f"Action Required: Patient Manager to contact patient and confirm consultation & orientation slot."
-        )
-
-        lead_created = None
-        try:
-            lead_created = await erp_bridge_service.create_lead(
-                WhatsAppLeadData(
-                    name=patient_name,
-                    phone=phone,
-                    address=address,
-                    pincode=pincode,
-                    interested_in="CONSULTATION",
-                    notes=lead_notes
-                )
+        if lead_id:
+            updated_notes = (
+                f"Created via SGP WhatsApp Bot.\n"
+                f"Primary Health Concern: {health_concern}\n"
+                f"Location/Address: {address}\n"
+                f"Preferred Call Window: {preferred_time}\n"
+                f"Action Required: Patient Manager to contact patient and confirm consultation & orientation slot."
             )
-            if lead_created:
-                logger.info(f"Successfully registered SGP Lead in ERPNext for {phone}: {lead_created.get('name')}")
-        except Exception as e:
-            logger.error(f"Error registering SGP Lead in ERPNext for {phone}: {e}")
+            try:
+                await erp_bridge_service._request(
+                    "PUT",
+                    f"/api/resource/SGP Lead/{lead_id}",
+                    data={"notes": updated_notes}
+                )
+                logger.info(f"SGP Lead {lead_id} updated with preferred call window: {preferred_time}")
+            except Exception as e:
+                logger.warning(f"Could not update lead {lead_id} with preferred time: {e}")
 
         confirmation_msg = (
             f"✅ *Consultation Request Received!*\n\n"
@@ -316,7 +337,7 @@ class WhatsAppBotEngine:
             f"📍 *Location:* {address}\n"
             f"🕒 *Preferred Call Window:* {preferred_time}\n\n"
             f"📞 *What happens next?*\n"
-            f"Our *Patient Manager* will call you shortly on *{phone}* to answer your questions, "
+            f"Our *Patient Manager* will call you shortly on this number to answer your questions, "
             f"confirm your consultation schedule, and allocate your orientation slot.\n\n"
             f"_Type 'menu' anytime to return to options._"
         )

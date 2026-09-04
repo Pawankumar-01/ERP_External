@@ -366,11 +366,11 @@ class ERPBridgeService:
             await self._request(
                 "PUT",
                 f"/api/resource/{DOCTYPE_LEAD}/{lead_id}",
-                data={"status": "CONVERTED"},
+                data={"status": "ORIENTATION_SCHEDULED"},
             )
-            logger.info(f"[ERP] SGP Lead '{lead_id}' marked as CONVERTED")
+            logger.info(f"[ERP] SGP Lead '{lead_id}' marked as ORIENTATION_SCHEDULED")
         except Exception as e:
-            logger.warning(f"[ERP] Could not update SGP Lead '{lead_id}' status to CONVERTED: {e}")
+            logger.warning(f"[ERP] Could not update SGP Lead '{lead_id}' status: {e}")
 
         if patient_name and mobile:
             try:
