@@ -24,6 +24,11 @@ from app.casesheet.prompts import (
     _SECTION_FOOTER,
 )
 from app.casesheet.protocols import enrich_section_data
+from app.casesheet.clinical_intelligence import (
+    postprocess_section,
+    with_variant_examples,
+    with_batch_variant_examples,
+)
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -77,6 +82,9 @@ class LLMService:
             logger.warning("No prompt defined for section: %s", section)
             return {"_raw": transcript, "_error": f"unknown section: {section}"}
 
+        if settings.CASE_EMBED_VARIANT_EXAMPLES:
+            prompt = with_variant_examples(section, prompt)
+
         messages = [
             {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
             {
@@ -95,6 +103,13 @@ class LLMService:
             fallback={"_raw": transcript},
             max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
         )
+        if (
+            settings.CASE_SANITIZE
+            and isinstance(raw_result, dict)
+            and not raw_result.get("_error")
+            and not raw_result.get("_reprompt")
+        ):
+            raw_result = postprocess_section(section, raw_result)
         return enrich_section_data(section, raw_result)
 
     async def _preprocess_and_segment_batch_transcript(
@@ -144,6 +159,9 @@ class LLMService:
             logger.warning("Invalid batch_index: %s", batch_index)
             return {}
 
+        if settings.CASE_EMBED_VARIANT_EXAMPLES:
+            batch_prompt = with_batch_variant_examples(batch_sections, batch_prompt)
+
         segmented_map = await self._preprocess_and_segment_batch_transcript(batch_index, transcript)
         full_cleaned = segmented_map.get("full_cleaned_transcript")
         if not full_cleaned or len(full_cleaned.strip()) < (0.8 * len(transcript.strip())):
@@ -189,6 +207,13 @@ class LLMService:
 
                 if sec_data is None:
                     sec_data = {}
+                if (
+                    settings.CASE_SANITIZE
+                    and isinstance(sec_data, dict)
+                    and not sec_data.get("_error")
+                    and not sec_data.get("_reprompt")
+                ):
+                    sec_data = postprocess_section(sec_key, sec_data)
                 enriched = enrich_section_data(sec_key, sec_data)
                 results[sec_key] = enriched
 

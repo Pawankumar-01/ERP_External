@@ -11,10 +11,12 @@ from sqlalchemy import or_, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
+from app.config.settings import settings
 from app.casesheet.models import CasesheetSession, CasesheetDraft, SessionStatus
 from app.casesheet.transcription import transcribe_audio
 from app.casesheet.llm_service import llm_service
 from app.casesheet.prompts import VALID_SECTIONS, WHISPER_INITIAL_PROMPTS, WHISPER_AMBIENT_PROMPT, AMBIENT_BATCH_GROUPS
+from app.casesheet.clinical_intelligence import merge_section_data
 from app.erp_bridge.service import erp_bridge_service
 from app.events.logger import event_logger, EventType
 
@@ -895,6 +897,18 @@ async def _process_image_background(
             logger.error(f"Image background processing failed for section '{section}' in session '{session_id}': {e}")
 
 
+def _merge_section_into_draft(current: dict, key: str, new_data: Any) -> None:
+    """
+    CEI: intelligently merge a freshly extracted section into the draft
+    instead of overwriting it, so previously dictated facts are never lost
+    (guarded by settings.CASE_SANITIZE; disabled = legacy overwrite).
+    """
+    if settings.CASE_SANITIZE:
+        current[key] = merge_section_data(current.get(key), new_data)
+    else:
+        current[key] = new_data
+
+
 async def _process_audio_background(session_id: str, section: str, audio_bytes: bytes, language: Optional[str]) -> None:
     from app.config.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
@@ -907,7 +921,7 @@ async def _process_audio_background(session_id: str, section: str, audio_bytes: 
             draft_row = result.scalar_one_or_none()
             if draft_row:
                 current = dict(draft_row.draft or {})
-                current[section] = section_data
+                _merge_section_into_draft(current, section, section_data)
                 if "_raw_transcripts" not in current:
                     current["_raw_transcripts"] = {}
                 current["_raw_transcripts"][section] = transcript
@@ -936,7 +950,7 @@ async def _reprocess_transcript_background(session_id: str, section: str, transc
             draft_row = result.scalar_one_or_none()
             if draft_row:
                 current = dict(draft_row.draft or {})
-                current[section] = section_data
+                _merge_section_into_draft(current, section, section_data)
                 if "_raw_transcripts" not in current:
                     current["_raw_transcripts"] = {}
                 current["_raw_transcripts"][section] = transcript
@@ -1032,7 +1046,7 @@ async def _process_full_audio_background(
                 current = dict(draft_row.draft or {})
                 for k, v in extracted.items():
                     if v:
-                        current[k] = v
+                        _merge_section_into_draft(current, k, v)
                 if "_raw_transcripts" not in current:
                     current["_raw_transcripts"] = {}
                 for k in extracted.keys():
@@ -1174,7 +1188,7 @@ async def _process_batch_audio_background(
                 raw_transcripts_map = batch_results.pop("_raw_section_transcripts", {}) or {}
                 for k, v in batch_results.items():
                     if k in allowed_batch_keys:
-                        current[k] = v
+                        _merge_section_into_draft(current, k, v)
                         clean_snippet = raw_transcripts_map.get(k) or transcript
                         current["_raw_transcripts"][k] = clean_snippet
 

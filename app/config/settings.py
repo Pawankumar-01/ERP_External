@@ -55,6 +55,22 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     LLM_MODEL: str = "google/gemma-4-31b-it:free"
 
+    # ── Clinical Extraction Intelligence (CEI) knobs ────────────────────
+    # CASE_SANITIZE: deterministic post-processing of every LLM extraction
+    #                (normalize units/severity, strip internal keys, dedupe).
+    CASE_SANITIZE: bool = True
+    # CASE_VERIFY_EXTRACTIONS: after first-pass extraction, run a second-pass
+    #                LLM "clinical reviewer" that cross-checks every fact
+    #                against the source transcript (hallucination & recall).
+    CASE_VERIFY_EXTRACTIONS: bool = True
+    # CASE_VERIFY_FALLBACK_GAPS: after verify, run a targeted "fill gaps"
+    #                pass to recover facts the first pass missed.
+    CASE_VERIFY_FALLBACK_GAPS: bool = True
+    # CASE_EMBED_VARIANT_EXAMPLES: inline "patient said X / Y / Z → canonical
+    #    fact" few-shot examples into section prompts so the model maps many
+    #    phrasings onto stable values.
+    CASE_EMBED_VARIANT_EXAMPLES: bool = True
+
 
 
 settings = Settings()
