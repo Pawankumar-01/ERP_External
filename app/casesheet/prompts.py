@@ -724,6 +724,11 @@ IMPORTANT: Return ONLY valid JSON array matching the schema above.
     "panchakarma": """\
 You are an expert clinical AI extracting in-clinic Panchakarma therapy prescriptions from doctor dictation.
 
+NOMENCLATURE (CRITICAL): The clinic now brands this therapy as the "Physiological Recalibration Protocol".
+Wherever the old term "Panchakarma" would appear in any output VALUE (procedure names, summaries, remarks),
+write "Physiological Recalibration Protocol" instead. The JSON section key stays "panchakarma".
+The doctor may still SAY "panchakarma" — always normalize it to the new name in your output.
+
 CANONICAL PROCEDURE CORRECTION TABLE:
 - swedana, sweda, savana, savanna, sauna, steam bath -> Swedana
 - janu pichu, jhanu pichu, knee pichu -> Janu Pichu
@@ -1420,7 +1425,7 @@ Rules:
 - frequency: how often (daily, alternate days, twice a week, etc.).
 - duration_minutes: only if explicitly stated.
 - sequence_note: any ordering instruction (e.g., "do after Abhyanga").
-- Do NOT include Panchakarma procedures here; only physical exercises and yoga asanas.
+- Do NOT include Panchakarma ("Physiological Recalibration Protocol") procedures here; only physical exercises and yoga asanas.
 
 Schema:
 {
@@ -1703,7 +1708,7 @@ Strict rules:
 - Do not invent clinical facts.
 - Do not add a diagnosis unless it is explicitly present in the draft.
 - Do not prescribe new treatment.
-- Do not create new medicines, doses, investigations or Panchakarma procedures.
+- Do not create new medicines, doses, investigations or Panchakarma ("Physiological Recalibration Protocol") procedures.
 - If a field is missing, write "Not documented" in the markdown.
 - If a field is unclear, write "Needs doctor confirmation".
 - Preserve Ayurvedic, SGP and allopathic terms exactly.
@@ -1774,7 +1779,7 @@ The case_sheet_markdown must use this section order:
 16. Ayurvedic Assessment
 17. Allopathic / Integrated Assessment
 18. Ayurvedic Supplements (SGP Rx)
-19. Panchakarma / Purvakarma Therapies
+19. Physiological Recalibration Protocol (formerly "Panchakarma") / Purvakarma Therapies
 20. Detoxifying Procedures and Decoctions
 21. Exercises and Yoga
 22. Diet Plan (Include / Exclude)
@@ -1960,7 +1965,7 @@ ERP_FIELD_MAPPING_RULES: dict[str, str] = {
     "systemic_examination": "Compact summary of systemic_examination fields only. Do not include needs_doctor_confirmation text.",
     "sgp_rx": "Summarize ayurvedic_supplements: each medicine name with start_week, dose, frequency.",
     "allopathic_medicines": "Summarize treatment_and_background.current_medications and medication_history allopathic medicines.",
-    "panchakarma": "Summarize panchakarma.sessions with procedure, session_count, status, oils.",
+    "panchakarma": "Summarize panchakarma.sessions with procedure, session_count, status, oils. Use the clinic's current nomenclature 'Physiological Recalibration Protocol' in the summary text (do not write the old term 'Panchakarma').",
     "detox_procedures": "Summarize detox_procedures.detox_items with name, quantity, frequency, timing.",
     "exercises_yoga": "Summarize exercises_yoga.exercises with name, frequency, remarks.",
     "home_remedies": "Use assessment_and_plan.plan.home_remedies.",
@@ -2115,7 +2120,7 @@ Rules:
 """,
     3: f"""\
 You are an expert clinical documentation AI for SGP Integrative Medicine.
-The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Ayurvedic Supplements, Panchakarma, Detox Procedures, Exercises, and Treatment Plan.
+The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Ayurvedic Supplements, Physiological Recalibration Protocol (the clinic's current name for Panchakarma), Detox Procedures, Exercises, and Treatment Plan.
 
 {_SGP_MEDICINE_KNOWLEDGE}
 {_SGP_PROCEDURE_KNOWLEDGE}
@@ -2124,6 +2129,7 @@ CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
 1. "ayurvedic_supplements": SGP Canonical Herbal Medicines prescribed (APD, ATHEROLYZIN, MIGRANONE, IMUMODULIN, NEUROTROPIN, LITHO, D-TOX, etc.), dosage ("1/4", "1/2", "1"), frequency ("BID", "QD", "TID"), and 8-week titration matrix array.
    - FRACTION NORMALIZATION: When the doctor says "half" or "half instead of one" or "half tablet" as a dose, store it as "1/2" in weeks[] and dose fields.
 2. "panchakarma": ONLY in-clinic Ayurvedic physical therapy sessions performed by a therapist (Abhyanga, Swedana, Basti, Nasya, Virechana, Shirodhara, Januvasthi, Greeva Vasthi, Kati Vasthi, Pizhichil, Njavara, Udwarthana, etc.), session counts, and medicated oils/ingredients.
+   - NOMENCLATURE: In every output VALUE (procedure summaries, remarks, names) write "Physiological Recalibration Protocol" wherever the old term "Panchakarma" would appear. The JSON key stays "panchakarma".
    - STRICT RULE: Do NOT put Gandusham, Nithya Virechana, Prathivaara Virechana, Anutailam, Fennel Tea, herbal soups, or any home-use detox item here. Those belong ONLY in "detox_procedures".
 3. "detox_procedures": Home detox routines and self-administered procedures including: Gandusham, Nithya Virechana, Prathivaara Virechana, Anutailam, Steam Inhalations, Fennel Tea, Barley Soup, Rice Soup, Tapioca Soup (Sabu Dana), Raagi Soup, Jowar Soup, Coriander Water, oil self-applications, gargles.
    - STRICT RULE: Do NOT duplicate items from panchakarma here. If it's an in-clinic procedure, it goes in panchakarma only.
@@ -2300,3 +2306,110 @@ RULES:
 """,
 }
 
+
+
+# ---------------------------------------------------------------------------
+# Sub-batch splitting: large batches are extracted as multiple focused LLM
+# calls to prevent token-budget truncation and section dropping.
+# Public API (batch_index 1/2/3) is unchanged -- the split is internal.
+# ---------------------------------------------------------------------------
+AMBIENT_SUBBATCH_GROUPS: dict[int, dict[str, list[str]]] = {
+    2: {
+        "exam": [
+            "vitals_anthropometry",
+            "general_examination",
+            "systemic_examination",
+            "investigation_reports",
+            "ayurvedic_assessment_extended",
+        ],
+        "pulse": ["pulse_diagnosis"],
+    },
+}
+
+AMBIENT_SUBBATCH_PROMPTS: dict[int, dict[str, str]] = {
+    2: {
+        "exam": f"""\\
+You are an expert clinical documentation AI for SGP Integrative Medicine.
+The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION covering Vitals & Anthropometry, General Examination, Systemic Examination, Investigation Reports, and Ayurvedic Assessment.
+
+CLINICAL BOUNDARY DEFINITIONS FOR EACH SECTION:
+1. "vitals_anthropometry": Physical vital signs — Blood Pressure (e.g. 126/82), Pulse Rate bpm, Temperature (F/C), Height cm, Weight kg, BMI, SpO2 percent, Respiratory Rate, Blood Sugar, Pain Score (0-10), and anthropometry Wrist/Waist/Forearm/Hip. If the doctor states the patient's AGE here, record it in the age field as well.
+2. "general_examination": General physical examination findings — built, nourishment, pallor, icterus, edema, cyanosis, clubbing, lymphadenopathy, orientation.
+3. "systemic_examination": Systems examination — CVS (Heart, S1/S2, murmurs), RS (Lungs, air entry, wheeze/rales), PA (Per Abdomen, organomegaly), CNS (cranial nerves, coherence), Musculoskeletal, and Local Examination (e.g. tenderness over L4-L5 spinous process, SLRT positive at 45 degrees).
+4. "investigation_reports": EVERY diagnostic test and imaging report mentioned — modality (MRI/X-ray/CT/USG), body region, date, findings (e.g. "MRI Lumbar Spine July 2026: L4-L5 disc protrusion with left nerve root compression"), lab values with units (e.g. "HbA1c 6.6 percent", "ESR 28 mm/hr", "CRP positive 12 mg/L"), and investigations advised (e.g. "Serum Vitamin D3 and B12").
+5. "ayurvedic_assessment_extended": Prakriti (Body constitution), Vikriti (Current imbalance), VPK Dominance summary, and Samprapti (Pathogenesis summary).
+
+TASK: Extract structured clinical data from the dictation transcript into a single JSON object.
+Return ONLY a valid JSON object whose top-level keys are EXACTLY:
+- "vitals_anthropometry": {{"height_cm": number|null, "weight_kg": number|null, "bp": string|null, "pulse_rate": string|null, "temperature": string|null, "spo2": string|null, "respiratory_rate": string|null, "blood_sugar": string|null, "pain_score": string|null, "wrist_cm": number|string|null, "waist_cm": number|string|null, "fore_arm_cm": number|string|null, "hip_cm": number|string|null, "age": number|string|null}}
+- "general_examination": {{"built": string|null, "nourishment": string|null, "pallor": string|null, "icterus": string|null, "edema": string|null, "cyanosis": string|null, "clubbing": string|null, "lymphadenopathy": string|null, "orientation": string|null}}
+- "systemic_examination": {{"cardiovascular": string|null, "respiratory": string|null, "abdomen": string|null, "nervous_system": string|null, "musculoskeletal": string|null, "local_examination": string|null, "summary": string|null}}
+- "investigation_reports": {{"reports_reviewed": [string], "key_findings": [string], "investigations_advised": [string]}}
+- "ayurvedic_assessment_extended": {{"prakriti": string|null, "vikriti": string|null, "vpk_dominance": string|null, "samprapti_summary": string|null}}
+
+Rules:
+- CAPTURE EVERY DICTATED VALUE: never drop weight, SpO2, anthropometry (wrist/waist/forearm/hip), or any lab/imaging finding. If it was spoken, it must appear in the JSON.
+- For vitals_anthropometry, if wrist, waist, forearm, or hip are spoken in inches (e.g., "6.5 inches"), extract as number or string in inches/cm.
+- Extract all dictated facts accurately into their correct boundary section. If a section has no dictated information, return an empty object {{}} or empty list [].
+- Do NOT return reprompt errors or quality warnings. Return valid JSON only.
+""",
+
+        "pulse": f"""\\
+You are an expert Nadi Pariksha (Pulse Diagnosis) documentation AI for SGP Integrative Medicine.
+The user prompt contains a continuous DOCTOR MONOLOGUE DICTATION. Extract ONLY the pulse diagnosis (Nadi Pariksha) portion into structured data.
+
+SECTION DEFINITION:
+"pulse_diagnosis": Nadi Pariksha VPK readings (severity ratings: "very mild", "mild", "mild to moderate", "moderate", "moderate to severe", "severe") across the organ system codes: LI (Large Intestine), SI (Small Intestine), LISI (Liver/Spleen), CVS (Heart), RB (Renal/Bladder), GIT (Gastrointestinal), IS (Immune System), PAN (Pancreas), PRO (Prostate/Reproductive), LB (Lungs/Bronchi), GB (Gallbladder), LIV (Liver), RT (Thyroid/Endocrine), SS (Spine/Musculoskeletal), KUB (Kidney/Ureter/Bladder), LSCS (Lumbo Sacro Cranial), OBG (Obstetrics/Gynecology). Plus the Overall VPK dominance, Prakriti and Vikriti.
+
+PULSE DIAGNOSIS EXTRACTION RULES:
+- COMPOUND DOSHA SHORTHAND EXPANSION:
+  "PV" or "VP" = Pitta AND Vata -> set BOTH vata and pitta to the stated severity
+  "VK" or "KV" = Vata AND Kapha -> set BOTH vata and kapha to the stated severity
+  "PK" or "KP" = Pitta AND Kapha -> set BOTH pitta and kapha to the stated severity
+  "VPK" = Vata AND Pitta AND Kapha -> set ALL THREE to the stated severity
+  Single "V" = only Vata; Single "P" = only Pitta; Single "K" = only Kapha
+- SPOKEN PHRASE PATTERNS (map every stated dosha with its severity):
+  "LISI moderate Pitta and moderate Vata" -> system LISI with pitta "moderate", vata "moderate"
+  "CVS moderate Pitta and mild Kapha" -> system CVS with pitta "moderate", kapha "mild"
+  "PRO moderate Vata" -> system PRO with vata "moderate"
+- SPOKEN SYSTEM ALIASES:
+  "Liver" / "Liv" -> LIV, "KB" / "KUB" -> KUB, "Pro" -> PRO, "SS" / "Skeletal" -> SS, "GB" -> GB, "LB" / "Lower Back" -> LB, "LSCS" -> LSCS, "LI" / "Large Intestine" -> LI, "SI" / "Small Intestine" -> SI, "LISI" -> LISI, "RB" -> RB, "OBG" -> OBG, "IS" -> IS, "GIT" -> GIT, "CVS" -> CVS, "PAN" -> PAN, "RT" -> RT.
+- SEVERITY VOCABULARY (normalize exactly):
+  "very mild" -> "very_mild"; "mild" -> "mild"; "mild to moderate" / "mild moderate" -> "mild_moderate"; "moderate" -> "moderate"; "moderate to severe" -> "moderate_severe"; "severe" -> "severe".
+  Apply the SAME severity to EVERY dosha named in the phrase ("mild to moderate Pitta and mild Vata" -> pitta "mild_moderate", vata "mild").
+- LOW SEVERITY ALIASES:
+  "low V", "low P", "low K", "low VPK" -> set severity to "very_mild" for those doshas.
+- COMPLETENESS (CRITICAL): The doctor typically enumerates EVERY organ system in sequence. You MUST output a "systems" entry for EVERY system spoken, in spoken order. NEVER omit trailing systems (e.g. RT, SS, KUB, LSCS). Do NOT invent systems that were not spoken.
+- Overall dominance phrases like "Overall VPK dominance is Pitta Vata" -> overall_vpk.dominance "Pitta Vata".
+
+TASK: Extract the pulse diagnosis into a single JSON object.
+Return ONLY a valid JSON object whose top-level keys are EXACTLY:
+- "pulse_diagnosis": {{
+    "overall_vpk": {{"dominance": string|null, "prakriti": string|null, "vikriti": string|null, "notes": string|null}},
+    "systems": [
+      {{"system": "LI", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "SI", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "LISI", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "CVS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "RB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "GIT", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "IS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "PAN", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "PRO", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "LB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "GB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "LIV", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "RT", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "SS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "KUB", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}},
+      {{"system": "LSCS", "vata": string|null, "pitta": string|null, "kapha": string|null, "raw_phrase": string|null}}
+    ]
+  }}
+
+Rules:
+- For pulse_diagnosis, follow all compound expansion and system alias rules above. Convert severity ratings to lowercase strings under vata, pitta, or kapha for each organ system code.
+- Keep "raw_phrase" as the exact spoken phrase for that system (verbatim snippet) for doctor verification.
+- Do NOT return reprompt errors or quality warnings. Return valid JSON only.
+""",
+    },
+}

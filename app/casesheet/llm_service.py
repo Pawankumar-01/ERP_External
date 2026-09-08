@@ -19,6 +19,8 @@ from app.casesheet.prompts import (
     AMBIENT_SECTION_GROUPS,
     AMBIENT_BATCH_PROMPTS,
     AMBIENT_BATCH_GROUPS,
+    AMBIENT_SUBBATCH_GROUPS,
+    AMBIENT_SUBBATCH_PROMPTS,
     MIDDLEWARE_SEGMENTER_PROMPTS,
     BASE_RULES,
     _SECTION_FOOTER,
@@ -28,6 +30,7 @@ from app.casesheet.clinical_intelligence import (
     postprocess_section,
     with_variant_examples,
     with_batch_variant_examples,
+    apply_nomenclature_to_section,
 )
 from app.config.settings import settings
 
@@ -110,7 +113,10 @@ class LLMService:
             and not raw_result.get("_reprompt")
         ):
             raw_result = postprocess_section(section, raw_result)
-        return enrich_section_data(section, raw_result)
+        result = enrich_section_data(section, raw_result)
+        if settings.CASE_APPLY_NOMENCLATURE:
+            result = apply_nomenclature_to_section(result)
+        return result
 
     async def _preprocess_and_segment_batch_transcript(
         self,
@@ -159,36 +165,75 @@ class LLMService:
             logger.warning("Invalid batch_index: %s", batch_index)
             return {}
 
-        if settings.CASE_EMBED_VARIANT_EXAMPLES:
-            batch_prompt = with_batch_variant_examples(batch_sections, batch_prompt)
-
         segmented_map = await self._preprocess_and_segment_batch_transcript(batch_index, transcript)
         full_cleaned = segmented_map.get("full_cleaned_transcript")
         if not full_cleaned or len(full_cleaned.strip()) < (0.8 * len(transcript.strip())):
             logger.info(f"Stage 1 full_cleaned_transcript missing or truncated ({len(full_cleaned or '')} vs {len(transcript)} chars). Using full raw transcript.")
             full_cleaned = transcript
 
-        messages = [
-            {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
-            {
-                "role": "user",
-                "content": f"{batch_prompt}\n\nNORMALIZED DOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{full_cleaned}\n>>>",
-            },
-        ]
+        # Sub-batch split: large batches are extracted as multiple focused
+        # parallel LLM calls (e.g. batch 2 -> "exam" + "pulse") so that huge
+        # schemas (pulse diagnosis) never crowd out other sections within one
+        # token budget. Batches without a registered split run as one call.
+        sub_groups = AMBIENT_SUBBATCH_GROUPS.get(batch_index) or {}
+        sub_prompts = AMBIENT_SUBBATCH_PROMPTS.get(batch_index) or {}
+        if sub_groups and sub_prompts:
+            sub_items = [
+                (name, sections, sub_prompts[name])
+                for name, sections in sub_groups.items()
+                if name in sub_prompts
+            ]
+            logger.info(f"Batch {batch_index} split into {len(sub_items)} sub-batches: {[n for n, _, _ in sub_items]}")
+        else:
+            sub_items = [("main", batch_sections, batch_prompt)]
 
-        batch_res = await self._safe_json_call(
-            messages=messages,
-            label=f"monologue_batch:{batch_index}",
-            fallback={},
-            max_tokens=4000,
+        async def _run_subbatch(name: str, sections: list, prompt: str) -> Dict[str, Any]:
+            sub_prompt = prompt
+            if settings.CASE_EMBED_VARIANT_EXAMPLES:
+                sub_prompt = with_batch_variant_examples(sections, sub_prompt)
+            messages = [
+                {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
+                {
+                    "role": "user",
+                    "content": f"{sub_prompt}\n\nNORMALIZED DOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{full_cleaned}\n>>>",
+                },
+            ]
+            return await self._safe_json_call(
+                messages=messages,
+                label=f"monologue_batch:{batch_index}:{name}",
+                fallback={},
+                max_tokens=(3500 if len(sections) == 1 else 4000),
+            )
+
+        sub_results = await asyncio.gather(
+            *[_run_subbatch(name, sections, prompt) for name, sections, prompt in sub_items],
+            return_exceptions=True,
         )
 
-        if isinstance(batch_res, dict) and batch_res.get("_error"):
+        batch_res: Dict[str, Any] = {}
+        failed_subs: list = []
+        for (name, _, _), res in zip(sub_items, sub_results):
+            if isinstance(res, Exception):
+                failed_subs.append(f"{name}: {res}")
+                continue
+            if isinstance(res, dict) and res.get("_error"):
+                failed_subs.append(f"{name}: {res.get('_error')}")
+                continue
+            if isinstance(res, dict):
+                for k, v in res.items():
+                    batch_res[k] = v
+
+        if not batch_res:
             logger.warning(
-                "LLM extraction failed for batch %s (error=%s) — caller will preserve existing draft.",
-                batch_index, batch_res.get("_error")
+                "LLM extraction failed for batch %s (sub-batch errors: %s) — caller will preserve existing draft.",
+                batch_index, "; ".join(failed_subs) or "unknown",
             )
             return {}
+        if failed_subs:
+            logger.warning(
+                "Batch %s partially extracted — failed sub-batches: %s",
+                batch_index, "; ".join(failed_subs),
+            )
 
         results: Dict[str, Dict[str, Any]] = {}
         raw_section_transcripts: Dict[str, str] = {}
@@ -215,6 +260,8 @@ class LLMService:
                 ):
                     sec_data = postprocess_section(sec_key, sec_data)
                 enriched = enrich_section_data(sec_key, sec_data)
+                if settings.CASE_APPLY_NOMENCLATURE:
+                    enriched = apply_nomenclature_to_section(enriched)
                 results[sec_key] = enriched
 
                 raw_section_transcripts[sec_key] = sec_snippet.strip() if (sec_snippet and isinstance(sec_snippet, str) and sec_snippet.strip()) else full_cleaned
@@ -294,7 +341,10 @@ class LLMService:
                 max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
             )
             if isinstance(raw_result, dict) and not raw_result.get("_error"):
-                return enrich_section_data(section, raw_result)
+                result = enrich_section_data(section, raw_result)
+                if settings.CASE_APPLY_NOMENCLATURE:
+                    result = apply_nomenclature_to_section(result)
+                return result
         except Exception as err:
             logger.warning("Vision AI call failed for section '%s' (%s) — using text extraction fallback", section, err)
 

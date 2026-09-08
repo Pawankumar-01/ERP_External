@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     #    fact" few-shot examples into section prompts so the model maps many
     #    phrasings onto stable values.
     CASE_EMBED_VARIANT_EXAMPLES: bool = True
+    # CASE_APPLY_NOMENCLATURE: enforce clinic nomenclature renames in every
+    #    LLM output (e.g. Panchakarma → "Physiological Recalibration
+    #    Protocol"). JSON keys are never renamed, only display text.
+    CASE_APPLY_NOMENCLATURE: bool = True
 
 
 

@@ -26,6 +26,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+from app.config.settings import settings
+
 # ---------------------------------------------------------------------------
 # Canonical vocabulary -- medicine & dose aliases
 # ---------------------------------------------------------------------------
@@ -521,7 +523,14 @@ def _sanitize_pulse_systems(systems: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def _sanitize_dict_list(items: Any, allowed_keys: set) -> List[Dict[str, Any]]:
+def _sanitize_dict_list(items: Any, allowed_keys: Optional[set] = None) -> List[Dict[str, Any]]:
+    """
+    Normalize a list of clinical item dicts. Only internal bookkeeping keys
+    and underscore-prefixed keys are stripped -- every other key is preserved
+    so real clinical fields ('procedure', 'session_count', 'weeks', ...) are
+    never lost. ``allowed_keys`` is advisory (documented in SECTION_SCHEMA)
+    and is deliberately NOT enforced here.
+    """
     out: List[Any] = []
     for raw_item in _as_list(items):
         if not isinstance(raw_item, dict):
@@ -534,10 +543,6 @@ def _sanitize_dict_list(items: Any, allowed_keys: set) -> List[Dict[str, Any]]:
             if k in _INTERNAL_KEYS:
                 continue
             if isinstance(k, str) and k.startswith("_"):
-                continue
-            if allowed_keys and k not in allowed_keys and k not in (
-                "name", "dosage", "frequency", "duration", "instructions",
-            ):
                 continue
             filtered[k] = v
         if filtered.get("name"):
@@ -978,7 +983,64 @@ def postprocess_section(section: str, raw_data: Any) -> Dict[str, Any]:
     Error markers (``_error`` / ``_reprompt``) are intentionally NOT added
     here — callers guard on them *before* calling this function.
     """
-    return sanitize_section(section, raw_data)
+    sanitized = sanitize_section(section, raw_data)
+    if settings.CASE_APPLY_NOMENCLATURE:
+        sanitized = apply_nomenclature_to_section(sanitized)
+    return sanitized
+
+
+# ---------------------------------------------------------------------------
+# Clinic nomenclature renames (branding updated by the clinic)
+# Only *display text* is renamed — JSON keys stay stable so the ERP field
+# mapping and the Flutter casesheet app keep working.
+# ---------------------------------------------------------------------------
+NOMENCLATURE_RENAMES: Dict[str, str] = {
+    "panchakarma": "Physiological Recalibration Protocol",
+}
+
+_NOMENCLATURE_PATTERNS = [
+    (re.compile(rf"\b{re.escape(old)}\b", re.IGNORECASE), new)
+    for old, new in NOMENCLATURE_RENAMES.items()
+]
+
+# Keys whose values are file references / metadata — never rewrite these.
+_NOMENCLATURE_SKIP_KEYS = {
+    "filename", "url", "file_path", "image_url", "uploaded_at", "id",
+}
+
+
+def apply_nomenclature(text: str) -> str:
+    """Rename deprecated nomenclature inside a display string."""
+    if not text or not isinstance(text, str):
+        return text
+    for pattern, new in _NOMENCLATURE_PATTERNS:
+        if pattern.search(text):
+            text = pattern.sub(new, text)
+    return text
+
+
+def apply_nomenclature_to_section(data: Any, _key: str = "") -> Any:
+    """
+    Recursively apply :func:`apply_nomenclature` to every *string value* of a
+    section dict/list. Dict KEYS are never touched, so structural keys like
+    ``panchakarma`` / ``panchakarma_summary`` stay intact, and file-reference
+    values (filenames, URLs) are skipped so links never break.
+    """
+    if isinstance(data, dict):
+        return {
+            k: apply_nomenclature_to_section(
+                v,
+                _key=k if isinstance(k, str) else "",
+            )
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [apply_nomenclature_to_section(v, _key=_key) for v in data]
+    if isinstance(data, str):
+        if _key in _NOMENCLATURE_SKIP_KEYS:
+            return data
+        return apply_nomenclature(data)
+    return data
 
 
 def with_variant_examples(section: str, prompt: str) -> str:
@@ -1007,3 +1069,140 @@ def with_batch_variant_examples(sections: List[str], prompt: str) -> str:
     if not blocks:
         return prompt
     return f"{prompt.rstrip()}\n\n" + "\n\n".join(blocks) + "\n"
+
+# ---------------------------------------------------------------------------
+# Vitals plausibility + unit conversion (fixes garbled values like "Height: 8")
+# ---------------------------------------------------------------------------
+
+# Plausible adult ranges (lo, hi). Values outside are flagged, not destroyed.
+VITALS_RANGES: Dict[str, tuple] = {
+    "height_cm": (50, 250),
+    "weight_kg": (2, 300),
+    "pulse_rate": (30, 220),
+    "temperature": (89.0, 111.0),   # Fahrenheit
+    "spo2": (50, 100),
+    "wrist_cm": (10, 30),
+    "waist_cm": (40, 200),
+    "fore_arm_cm": (10, 60),
+    "hip_cm": (50, 200),
+}
+
+
+def length_to_cm(value: Any) -> Any:
+    """
+    Convert spoken imperial lengths to centimetres.
+    "6.5 inches" -> 16.5; "5 feet 7 inches" -> 170.2; "5'7\"" -> 170.2.
+    Bare numbers pass through unchanged (unit is ambiguous without context).
+    """
+    if value is None or isinstance(value, (int, float)):
+        return value
+    s = _clean(value)
+    low = s.lower()
+    m = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:feet|foot|ft)\s*(\d+(?:\.\d+)?)?\s*(?:inches|inch|in\b)?",
+        low,
+    )
+    if m:
+        feet = float(m.group(1))
+        inches = float(m.group(2) or 0.0)
+        return round((feet * 12.0 + inches) * 2.54, 1)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:inches|inch|\bin\b|\u2033)", low)
+    if m:
+        return round(float(m.group(1)) * 2.54, 1)
+    return s
+
+
+def check_vitals_plausibility(vitals: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Flag (never destroy) vital-sign values outside plausible adult ranges by
+    appending human-readable notes to the section's ``_needs_clarification``.
+    """
+    if not isinstance(vitals, dict):
+        return vitals
+    flags: List[str] = []
+
+    def _check(field: str, value: Any) -> None:
+        lo, hi = VITALS_RANGES[field]
+        num = _to_number(value)
+        if num is None:
+            return
+        if num < lo or num > hi:
+            flags.append(
+                f"{field}: '{_clean(value)}' outside plausible range {lo}-{hi}"
+            )
+
+    for field in VITALS_RANGES:
+        _check(field, vitals.get(field))
+
+    bp = vitals.get("bp")
+    if isinstance(bp, str) and "/" in bp:
+        sys_s, _, dia_s = bp.partition("/")
+        sys_n = _to_number(sys_s)
+        dia_n = _to_number(dia_s)
+        if sys_n is not None and not (50 <= sys_n <= 250):
+            flags.append(f"bp systolic: '{_clean(sys_s)}' outside plausible range 50-250")
+        if dia_n is not None and not (30 <= dia_n <= 150):
+            flags.append(f"bp diastolic: '{_clean(dia_s)}' outside plausible range 30-150")
+
+    if flags:
+        existing = vitals.get(CLARIFICATION_FLAG)
+        merged = existing if isinstance(existing, list) else ([existing] if existing else [])
+        for f in flags:
+            if f not in merged:
+                merged.append(f)
+        vitals[CLARIFICATION_FLAG] = merged
+    return vitals
+
+
+def salvage_cross_section_fields(draft: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Route facts dictated inside one section to their canonical home section.
+    Today: age spoken during the vitals block -> patient_identity (which is
+    where the ERP mapper and the patient card read it from).
+    """
+    if not isinstance(draft, dict):
+        return draft
+    vitals = draft.get("vitals_anthropometry")
+    if not isinstance(vitals, dict):
+        return draft
+    age = vitals.get("age")
+    if _is_empty(age):
+        return draft
+    identity = draft.get("patient_identity")
+    if not isinstance(identity, dict):
+        identity = {}
+        draft["patient_identity"] = identity
+    if _is_empty(identity.get("age")):
+        num = _to_number(age)
+        identity["age"] = int(num) if num is not None and num.is_integer() else (num or age)
+        age_unit = vitals.get("age_unit")
+        if not _is_empty(age_unit) and _is_empty(identity.get("age_unit")):
+            identity["age_unit"] = _clean(age_unit)
+    vitals.pop("age", None)
+    vitals.pop("age_unit", None)
+    return draft
+
+
+# ---------------------------------------------------------------------------
+# Recall helpers (fill-gaps pass)
+# ---------------------------------------------------------------------------
+
+def section_has_data(data: Any) -> bool:
+    """True when a section dict carries at least one meaningful clinical value."""
+    if not isinstance(data, dict):
+        return not _is_empty(data)
+    for key, value in data.items():
+        if key in _METADATA_KEYS or key == CLARIFICATION_FLAG:
+            continue
+        if not _is_empty(value):
+            return True
+    return False
+
+
+def section_signals_present(section: str, text: str) -> bool:
+    """True when the transcript contains signal words for this section."""
+    signals = SECTION_SIGNAL_WORDS.get(section)
+    if not signals or not text:
+        return False
+    low = text.lower()
+    return any(sig in low for sig in signals)

@@ -16,7 +16,7 @@ from app.casesheet.models import CasesheetSession, CasesheetDraft, SessionStatus
 from app.casesheet.transcription import transcribe_audio
 from app.casesheet.llm_service import llm_service
 from app.casesheet.prompts import VALID_SECTIONS, WHISPER_INITIAL_PROMPTS, WHISPER_AMBIENT_PROMPT, AMBIENT_BATCH_GROUPS
-from app.casesheet.clinical_intelligence import merge_section_data
+from app.casesheet.clinical_intelligence import merge_section_data, apply_nomenclature_to_section
 from app.erp_bridge.service import erp_bridge_service
 from app.events.logger import event_logger, EventType
 
@@ -902,11 +902,15 @@ def _merge_section_into_draft(current: dict, key: str, new_data: Any) -> None:
     CEI: intelligently merge a freshly extracted section into the draft
     instead of overwriting it, so previously dictated facts are never lost
     (guarded by settings.CASE_SANITIZE; disabled = legacy overwrite).
+    A final nomenclature pass guarantees the clinic's current terminology in
+    every stored section (keys stay intact; only display text is renamed).
     """
     if settings.CASE_SANITIZE:
         current[key] = merge_section_data(current.get(key), new_data)
     else:
         current[key] = new_data
+    if settings.CASE_APPLY_NOMENCLATURE:
+        current[key] = apply_nomenclature_to_section(current[key])
 
 
 async def _process_audio_background(session_id: str, section: str, audio_bytes: bytes, language: Optional[str]) -> None:
