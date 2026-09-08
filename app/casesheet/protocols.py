@@ -192,38 +192,28 @@ def clean_recipe_leakage(val: str, backup: str = "") -> str:
 
 
 def enrich_item_dict(item: Dict[str, Any]) -> Dict[str, Any]:
-    new_item = dict(item)
-    name = str(new_item.get("name", "") or "").strip()
-    instr = str(new_item.get("instructions", "") or new_item.get("remarks", "") or "").strip()
-
-    canon = match_protocol(name)
-    if not canon and len(instr) < 60:
-        canon = match_protocol(instr)
-
-    if canon:
-        proto = SGP_PROTOCOLS[canon]
-        new_item["name"] = canon
-        if "instructions" in new_item or not "remarks" in new_item:
-            new_item["instructions"] = proto["text"]
-        if "remarks" in new_item:
-            new_item["remarks"] = proto["text"]
-
-        new_item["quantity"] = clean_recipe_leakage(str(new_item.get("quantity", "") or ""), proto["clean_quantity"])
-        new_item["frequency"] = clean_recipe_leakage(str(new_item.get("frequency", "") or ""), proto["clean_frequency"])
-
-    return new_item
+    """Delegate to the CEI protocol registry (canonical names, 8 categories,
+    doctor-first instruction priority)."""
+    from app.casesheet.clinical_intelligence import enrich_protocol_item
+    enriched = enrich_protocol_item(item)
+    return enriched if isinstance(enriched, dict) else dict(item)
 
 
 def enrich_string_item(text: str) -> str:
     if not text or not isinstance(text, str):
         return text
-    canon = match_protocol(text)
-    if canon:
-        proto = SGP_PROTOCOLS[canon]
-        if proto["text"][:30].lower() not in text.lower():
-            return f"{canon}:\n{proto['text']}"
-        elif len(text.strip()) < len(proto["text"]) // 2:
-            return f"{canon}:\n{proto['text']}"
+    from app.casesheet.clinical_intelligence import (
+        classify_protocol_item, protocol_standard_instructions,
+        CAT_OTHER,
+    )
+    _cat, canon = classify_protocol_item(text)
+    if not canon:
+        return text
+    template = protocol_standard_instructions(canon)
+    if template and template[:30].lower() not in text.lower():
+        return f"{canon}:\n{template}"
+    if canon.lower() not in text.lower():
+        return f"{canon}: {text.strip()}"
     return text
 
 
@@ -233,31 +223,62 @@ def enrich_section_data(section: str, data: Dict[str, Any]) -> Dict[str, Any]:
 
     enriched = dict(data)
 
-    if section in ("detox_procedures", "panchakarma", "exercises_yoga") or any(k in enriched for k in ("detox_items", "sessions", "exercises")):
-        for arr_key in ("detox_items", "sessions", "exercises"):
+from app.casesheet.clinical_intelligence import (
+    enrich_protocol_item, classify_protocol_item, is_protocol_section,
+    apply_protocol_boundaries, CAT_OTHER,
+)
+
+# Keys known to hold enrichable protocol item lists, plus any other list of
+# item-like dicts when the section itself is protocol-related (fixes the old
+# fragile "array must be named exactly X" coupling).
+_KNOWN_ITEM_KEYS = ("detox_items", "sessions", "exercises", "procedures", "items")
+
+
+def enrich_section_data(section: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        return data
+
+    enriched = dict(data)
+
+    if is_protocol_section(section) or any(k in enriched for k in _KNOWN_ITEM_KEYS):
+        arr_keys = [k for k, v in enriched.items()
+                    if isinstance(v, list)
+                    and (k in _KNOWN_ITEM_KEYS
+                         or (is_protocol_section(section) and v
+                             and any(isinstance(i, (dict, str)) for i in v)))]
+        for arr_key in arr_keys:
             items = enriched.get(arr_key)
-            if isinstance(items, list):
-                new_items = []
-                seen_canons = set()
-                for item in items:
-                    if isinstance(item, dict):
-                        e_item = enrich_item_dict(item)
-                        canon_name = e_item.get("name", "").strip().lower()
+            new_items = []
+            seen_canons = set()
+            for item in items:
+                if isinstance(item, dict):
+                    e_item = enrich_protocol_item(item)
+                    canon_name = str(e_item.get("name", "")).strip().lower()
+                    if canon_name and canon_name in seen_canons:
+                        continue
+                    if canon_name:
+                        seen_canons.add(canon_name)
+                    new_items.append(e_item)
+                elif isinstance(item, str):
+                    # Upgrade recognized strings to structured canonical items
+                    # (single dialect: dicts with name/category/instructions).
+                    e_item = enrich_protocol_item(item)
+                    if isinstance(e_item, dict):
+                        canon_name = str(e_item.get("name", "")).strip().lower()
                         if canon_name and canon_name in seen_canons:
                             continue
                         if canon_name:
                             seen_canons.add(canon_name)
                         new_items.append(e_item)
-                    elif isinstance(item, str):
-                        e_str = enrich_string_item(item)
-                        canon_match = match_protocol(e_str) or item.strip().lower()
-                        if canon_match in seen_canons:
-                            continue
-                        seen_canons.add(canon_match)
-                        new_items.append(e_str)
                     else:
+                        key = item.strip().lower()
+                        if key in seen_canons:
+                            continue
+                        seen_canons.add(key)
                         new_items.append(item)
-                enriched[arr_key] = new_items
+                else:
+                    new_items.append(item)
+            enriched[arr_key] = new_items
 
     if section == "assessment_and_plan" or "plan" in enriched:
         plan = enriched.get("plan")

@@ -37,13 +37,14 @@ _MEDICINE_BASE = (
 
 _PANCHAKARMA_BASE = (
     "Panchakarma and therapy terms: Abhyanga Shirodhara Nasya Basti Virechana Vamana Janu Pichu Januvasthi Greeva Vasthi "
-    "Kati Vasthi Netra Tarpana Karna Purana Pinda Sweda Njavara Udwarthana Sauna Steam Pizhichil Patra Pinda Sweda "
-    "Choornasweda Valuka Sweda Lepam Dhanyamla Dhara. "
+    "Kati Vasthi Kati Vasti Netra Tarpana Karna Purana Pinda Sweda Njavara Navara Lepanam Udwarthana Sauna Steam Pizhichil Patra Pinda Sweda "
+    "Choornasweda Valuka Sweda Lepam Dhanyamla Dhara Nadi Swedhana Takradhara Hot Pack Cold Pack. "
     "Oils: Nutex Niutex Ksheerabala Dhanwantharam Bala Anu Tailam Chandanadi Thailam "
-    "NeeliBringadi Keera Tailam Neelibhringadi Brahmi Narayana Kottamchukkadi Mahanarayana Sahacharadi Murivenna. "
-    "SGP procedures: Gandusham Gandusha Nithya Virechana Prathivaara Virechana Karma Anutailam Steam Inhalations SGP Covid Protocol. "
-    "Detox decoctions: Fennel Tea Barley Soup Rice Soup Tapioca Soup Sabu Dana Raagi Soup Jowar Soup. "
-    "Exercises yoga: Naukasanam Bhujangasanam Stretching Pranayama."
+    "NeeliBringadi Keera Tailam Neelibhringadi Brahmi Narayana Kottamchukkadi Mahanarayana Sahacharadi Murivenna Pinda Tailam. "
+    "SGP procedures: Gandusham Gandusha Nithya Virechana NVK Prathivaara Virechana PVVK Anutailam Steam Inhalations SGP Covid Protocol. "
+    "Detox decoctions: Fennel Tea Fennel Water Barley Soup Rice Soup Tapioca Soup Sabu Dana Raagi Soup Jowar Soup Coriander Milk Ginger Tea Curd Rice. "
+    "Exercises yoga: Naukasanam Bhujangasanam Suryanamaskaram Kegel Walking Leg Exercises Hip Rotation Stretching Gym Knee Strengthening "
+    "DNB R-DNB Reverse DNB Pranayama."
 )
 
 
@@ -498,7 +499,16 @@ Extraction Rules:
    - "low P", "low V", "low K" -> "very_mild"
    - "PV" / "VP" -> set BOTH Vata and Pitta to stated severity.
    - "VK" / "KV" -> set BOTH Vata and Kapha to stated severity.
-5. Filter Out Non-Pulse Dictation: Ignore height/weight, blood group, labs, or narrative progress commentary mixed into the transcript.
+5. WORD ORDER IS FLEXIBLE — pair severities to the dosha named NEAREST to them, in either order:
+   - "CVS, mild to moderate, Pitta" -> CVS pitta = "mild_moderate" (severity came FIRST, dosha SECOND — still pairs to Pitta only).
+   - "GIT, moderate Kapha, mild Pitta" -> GIT kapha = "moderate", pitta = "mild".
+   - "RT, mild to moderate, Vata" -> RT vata = "mild_moderate".
+   - Never spread one severity across doshas that were not named next to it.
+6. TERSE COMMA-LIST STYLE: doctors often dictate "SYSTEM, severity, [dosha/compound]" chains. Parse pairwise: each system code consumes the severities/doshas/compounds that follow it until the next system code.
+   - "KUB, severe, VK" -> KUB vata = "severe", kapha = "severe" (bare compound after severity applies it to BOTH doshas).
+   - "IS, mild PV" -> IS vata = "mild", pitta = "mild".
+   - "GB, moderate PV" -> GB vata = "moderate", pitta = "moderate".
+7. Filter Out Non-Pulse Dictation: Ignore height/weight, blood group, labs, or narrative progress commentary mixed into the transcript.
 
 Schema:
 {
@@ -553,6 +563,29 @@ Expected JSON:
   ],
   "needs_doctor_confirmation": []
 }
+
+SECOND FEW-SHOT — TERSE COMMA-LIST STYLE (severity BEFORE dosha, bare compounds):
+
+Dictation:
+"CVS, mild to moderate, Pitta, GIT, moderate Kapha, mild Pitta, RT, mild to moderate, Vata, LB, mild to moderate, Kapha, LIV, mild Pitta, mild Vata, IS, mild PV, PAN, mild KV, KUB, severe, VK, GB, moderate PV."
+
+Expected JSON:
+{
+  "overall_vpk": { "dominance": null, "prakriti": null, "vikriti": null, "notes": null },
+  "systems": [
+    { "system": "CVS", "vata": null, "pitta": "mild_moderate", "kapha": null, "raw_phrase": "CVS, mild to moderate, Pitta", "needs_doctor_confirmation": [] },
+    { "system": "GIT", "vata": null, "pitta": "mild", "kapha": "moderate", "raw_phrase": "GIT, moderate Kapha, mild Pitta", "needs_doctor_confirmation": [] },
+    { "system": "RT", "vata": "mild_moderate", "pitta": null, "kapha": null, "raw_phrase": "RT, mild to moderate, Vata", "needs_doctor_confirmation": [] },
+    { "system": "LB", "vata": null, "pitta": null, "kapha": "mild_moderate", "raw_phrase": "LB, mild to moderate, Kapha", "needs_doctor_confirmation": [] },
+    { "system": "LIV", "vata": "mild", "pitta": "mild", "kapha": null, "raw_phrase": "LIV, mild Pitta, mild Vata", "needs_doctor_confirmation": [] },
+    { "system": "IS", "vata": "mild", "pitta": "mild", "kapha": null, "raw_phrase": "IS, mild PV", "needs_doctor_confirmation": [] },
+    { "system": "PAN", "vata": "mild", "pitta": null, "kapha": "mild", "raw_phrase": "PAN, mild KV", "needs_doctor_confirmation": [] },
+    { "system": "KUB", "vata": "severe", "pitta": null, "kapha": "severe", "raw_phrase": "KUB, severe, VK", "needs_doctor_confirmation": [] },
+    { "system": "GB", "vata": "moderate", "pitta": "moderate", "kapha": null, "raw_phrase": "GB, moderate PV", "needs_doctor_confirmation": [] }
+  ],
+  "needs_doctor_confirmation": []
+}
+
 
 IMPORTANT: Return ONLY valid JSON matching the schema above.
 """,

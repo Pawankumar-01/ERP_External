@@ -911,6 +911,11 @@ def _merge_section_into_draft(current: dict, key: str, new_data: Any) -> None:
         current[key] = new_data
     if settings.CASE_APPLY_NOMENCLATURE:
         current[key] = apply_nomenclature_to_section(current[key])
+    # Deterministic boundary enforcement: home-detox items never sit in
+    # panchakarma (and vice versa); yoga/breathing items land in exercises.
+    if settings.CASE_SANITIZE:
+        from app.casesheet.clinical_intelligence import apply_protocol_boundaries
+        apply_protocol_boundaries(current)
 
 
 async def _process_audio_background(session_id: str, section: str, audio_bytes: bytes, language: Optional[str]) -> None:

@@ -73,6 +73,84 @@ SGP_MEDICINE_ALIASES: Dict[str, str] = {
     "quadrangularis": "QUADRANGULARIES",
 }
 
+# ---------------------------------------------------------------------------
+# Protocol / Procedure canonical taxonomy (8 categories, clinic ground truth)
+# ---------------------------------------------------------------------------
+CAT_PROCEDURES = "Procedures"
+CAT_OILS = "Oil Applications"
+CAT_EXERCISES = "Yoga / Exercises"
+CAT_BREATHING = "Breathing"
+CAT_DETOX = "Detox / Panchakarma"
+CAT_DIET = "Diet / Food"
+CAT_COMPLIANCE = "Compliance / Patient Notes"
+CAT_OTHER = "Other / Clinical Notes"
+
+PROTOCOL_CATEGORIES = [
+    CAT_PROCEDURES, CAT_OILS, CAT_EXERCISES, CAT_BREATHING,
+    CAT_DETOX, CAT_DIET, CAT_COMPLIANCE, CAT_OTHER,
+]
+
+# canonical -> {category, aliases, instructions (clinic template; "" = doctor
+# words only; NEVER fabricate instructions for entries without a template).}
+PROTOCOL_REGISTRY: Dict[str, Dict[str, Any]] = {
+    # -- Procedures (in-clinic) --
+    "Abhyanga": {"category": CAT_PROCEDURES, "aliases": ["abhyanga", "abhyangam", "full body massage"], "instructions": ""},
+    "Kati Vasti": {"category": CAT_PROCEDURES, "aliases": ["kati vasthi", "kati basti", "lumbar basti", "kativasti", "kativasthi"], "instructions": ""},
+    "Janu Vasti": {"category": CAT_PROCEDURES, "aliases": ["januvasthi", "januvasti", "janu basti", "knee vasti"], "instructions": ""},
+    "Greeva Vasti": {"category": CAT_PROCEDURES, "aliases": ["greeva vasthi", "greeva basti", "neck basti"], "instructions": ""},
+    "Pichu": {"category": CAT_PROCEDURES, "aliases": ["pichu", "jhanu pichu", "janu pichu"], "instructions": ""},
+    "Shirodhara": {"category": CAT_PROCEDURES, "aliases": ["shirodhara", "shiro dhara", "sirodhara"], "instructions": ""},
+    "Nadi Swedhana": {"category": CAT_PROCEDURES, "aliases": ["nadi swedana", "nadi swedanam"], "instructions": ""},
+    "Navara Lepanam": {"category": CAT_PROCEDURES, "aliases": ["njavara lepanam", "njavara kizhi", "navara kizhi", "njavara", "shashtika lepa"], "instructions": ""},
+    "Takradhara": {"category": CAT_PROCEDURES, "aliases": ["takra dhara", "thakradhara"], "instructions": ""},
+    "Swedana": {"category": CAT_PROCEDURES, "aliases": ["swedanam", "savana", "savanna", "steam bath", "sauna"], "instructions": ""},
+    "Hot Pack": {"category": CAT_PROCEDURES, "aliases": ["hot pack", "hot fomentation"], "instructions": ""},
+    "Cold Pack": {"category": CAT_PROCEDURES, "aliases": ["cold pack", "ice pack"], "instructions": ""},
+    "Nasya": {"category": CAT_PROCEDURES, "aliases": ["nasal drops therapy"], "instructions": ""},
+    # -- Oil Applications --
+    "Neelibhringadi": {"category": CAT_OILS, "aliases": ["neeli bringadi", "neelibhringadi keera tailam", "keera tailam"], "instructions": "Apply over the scalp on every alternate day."},
+    "Nutex Oil": {"category": CAT_OILS, "aliases": ["nutex"], "instructions": ""},
+    "Chandanadi Thailam": {"category": CAT_OILS, "aliases": ["chandanadi thailam", "chandanadi tailam"], "instructions": ""},
+    "Pinda Tailam": {"category": CAT_OILS, "aliases": ["pinda thailam"], "instructions": ""},
+    "Murivenna": {"category": CAT_OILS, "aliases": ["murivenna oil"], "instructions": ""},
+    "Erand Tailam (Castor Oil)": {"category": CAT_OILS, "aliases": ["erand tailam", "erand thailam", "castor oil"], "instructions": ""},
+    # -- Yoga / Exercises --
+    "Surya Namaskar": {"category": CAT_EXERCISES, "aliases": ["suryanamaskaram", "suryanamaskar", "surya namas"], "instructions": ""},
+    "Naukasana": {"category": CAT_EXERCISES, "aliases": ["naukasanam", "naukasam", "boat pose"], "instructions": "For back/spine issues, only Naukasana is advised."},
+    "Bhujangasana": {"category": CAT_EXERCISES, "aliases": ["bhujangasanam", "cobra pose"], "instructions": ""},
+    "Kegel Exercises": {"category": CAT_EXERCISES, "aliases": ["kegel exercise", "pelvic floor exercise"], "instructions": ""},
+    "Walking": {"category": CAT_EXERCISES, "aliases": ["morning walk", "evening walk"], "instructions": ""},
+    "Leg Exercises": {"category": CAT_EXERCISES, "aliases": ["leg exercise", "leg raising", "leg raises"], "instructions": ""},
+    "Hip Rotation": {"category": CAT_EXERCISES, "aliases": ["hip exercise"], "instructions": ""},
+    "Stretching": {"category": CAT_EXERCISES, "aliases": ["stretches", "stretch"], "instructions": ""},
+    "Gym": {"category": CAT_EXERCISES, "aliases": ["weight training", "strength training"], "instructions": ""},
+    "Knee Strengthening": {"category": CAT_EXERCISES, "aliases": ["knee exercise", "quadriceps exercise"], "instructions": ""},
+    # -- Breathing --
+    "DNB (Differential Nostril Breathing)": {"category": CAT_BREATHING, "aliases": ["dnb", "differential nostril breathing", "alternate nostril breathing", "anulom vilom"], "instructions": "1:4:2 ratio (inhale 1s, hold 4s, exhale 2s), 10 mins before and after bed."},
+    "R-DNB": {"category": CAT_BREATHING, "aliases": ["rdnb", "r dnb"], "instructions": ""},
+    "Reverse DNB": {"category": CAT_BREATHING, "aliases": ["reverse breathing"], "instructions": ""},
+    # -- Detox / Panchakarma (home routines) --
+    "Nitya Virechana (NVK)": {"category": CAT_DETOX, "aliases": ["nvk", "nithya virechana", "daily virechana", "nitya virechana karma"], "instructions": "At bedtime (2 hrs after dinner): warm water + 1-2 lemons + 2 pinch black salt, then Erand Tailam. Water ml = weight(kg)x10; Oil ml = weight(kg)/3."},
+    "Prativaara Virechana (PVVK)": {"category": CAT_DETOX, "aliases": ["pvvk", "prathivaara virechana", "weekly virechana", "once a week virechana"], "instructions": "Once a week, same method as Nitya Virechana."},
+    "Virechana": {"category": CAT_DETOX, "aliases": ["purgation therapy"], "instructions": ""},
+    "Vamana": {"category": CAT_DETOX, "aliases": ["emesis therapy"], "instructions": ""},
+    "D-Tox": {"category": CAT_DETOX, "aliases": ["dtox", "d tox"], "instructions": ""},
+    "Gandusham": {"category": CAT_DETOX, "aliases": ["gandusha", "gandoosha", "oil pulling"], "instructions": "Swish 1-2 tbsp sesame oil 10-20 mins, do not swallow, rinse thoroughly."},
+    "Anutailam": {"category": CAT_DETOX, "aliases": ["anu tailam", "anu taila", "nasya drops"], "instructions": "2 drops in each nostril and ears."},
+    "Steam Inhalations": {"category": CAT_DETOX, "aliases": ["steam inhalation", "turmeric steam"], "instructions": "Steam with 1 tsp turmeric; Zandu balm on nose/temples/throat/chest; inhale 10 mins."},
+    # -- Diet / Food --
+    "Fennel Water": {"category": CAT_DIET, "aliases": ["fennel tea", "fennel", "saunf water", "somph water"], "instructions": "9 tsp fennel seeds in 2 L water, boil 5-10 mins, add 50-75 gms jaggery; drink through the day."},
+    "CCRSTT (Avoid)": {"category": CAT_DIET, "aliases": ["avoid ccrstt"], "instructions": "Avoid Cabbage, Cauliflower, Radish, Spinach, Tamarind, Tomato."},
+    "Coriander Milk": {"category": CAT_DIET, "aliases": [], "instructions": ""},
+    "Ginger Tea": {"category": CAT_DIET, "aliases": [], "instructions": ""},
+    "Curd Rice": {"category": CAT_DIET, "aliases": ["thayir sadam"], "instructions": ""},
+    "Barley Soup": {"category": CAT_DIET, "aliases": ["barley water", "barley"], "instructions": "Grind 2 tsp barley, soak 5-10 mins, boil in 1/2 L water; drink same day."},
+    "Rice Soup": {"category": CAT_DIET, "aliases": ["rice water", "kanjee", "kanji"], "instructions": "150 gms rice in 5 cups water, simmer to 3 cups; rock salt; same day."},
+    "Tapioca Soup (Sabu Dana)": {"category": CAT_DIET, "aliases": ["tapioca", "sabu dana", "sabudana"], "instructions": "Soak 2 tsp, cook in 1/2 L boiled water 5 mins; rock salt; same day."},
+    "Raagi Soup": {"category": CAT_DIET, "aliases": ["ragi soup", "ragi", "finger millet"], "instructions": "Kapha diet only."},
+    "Jowar Soup": {"category": CAT_DIET, "aliases": ["sorghum"], "instructions": "Kapha diet only."},
+}
+
 # Common allopathic medicines -- spelling variants -> canonical.
 COMMON_MEDICINE_ALIASES: Dict[str, str] = {
     "telmesartan": "Telmisartan",
@@ -1206,3 +1284,198 @@ def section_signals_present(section: str, text: str) -> bool:
         return False
     low = text.lower()
     return any(sig in low for sig in signals)
+
+
+# ---------------------------------------------------------------------------
+# Protocol classification / enrichment (doctor-first instructions)
+# ---------------------------------------------------------------------------
+_COMPLIANCE_PATTERNS = [
+    "not following", "skipped", "paused", "irregular", "stopped",
+    "discontinued", "travelling", "traveling", "out of station",
+    "not taking", "missed dose", "off the diet", "broke the diet",
+]
+
+_PROTOCOL_ALIAS_INDEX: List[tuple] = []
+for _canon, _meta in PROTOCOL_REGISTRY.items():
+    for _al in [_canon.lower()] + [a.lower() for a in _meta["aliases"]]:
+        _PROTOCOL_ALIAS_INDEX.append((_al, _canon, _meta["category"]))
+_PROTOCOL_ALIAS_INDEX.sort(key=lambda t: -len(t[0]))
+
+_COMPILED_COMPLIANCE = [re.compile(re.escape(p)) for p in _COMPLIANCE_PATTERNS]
+
+
+def classify_protocol_item(text: Any) -> tuple:
+    """Return (category, canonical_name); (CAT_OTHER, '') when unrecognized."""
+    if not text:
+        return (CAT_OTHER, "")
+    t = str(text).lower().strip()
+    for alias, canon, cat in _PROTOCOL_ALIAS_INDEX:
+        if alias in t:
+            return (cat, canon)
+    for pat in _COMPILED_COMPLIANCE:
+        if pat.search(t):
+            return (CAT_COMPLIANCE, "")
+    return (CAT_OTHER, "")
+
+
+def protocol_standard_instructions(canon: str) -> str:
+    return (PROTOCOL_REGISTRY.get(canon) or {}).get("instructions", "") or ""
+
+
+def enrich_protocol_item(item: Any) -> Any:
+    """
+    Deterministic protocol enrichment, doctor-first instruction priority:
+      * canonical name always enforced via alias map.
+      * doctor-dictated instructions kept verbatim in `instructions`
+        (source="doctor"); clinic template attached in `standard_instructions`.
+      * template used only when the doctor dictated nothing.
+      * unrecognized items pass through untouched (never fabricated).
+    """
+    if isinstance(item, str):
+        cat, canon = classify_protocol_item(item)
+        if not canon:
+            return item
+        template = protocol_standard_instructions(canon)
+        return {"name": canon, "category": cat,
+                "instructions": template or item.strip(),
+                "standard_instructions": template,
+                "instructions_source": "template" if template else "doctor",
+                "raw_text": item.strip()}
+
+    if not isinstance(item, dict):
+        return item
+
+    new_item = dict(item)
+    name = str(new_item.get("name") or new_item.get("procedure")
+               or new_item.get("item_name") or "").strip()
+    doctor_instr = str(new_item.get("instructions") or new_item.get("remarks") or "").strip()
+    cat, canon = classify_protocol_item(f"{name} {doctor_instr}")
+    if not canon:
+        return new_item
+
+    template = protocol_standard_instructions(canon)
+    new_item["name"] = canon
+    # Canonicalize every name-bearing key so no raw alias survives.
+    if "procedure" in new_item:
+        new_item["procedure"] = canon
+    if "item_name" in new_item:
+        new_item["item_name"] = canon
+    new_item["category"] = cat
+    new_item["standard_instructions"] = template
+    if doctor_instr:
+        if not str(new_item.get("instructions") or "").strip():
+            new_item["instructions"] = doctor_instr
+        new_item["instructions_source"] = "doctor"
+    elif template:
+        new_item["instructions"] = template
+        new_item["instructions_source"] = "template"
+    else:
+        new_item["instructions_source"] = "doctor"
+    return new_item
+
+
+def is_protocol_section(section: str) -> bool:
+    return section in ("panchakarma", "detox_procedures", "exercises_yoga",
+                       "followup_details", "treatment_and_background")
+
+
+PROTOCOL_TAXONOMY_PROMPT_BLOCK = (
+    "PROCEDURE / THERAPY TAXONOMY (canonical names + categories):\n"
+    "- Procedures (in-clinic): Abhyanga, Kati Vasti, Janu Vasti, Greeva Vasti, Pichu, "
+    "Shirodhara, Nadi Swedhana, Navara Lepanam, Takradhara, Swedana (incl. sauna/steam bath), "
+    "Hot Pack, Cold Pack, Nasya.\n"
+    "- Oil Applications (never standalone procedures): Neelibhringadi, Nutex Oil, Chandanadi Thailam, "
+    "Pinda Tailam, Murivenna, Erand Tailam (Castor Oil), pain oils, skin oils.\n"
+    "- Yoga / Exercises: Surya Namaskar, Naukasana, Bhujangasana, Kegel, Walking, Leg Exercises, "
+    "Hip Rotation, Stretching, Gym, Knee Strengthening.\n"
+    "- Breathing: DNB (Differential Nostril Breathing), R-DNB, Reverse DNB.\n"
+    "- Detox / Panchakarma (home routines): Nitya Virechana (NVK), Prativaara Virechana (PVVK), "
+    "Virechana, Vamana, D-Tox, Gandusham, Anutailam, Steam Inhalations.\n"
+    "- Diet / Food: Fennel Water, soups (Barley/Rice/Tapioca/Raagi/Jowar), CCRSTT, Coriander Milk, "
+    "Ginger Tea, Curd Rice.\n"
+    "- Abbreviations MUST be expanded: NVK -> Nitya Virechana (NVK); PVVK -> Prativaara Virechana (PVVK); "
+    "DNB -> DNB (Differential Nostril Breathing).\n"
+    "- INSTRUCTIONS PRIORITY: if the doctor dictates specific instructions for an item, put them verbatim "
+    "in 'instructions'. Attach the clinic standard instruction only when nothing is dictated.\n"
+    "- Always store the canonical spelling above in the 'name' field.\n"
+)
+
+
+def with_protocol_taxonomy(prompt: str) -> str:
+    if "PROCEDURE / THERAPY TAXONOMY" in prompt:
+        return prompt
+    return prompt.rstrip() + "\n\n" + PROTOCOL_TAXONOMY_PROMPT_BLOCK
+
+
+def _item_label(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("procedure") or item.get("name")
+                   or item.get("item_name") or "")
+    return str(item or "")
+
+
+def apply_protocol_boundaries(draft: Dict[str, Any]) -> int:
+    """
+    Deterministic boundary rerouting (never drops data):
+      detox/diet items in panchakarma.sessions -> detox_procedures.detox_items
+      in-clinic procedures in detox_procedures -> panchakarma.sessions
+      yoga/breathing items in either -> exercises_yoga.exercises
+    Returns number of moved items.
+    """
+    if not isinstance(draft, dict):
+        return 0
+    panca = draft.get("panchakarma")
+    detox = draft.get("detox_procedures")
+    yoga = draft.get("exercises_yoga")
+    if not isinstance(panca, dict) or not isinstance(detox, dict):
+        return 0
+    moved = 0
+
+    panca_sessions = panca.get("sessions") if isinstance(panca.get("sessions"), list) else []
+    detox_items = detox.get("detox_items") if isinstance(detox.get("detox_items"), list) else []
+    yoga_list = (yoga.get("exercises") if isinstance(yoga, dict)
+                 and isinstance(yoga.get("exercises"), list) else None)
+
+    keep_panca = []
+    for s in panca_sessions:
+        label = _item_label(s)
+        cat, _ = classify_protocol_item(label)
+        if not label:
+            keep_panca.append(s)
+        elif cat in (CAT_DETOX, CAT_DIET):
+            moved_item = dict(s) if isinstance(s, dict) else {"name": s}
+            moved_item.setdefault("name", label)  # normalize key for detox readers
+            detox_items.append(moved_item)
+            moved += 1
+        elif cat in (CAT_EXERCISES, CAT_BREATHING) and yoga_list is not None:
+            moved_item = dict(s) if isinstance(s, dict) else {"name": s}
+            moved_item.setdefault("name", label)
+            yoga_list.append(moved_item)
+            moved += 1
+        else:
+            keep_panca.append(s)
+    panca["sessions"] = keep_panca
+
+    keep_detox = []
+    for it in detox_items:
+        label = _item_label(it)
+        cat, _ = classify_protocol_item(label)
+        if not label:
+            keep_detox.append(it)
+        elif cat == CAT_PROCEDURES:
+            if isinstance(it, dict):
+                it.setdefault("procedure", it.get("name", label))
+            else:
+                it = {"procedure": it, "name": it}
+            panca_sessions.append(it)
+            moved += 1
+        elif cat in (CAT_EXERCISES, CAT_BREATHING) and yoga_list is not None:
+            moved_item = dict(it) if isinstance(it, dict) else {"name": it}
+            moved_item.setdefault("name", label)
+            yoga_list.append(moved_item)
+            moved += 1
+        else:
+            keep_detox.append(it)
+    detox["detox_items"] = keep_detox
+    panca["sessions"] = panca_sessions
+    return moved

@@ -31,6 +31,8 @@ from app.casesheet.clinical_intelligence import (
     with_variant_examples,
     with_batch_variant_examples,
     apply_nomenclature_to_section,
+    with_protocol_taxonomy,
+    is_protocol_section,
 )
 from app.config.settings import settings
 
@@ -87,6 +89,8 @@ class LLMService:
 
         if settings.CASE_EMBED_VARIANT_EXAMPLES:
             prompt = with_variant_examples(section, prompt)
+        if is_protocol_section(section):
+            prompt = with_protocol_taxonomy(prompt)
 
         messages = [
             {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
@@ -164,6 +168,11 @@ class LLMService:
         if not batch_prompt:
             logger.warning("Invalid batch_index: %s", batch_index)
             return {}
+
+        # Protocol sections (batch 3) get the canonical procedure taxonomy so
+        # all three extraction paths share the same vocabulary.
+        if batch_index == 3:
+            batch_prompt = with_protocol_taxonomy(batch_prompt)
 
         segmented_map = await self._preprocess_and_segment_batch_transcript(batch_index, transcript)
         full_cleaned = segmented_map.get("full_cleaned_transcript")
