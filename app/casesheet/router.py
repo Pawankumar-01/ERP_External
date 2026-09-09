@@ -1700,6 +1700,15 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
 
     oils_list = []
     detox_list = []
+    # Canonical oil names from the protocol registry (these are ingredients, never
+    # standalone procedures). Category-first: when a structured item already carries
+    # a canonical `category` from enrich_protocol_item, we trust it instead of
+    # re-deriving the bucket from substring matches (which misroutes Gandusham,
+    # Anutailam, and any future CAT_DETOX item whose name/display mentions "oil").
+    _CANONICAL_OIL_NAMES = frozenset({
+        "neelibhringadi", "nutex oil", "chandanadi thailam", "pinda tailam",
+        "murivenna", "erand tailam", "anutailam",
+    })
     def _is_schema_placeholder(val: str) -> bool:
         if not val:
             return False
@@ -1709,6 +1718,14 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
             or ("string" in v.lower() and "|" in v)
             or ("null" in v.lower() and "|" in v and len(v) < 60)
         )
+    def _looks_like_oil(name: str) -> bool:
+        low = name.lower()
+        # Name-only fallback: strict allowlist of canonical oil names, NOT blanket
+        # substring matches on words like "oil" / "anutail" / "keera" that also
+        # appear on detox items such as Gandusham (Oil Pulling) and Anutailam
+        # (CAT_DETOX). For structured dicts, the category-first decision is made
+        # in the caller block right below this helper (item_cat check).
+        return low in _CANONICAL_OIL_NAMES
 
     if isinstance(detox, dict):
         raw_items = detox.get("detox_items") or detox.get("items") or []
@@ -1729,14 +1746,19 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
                 instr = _clean(d.get("instructions") or d.get("remarks")) or ""
 
                 header = f"• {name} ({q_f_str})" if q_f_str and q_f_str != "()" else f"• {name}"
-                if any(k in name.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):
+                # Category-first: a canonical category on the item beats any
+                # name substring guess. Detox-category items stay in detox_list
+                # even when their name contains "oil"/"anutail"/"keera".
+                item_cat = str(d.get("category") or "").strip().lower()
+                if item_cat == "oil applications" or _looks_like_oil(name):
                     oils_list.append(f"{header}: {instr}" if instr else (f"{header}: As prescribed" if "anutail" not in name.lower() else header))
                 else:
                     detox_list.append(f"{header}: {instr}" if instr else header)
             elif isinstance(d, str) and d.strip():
                 item_str = d.strip()
                 header = f"• {item_str}"
-                if any(k in item_str.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):
+                # Bare string fallback: strict canonical-oil allowlist only.
+                if _looks_like_oil(item_str):
                     oils_list.append(header)
                 else:
                     detox_list.append(header)
@@ -1744,7 +1766,7 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
         for d in detox:
             if isinstance(d, str) and d.strip():
                 header = f"• {d.strip()}"
-                if any(k in d.lower() for k in ["oil", "thailam", "tailam", "abhyanga", "anutail", "keera", "nutex oil", "chandanadi", "neelibringadi"]):
+                if _looks_like_oil(d.strip()):
                     oils_list.append(header)
                 else:
                     detox_list.append(header)

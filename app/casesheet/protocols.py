@@ -43,12 +43,6 @@ SGP_PROTOCOLS = {
         "clean_quantity": "",
         "clean_frequency": "Alternate days",
     },
-    "Nutex Oil + Chandanadi Thailam": {
-        "keywords": ["nutex oil", "chandanadi", "nutex + chandan"],
-        "text": "Apply over the scalp / affected area as prescribed.",
-        "clean_quantity": "",
-        "clean_frequency": "As prescribed",
-    },
     "Nithya Virechana Process": {
         "keywords": ["nithya virechan", "daily virechan", "errant thailam", "erand tailam", "erand thailam", "castor oil routine", "castor oil quantity", "nithya virechana"],
         "text": (
