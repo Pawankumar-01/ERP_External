@@ -38,10 +38,22 @@ SGP_PROTOCOLS = {
         "clean_frequency": "",
     },
     "NeeliBringadi Keera Tailam": {
-        "keywords": ["neelibringadi", "keera tailam", "keera thailam", "neelibhringadi", "neeli bringadi"],
+        "keywords": ["neelibringadi", "keera tailam", "keera thailam", "neelibhringadi keera tailam", "neelibhringadi", "neeli bringadi"],
         "text": "Apply over the scalp on every alternate days.",
         "clean_quantity": "",
         "clean_frequency": "Alternate days",
+    },
+    "Nutex Oil": {
+        "keywords": ["nutex oil", "nutex", "nu tex"],
+        "text": "Apply over the scalp / affected area as prescribed.",
+        "clean_quantity": "",
+        "clean_frequency": "As prescribed",
+    },
+    "Chandanadi Thailam": {
+        "keywords": ["chandanadi", "chandanadi thailam", "chandanadi tailam", "chandanadi oil"],
+        "text": "Apply over the scalp / affected area as prescribed.",
+        "clean_quantity": "",
+        "clean_frequency": "As prescribed",
     },
     "Nithya Virechana Process": {
         "keywords": ["nithya virechan", "daily virechan", "errant thailam", "erand tailam", "erand thailam", "castor oil routine", "castor oil quantity", "nithya virechana"],

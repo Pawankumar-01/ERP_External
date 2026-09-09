@@ -1707,7 +1707,7 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
     # Anutailam, and any future CAT_DETOX item whose name/display mentions "oil").
     _CANONICAL_OIL_NAMES = frozenset({
         "neelibhringadi", "nutex oil", "chandanadi thailam", "pinda tailam",
-        "murivenna", "erand tailam", "anutailam",
+        "murivenna", "erand tailam",
     })
     def _is_schema_placeholder(val: str) -> bool:
         if not val:
