@@ -60,6 +60,10 @@ LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS_DEFAULT", "1200"))
 LLM_CONCURRENCY = max(1, int(os.getenv("CASE_LLM_CONCURRENCY", "1")))
 LLM_TRANSIENT_RETRIES = max(0, int(os.getenv("CASE_LLM_TRANSIENT_RETRIES", "1")))
+# Diagnostic switch. The response contains clinical data, so production may
+# disable it after mapping investigation with CASE_LOG_LLM_OUTPUTS=false.
+LOG_LLM_OUTPUTS = os.getenv("CASE_LOG_LLM_OUTPUTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+LLM_OUTPUT_LOG_LIMIT = max(1_000, int(os.getenv("CASE_LLM_OUTPUT_LOG_LIMIT", "40000")))
 
 
 class LLMService:
@@ -69,6 +73,21 @@ class LLMService:
         # it prevents the six Batch-2 extractors from exhausting a shared
         # account's rate limit before the Pulse call gets its turn.
         self._semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
+
+    @staticmethod
+    def _log_llm_output(label: str, stage: str, payload: Any) -> None:
+        """Log an inspectable model response without ever logging credentials."""
+        if not LOG_LLM_OUTPUTS:
+            return
+        try:
+            text = payload if isinstance(payload, str) else json.dumps(
+                payload, ensure_ascii=False, default=str, separators=(",", ":")
+            )
+        except Exception:
+            text = repr(payload)
+        if len(text) > LLM_OUTPUT_LOG_LIMIT:
+            text = f"{text[:LLM_OUTPUT_LOG_LIMIT]}… [truncated for log]"
+        logger.info("LLM_OUTPUT label=%s stage=%s payload=%s", label, stage, text)
 
     async def extract_section(self, section: str, transcript: str) -> Dict[str, Any]:
         if not transcript.strip():
@@ -107,6 +126,7 @@ class LLMService:
             fallback={"_raw": transcript},
             max_tokens=max_tokens,
         )
+        self._log_llm_output(f"section:{section}", "parsed_candidate", raw_result)
         # Provenance: _safe_json_call failure codes must survive the
         # deterministic fallback below. normalize/sanitize strip every "_*"
         # key by design, so capture the pre-normalize error here and re-attach
@@ -132,6 +152,8 @@ class LLMService:
                 result["_llm_output"] = raw_result.get("_llm_output")
         if settings.CASE_APPLY_NOMENCLATURE:
             result = apply_nomenclature_to_section(result)
+        if section == "pulse_diagnosis":
+            self._log_llm_output(f"section:{section}", "reconciled_mapping", result)
         return result
 
     async def _preprocess_and_segment_batch_transcript(
@@ -520,6 +542,7 @@ class LLMService:
                 max_tokens=max_tokens,
                 require_json=True,
             )
+            self._log_llm_output(label, "raw_response", raw)
             parsed = self._parse_json(raw)
             if parsed is None:
                 finish = self._classify_empty_result(raw)

@@ -742,20 +742,19 @@ def _dominance_from_transcript(raw: str) -> Optional[str]:
 
 
 def normalize_pulse_diagnosis(data: Any, raw_transcript: str = "") -> Dict[str, Any]:
-    """Canonical, source-first Pulse parser used by extraction and ERP export."""
+    """Canonical Pulse reconciliation used by extraction and ERP export.
+
+    The section LLM is the primary clinical mapper: it can resolve ASR forms
+    such as ``TIN``/``Ib``/``cvrk`` that a deterministic grammar cannot.  The
+    raw parser is deliberately a narrow repair/fallback layer for known codes,
+    severity tokens and an LLM outage; it must never overwrite an LLM value
+    with a later value leaked from an unrecognised ASR system label.
+    """
     output = sanitize_section("pulse_diagnosis", data)
-    # A Batch Pulse segment is the clinical source of truth.  Starting with
-    # LLM rows allowed an invented, but valid-looking, system (for example
-    # OBG) to survive even when the source segment only dictated CVS.
-    # Retain LLM-only rows only for legacy callers that truly have no source.
-    by_system = (
-        {}
-        if raw_transcript
-        else {
-            row["system"]: dict(row)
-            for row in _sanitize_pulse_systems(output.get("systems"))
-        }
-    )
+    by_system = {
+        row["system"]: dict(row)
+        for row in _sanitize_pulse_systems(output.get("systems"))
+    }
 
     if raw_transcript:
         text = _prepare_pulse_transcript(raw_transcript)
@@ -764,6 +763,7 @@ def normalize_pulse_diagnosis(data: Any, raw_transcript: str = "") -> Dict[str, 
             end = mentions[index + 1][0] if index + 1 < len(mentions) else len(text)
             segment = text[start + len(code):end]
             parsed: Dict[str, str] = {}
+            ambiguous_dosha = False
             # One combined expression prevents the end-dosha of "mild P" from
             # being reused as the beginning of a false "P moderate" pair.
             for pair in _PULSE_PAIR_RE.finditer(segment):
@@ -771,20 +771,38 @@ def normalize_pulse_diagnosis(data: Any, raw_transcript: str = "") -> Dict[str, 
                 dosha_token = pair.group("dosha") or pair.group("reverse_dosha")
                 if severity and dosha_token:
                     for dosha in _pulse_doshas(dosha_token):
+                        # A second value for one dosha before the next known
+                        # system usually means Whisper lost the next system
+                        # label (for example "TIN").  That segment is not
+                        # strong enough to overwrite the LLM's contextual
+                        # mapping, although it remains useful as a fallback
+                        # when no LLM row exists at all.
+                        if dosha in parsed:
+                            ambiguous_dosha = True
                         parsed[dosha] = severity
             if not parsed:
                 continue
-            row = by_system.setdefault(
-                code,
-                {"system": code, "vata": None, "pitta": None, "kapha": None},
-            )
-            row.update(parsed)
-            row["raw_phrase"] = f"{code}{segment}".strip()
+            row = by_system.get(code)
+            if row is None:
+                # The LLM omitted an explicitly parseable, known Pulse row.
+                # In that limited case the raw grammar provides a useful
+                # deterministic fallback.
+                by_system[code] = {
+                    "system": code,
+                    "vata": parsed.get("vata"),
+                    "pitta": parsed.get("pitta"),
+                    "kapha": parsed.get("kapha"),
+                    "raw_phrase": f"{code}{segment}".strip(),
+                }
+            elif not ambiguous_dosha:
+                # Clean direct evidence corrects narrowly scoped, known ASR
+                # failures such as Pitta rendered as "B". It does not alter
+                # LLM values when the raw span is structurally ambiguous.
+                row.update(parsed)
+                if not row.get("raw_phrase"):
+                    row["raw_phrase"] = f"{code}{segment}".strip()
 
-        # Do not preserve an LLM-inferred dominance that the doctor did not
-        # state.  With raw evidence, only the deterministic parser may supply
-        # this block.
-        overall: Dict[str, Any] = {}
+        overall = output.get("overall_vpk") if isinstance(output.get("overall_vpk"), dict) else {}
         dominance = _dominance_from_transcript(raw_transcript)
         if dominance:
             overall = {**overall, "dominance": dominance}

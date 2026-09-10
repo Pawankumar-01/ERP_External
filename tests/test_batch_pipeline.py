@@ -86,13 +86,26 @@ class BatchPipelineTests(unittest.TestCase):
         self.assertEqual(rows["SI"]["kapha"], "moderate")
         self.assertEqual(rows["LISI"]["vata"], "severe")
 
-    def test_source_transcript_discards_llm_only_pulse_rows(self):
+    def test_llm_pulse_values_survive_noisy_asr_reconciliation(self):
+        # "TIN" is an unrecognised STT system label. Its later values must
+        # not be attached to IS and overwrite Gemini's correct IS mapping.
         parsed = normalize_pulse_diagnosis(
-            {"systems": [{"system": "OBG", "pitta": "severe"}]},
-            "CVS mild P.",
+            {
+                "systems": [
+                    {
+                        "system": "IS",
+                        "vata": "severe",
+                        "pitta": "mild_moderate",
+                        "kapha": None,
+                    }
+                ]
+            },
+            "IS severe vata mild to moderate pitta TIN moderate vata mild kafa.",
         )
-        self.assertEqual([row["system"] for row in parsed["systems"]], ["CVS"])
-        self.assertEqual(parsed["systems"][0]["pitta"], "mild")
+        self.assertEqual([row["system"] for row in parsed["systems"]], ["IS"])
+        self.assertEqual(parsed["systems"][0]["vata"], "severe")
+        self.assertEqual(parsed["systems"][0]["pitta"], "mild_moderate")
+        self.assertIsNone(parsed["systems"][0]["kapha"])
 
     def test_pulse_list_merge_has_one_row_per_system(self):
         merged = merge_section_data(
