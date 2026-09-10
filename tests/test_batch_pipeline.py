@@ -38,6 +38,25 @@ class StubBatchLLM(LLMService):
         return {"source_section": section, "source_transcript": transcript}
 
 
+class InvalidPulseFallbackLLM(LLMService):
+    """Simulates the exact incident: a valid segment, invalid LLM JSON."""
+
+    async def _preprocess_and_segment_batch_transcript(self, batch_index, transcript):
+        return {
+            "vitals_anthropometry": "",
+            "general_examination": "",
+            "systemic_examination": "",
+            "investigation_reports": "",
+            "pulse_diagnosis": "CVS mild P, LI mild K.",
+            "ayurvedic_assessment_extended": "",
+        }
+
+    async def _safe_json_call(self, *, fallback, **_kwargs):
+        # extract_section must retain this error after the deterministic Pulse
+        # parser rebuilt rows from the raw source segment.
+        return {**fallback, "_error": "invalid_json"}
+
+
 class BatchPipelineTests(unittest.TestCase):
     def test_pulse_sample_recovers_all_terse_rows_without_false_is(self):
         parsed = normalize_pulse_diagnosis({}, RAW_PULSE_SAMPLE)
@@ -66,6 +85,14 @@ class BatchPipelineTests(unittest.TestCase):
         self.assertEqual(rows["LI"]["pitta"], "mild")
         self.assertEqual(rows["SI"]["kapha"], "moderate")
         self.assertEqual(rows["LISI"]["vata"], "severe")
+
+    def test_source_transcript_discards_llm_only_pulse_rows(self):
+        parsed = normalize_pulse_diagnosis(
+            {"systems": [{"system": "OBG", "pitta": "severe"}]},
+            "CVS mild P.",
+        )
+        self.assertEqual([row["system"] for row in parsed["systems"]], ["CVS"])
+        self.assertEqual(parsed["systems"][0]["pitta"], "mild")
 
     def test_pulse_list_merge_has_one_row_per_system(self):
         merged = merge_section_data(
@@ -96,6 +123,20 @@ class BatchPipelineTests(unittest.TestCase):
         self.assertIsNone(service._parse_json('prefix {"pitta": "mild"} trailing'))
         self.assertEqual(service._parse_json('```json\n{"pitta": "mild"}\n```'), {"pitta": "mild"})
 
+    def test_invalid_pulse_json_saves_source_rows_and_requires_review(self):
+        result = asyncio.run(
+            InvalidPulseFallbackLLM().extract_batch_transcript(2, "CVS mild P, LI mild K.")
+        )
+        self.assertEqual(result["_section_statuses"]["pulse_diagnosis"]["status"], "mapped_needs_review")
+        rows = {row["system"]: row for row in result["pulse_diagnosis"]["systems"]}
+        self.assertEqual(rows["CVS"]["pitta"], "mild")
+        self.assertEqual(rows["LI"]["kapha"], "mild")
+        blockers = _batch_finalize_blockers(
+            {"batch_2": {"status": "completed", "section_statuses": result["_section_statuses"]}},
+            {},
+        )
+        self.assertTrue(any("pulse_diagnosis" in item for item in blockers))
+
     def test_erp_payload_preserves_batch_three_and_pulse_values(self):
         draft = {
             "pulse_diagnosis": {
@@ -122,6 +163,17 @@ class BatchPipelineTests(unittest.TestCase):
         self.assertIn("Virechana", payload["panchakarma"])
         self.assertEqual(payload["sgp_supplements_table"][0]["quantity_mg"], "")
         self.assertEqual(payload["sgp_supplements_table"][0]["frequency"], "")
+
+    def test_erp_export_preserves_doctor_reviewed_pulse_correction(self):
+        draft = {
+            "pulse_diagnosis": {
+                "systems": [{"system": "CVS", "pitta": "severe"}],
+            },
+            "_raw_transcripts": {"pulse_diagnosis": "CVS mild P."},
+            "_section_meta": {"pulse_diagnosis": {"source": "manual"}},
+        }
+        payload = _map_draft_to_encounter("P-1", "D-1", None, draft)
+        self.assertEqual(payload["sgp_pulse_table"][0]["pitta"], "severe")
 
     def test_finalize_blocks_active_or_unreviewed_batch(self):
         progress = {

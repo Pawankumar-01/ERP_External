@@ -39,45 +39,36 @@ from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-GEMINI_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-3.1-pro-preview",
-    "gemini-2.5-flash",
-]
+# The batch workflow deliberately has a *short*, deterministic provider path.
+# Retrying five Groq models and then an unfunded OpenRouter account was what
+# starved the Pulse request in the recorded Batch-2 incident.
+GEMINI_PRIMARY_MODEL = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.5-flash")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+# Lone non-Gemini last resort (proven: 3 successes in the Batch-2 incident log).
+GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "qwen/qwen3.8-27b")
+GEMINI_MODELS = list(dict.fromkeys((GEMINI_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL)))
+GROQ_MODELS = [GROQ_FALLBACK_MODEL]
 
-GROQ_MODELS = [
-    "qwen/qwen3.8-27b",
-    "groq/compound-mini",
-    "groq/compound",
-    "qwen/qwen3.6-27b",
-    "openai/gpt-oss-120b",
-]
-
-PRIMARY_MODEL = settings.LLM_MODEL or os.getenv("LLM_MODEL", "openrouter/auto")
-
-_raw_candidates = [
-    PRIMARY_MODEL,
-    "openrouter/auto",
-    "meta-llama/llama-3.3-70b-instruct",
-    "qwen/qwen-2.5-72b-instruct",
-    "deepseek/deepseek-chat",
-]
-MODEL_CANDIDATES = []
-for m in _raw_candidates:
-    if m and m not in MODEL_CANDIDATES:
-        MODEL_CANDIDATES.append(m)
+# Explicit per-call output budgets. Pulse gets its own larger budget because it
+# can contain every organ/system row in one response.
+GEMINI_BATCH_MAX_TOKENS = int(os.getenv("GEMINI_BATCH_MAX_TOKENS", "6000"))
+GEMINI_PULSE_MAX_TOKENS = int(os.getenv("GEMINI_PULSE_MAX_TOKENS", "5000"))
 
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS_DEFAULT", "1200"))
+LLM_CONCURRENCY = max(1, int(os.getenv("CASE_LLM_CONCURRENCY", "1")))
+LLM_TRANSIENT_RETRIES = max(0, int(os.getenv("CASE_LLM_TRANSIENT_RETRIES", "1")))
 
 
 class LLMService:
 
     def __init__(self):
-        self._semaphore = asyncio.Semaphore(2)
+        # One request at a time is intentional for clinical batch extraction:
+        # it prevents the six Batch-2 extractors from exhausting a shared
+        # account's rate limit before the Pulse call gets its turn.
+        self._semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
 
     async def extract_section(self, section: str, transcript: str) -> Dict[str, Any]:
         if not transcript.strip():
@@ -105,12 +96,23 @@ class LLMService:
             },
         ]
 
+        max_tokens = (
+            GEMINI_PULSE_MAX_TOKENS
+            if section == "pulse_diagnosis"
+            else SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS)
+        )
         raw_result = await self._safe_json_call(
             messages=messages,
             label=f"section:{section}",
             fallback={"_raw": transcript},
-            max_tokens=SECTION_MAX_TOKENS.get(section, DEFAULT_MAX_TOKENS),
+            max_tokens=max_tokens,
         )
+        # Provenance: _safe_json_call failure codes must survive the
+        # deterministic fallback below. normalize/sanitize strip every "_*"
+        # key by design, so capture the pre-normalize error here and re-attach
+        # it after post-processing — otherwise a total provider failure would
+        # be recorded as a clean "mapped" (Batch-2 incident).
+        pre_error = raw_result.get("_error") if isinstance(raw_result, dict) else None
         if (
             settings.CASE_SANITIZE
             and isinstance(raw_result, dict)
@@ -121,6 +123,13 @@ class LLMService:
         result = enrich_section_data(section, raw_result)
         if section == "pulse_diagnosis":
             result = normalize_pulse_diagnosis(result, transcript)
+        if pre_error and isinstance(result, dict):
+            # sanitize/normalize stripped the internal keys — restore the
+            # failure provenance so fallback data is never mistaken for a
+            # clean LLM extraction downstream.
+            result["_error"] = pre_error
+            if raw_result.get("_llm_output") and not result.get("_llm_output"):
+                result["_llm_output"] = raw_result.get("_llm_output")
         if settings.CASE_APPLY_NOMENCLATURE:
             result = apply_nomenclature_to_section(result)
         return result
@@ -149,7 +158,7 @@ class LLMService:
             # Batch 1 can contain twelve snippets.  The old 4k budget also
             # carried a duplicate full transcript and routinely truncated the
             # trailing sections; this result contains section evidence only.
-            max_tokens=6000,
+            max_tokens=GEMINI_BATCH_MAX_TOKENS,
         )
 
         if isinstance(res, dict) and not res.get("_error"):
@@ -212,17 +221,27 @@ class LLMService:
         async def _extract_one(section: str, snippet: str) -> tuple[str, Any, Dict[str, str]]:
             data = await self.extract_section(section, snippet)
             if isinstance(data, dict) and data.get("_error"):
+                # Only Pulse has a deterministic, source-grounded fallback.
+                # A generic section fallback is merely raw text and must never
+                # be represented as extracted clinical data.
+                if section == "pulse_diagnosis" and self._has_source_backed_pulse(data):
+                    return section, data, {"status": "mapped_needs_review", "error": str(data.get("_error"))}
                 return section, {}, {"status": "failed", "error": str(data.get("_error"))}
+            if not data or (isinstance(data, dict) and data.get("_reprompt")):
+                return section, {}, {"status": "needs_review"}
             return section, data, {"status": "mapped"}
 
         tasks = [asyncio.create_task(_extract_one(section, snippet)) for section, snippet in snippets.items()]
         for task in asyncio.as_completed(tasks):
             section, data, status = await task
             section_statuses[section] = status
-            if status["status"] == "mapped":
+            if status["status"] in ("mapped", "mapped_needs_review"):
                 results[section] = data
             if on_section_done:
-                await on_section_done(section, data if status["status"] == "mapped" else {})
+                await on_section_done(
+                    section,
+                    data if status["status"] in ("mapped", "mapped_needs_review") else {},
+                )
 
         # Progress must include visible no-content/review states too; otherwise
         # a completed job looks permanently stuck when a doctor omitted a field.
@@ -233,6 +252,21 @@ class LLMService:
         results["_raw_section_transcripts"] = raw_section_transcripts
         results["_section_statuses"] = section_statuses
         return results
+
+    @staticmethod
+    def _has_source_backed_pulse(data: Any) -> bool:
+        """True only when the deterministic raw Pulse parser recovered data."""
+        if not isinstance(data, dict):
+            return False
+        systems = data.get("systems")
+        if isinstance(systems, list):
+            for row in systems:
+                if not isinstance(row, dict) or not row.get("raw_phrase"):
+                    continue
+                if any(row.get(dosha) is not None for dosha in ("vata", "pitta", "kapha")):
+                    return True
+        overall = data.get("overall_vpk")
+        return isinstance(overall, dict) and bool(overall.get("dominance"))
 
     @staticmethod
     def _is_grounded_segment(snippet: str, raw_transcript: str) -> bool:
@@ -266,7 +300,6 @@ class LLMService:
             self.extract_batch_transcript(2, transcript, on_section_done),
             self.extract_batch_transcript(3, transcript, on_section_done),
         ]
-
         batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
         combined_results: Dict[str, Dict[str, Any]] = {}
@@ -277,6 +310,62 @@ class LLMService:
                 logger.error("Batch %d extraction failed: %s", idx + 1, res)
 
         return combined_results
+
+    def _validate_section_semantics(self, section: str, data: Dict[str, Any]) -> None:
+        """Post-parse semantic validation (NEVER inside Pydantic schemas).
+
+        The Gemini SDK suppresses ValidationError and returns ``parsed=None``
+        silently instead of raising, so strict field/model validators would
+        convert good-but-imperfect generations into total failures.  Schemas
+        in structured_outputs.py are therefore intentionally permissive; the
+        real checks live here and in sanitize_section()/normalize_pulse_
+        diagnosis(), which run AFTER parsing.  Findings are logged only —
+        this method never raises and never mutates.
+        """
+        try:
+            if section == "pulse_diagnosis":
+                systems = data.get("systems")
+                if not isinstance(systems, list) or not systems:
+                    logger.warning("Semantic check: section:pulse_diagnosis has no systems rows")
+                    return
+                valid_codes = {
+                    "LI", "SI", "LISI", "CVS", "GIT", "IS", "PAN", "KUB",
+                    "PRO", "RT", "LB", "GB", "LIV", "SS", "LSCS", "RB", "OBG",
+                }
+                valid_sev = {
+                    "very_mild", "mild", "mild_moderate", "moderate",
+                    "moderate_severe", "severe", None,
+                }
+                for row in systems:
+                    if not isinstance(row, dict):
+                        continue
+                    if row.get("system") not in valid_codes:
+                        logger.warning(
+                            "Semantic check: pulse row has unknown system code %r",
+                            row.get("system"),
+                        )
+                    for dosha in ("vata", "pitta", "kapha"):
+                        if row.get(dosha) not in valid_sev:
+                            logger.warning(
+                                "Semantic check: pulse %s has out-of-vocab %s=%r",
+                                row.get("system"), dosha, row.get(dosha),
+                            )
+            elif section == "vitals_anthropometry":
+                for key in ("height_cm", "weight_kg", "bmi"):
+                    val = data.get(key)
+                    if val is None:
+                        continue
+                    try:
+                        num = float(val)
+                    except (TypeError, ValueError):
+                        logger.warning("Semantic check: vitals %s=%r is not numeric", key, val)
+                        continue
+                    ranges = {"height_cm": (20, 300), "weight_kg": (1, 500), "bmi": (5, 100)}
+                    lo, hi = ranges[key]
+                    if not (lo <= num <= hi):
+                        logger.warning("Semantic check: vitals %s=%r out of range", key, val)
+        except Exception:
+            logger.debug("Semantic validation skipped for %s", section, exc_info=True)
 
     async def extract_section_with_image(
         self,
@@ -426,11 +515,39 @@ class LLMService:
         max_tokens: int,
     ) -> Dict[str, Any]:
         try:
-            raw = await self._call_llm(messages=messages, max_tokens=max_tokens)
+            raw = await self._call_llm(
+                messages=messages,
+                max_tokens=max_tokens,
+                require_json=True,
+            )
             parsed = self._parse_json(raw)
             if parsed is None:
+                finish = self._classify_empty_result(raw)
+                if finish == "output_truncated":
+                    logger.warning("LLM output truncated for %s; retrying once with ~2x tokens", label)
+                    try:
+                        raw_retry = await self._call_llm(messages=messages, max_tokens=int(max_tokens) * 2)
+                    except RuntimeError:
+                        raw_retry = None
+                    if raw_retry:
+                        retried = self._parse_json(raw_retry)
+                        if retried is not None:
+                            if isinstance(retried, dict) and label.startswith("section:"):
+                                self._validate_section_semantics(label.split(":", 1)[1], retried)
+                            logger.info("LLM JSON success for %s (after truncation retry)", label)
+                            return retried
+                        if self._classify_empty_result(raw_retry) != "output_truncated":
+                            logger.warning("LLM returned non-JSON for %s", label)
+                            return {**fallback, "_llm_output": raw_retry, "_error": "invalid_json"}
+                    logger.warning("LLM output truncated for %s (retry exhausted)", label)
+                    return {**fallback, "_llm_output": raw or "", "_error": "output_truncated"}
+                if finish == "empty_response":
+                    logger.warning("LLM returned empty response for %s", label)
+                    return {**fallback, "_llm_output": raw or "", "_error": "empty_response"}
                 logger.warning("LLM returned non-JSON for %s", label)
                 return {**fallback, "_llm_output": raw, "_error": "invalid_json"}
+            if isinstance(parsed, dict) and label.startswith("section:"):
+                self._validate_section_semantics(label.split(":", 1)[1], parsed)
             logger.info("LLM JSON success for %s", label)
             return parsed
         except httpx.TimeoutException:
@@ -459,21 +576,64 @@ class LLMService:
                 norm.append(msg)
         return norm
 
-    async def _call_llm(self, messages: list, max_tokens: int) -> str:
+    @staticmethod
+    def _retry_delay_seconds(response: httpx.Response, attempt: int) -> float:
+        """Use Retry-After when supplied; otherwise use a short capped backoff."""
+        try:
+            return min(15.0, max(1.0, float(response.headers.get("retry-after", ""))))
+        except (TypeError, ValueError):
+            return min(15.0, 1.5 * (2 ** attempt))
+
+    async def _post_with_backoff(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: Dict[str, str],
+        payload: Dict[str, Any],
+        provider: str,
+        model: str,
+    ) -> httpx.Response:
+        """Retry transient provider overload without fanning out requests."""
+        response: Optional[httpx.Response] = None
+        for attempt in range(LLM_TRANSIENT_RETRIES + 1):
+            response = await client.post(url, headers=headers, json=payload)
+            if response.status_code not in (429, 503) or attempt == LLM_TRANSIENT_RETRIES:
+                return response
+            delay = self._retry_delay_seconds(response, attempt)
+            logger.warning(
+                "%s %s for model %s; retrying the same request in %.1fs (%s/%s)",
+                provider,
+                response.status_code,
+                model,
+                delay,
+                attempt + 1,
+                LLM_TRANSIENT_RETRIES,
+            )
+            await asyncio.sleep(delay)
+        assert response is not None
+        return response
+
+    async def _call_llm(
+        self,
+        messages: list,
+        max_tokens: int,
+        require_json: bool = False,
+    ) -> str:
         gemini_key = getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
-        openrouter_key = settings.OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY", "")
         groq_key = getattr(settings, "GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
-        if not gemini_key and not groq_key and not openrouter_key:
-            raise RuntimeError("No API key set (GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY) in .env")
+        if not gemini_key and not groq_key:
+            raise RuntimeError("No API key set (GEMINI_API_KEY or GROQ_API_KEY) in .env")
+
+        providers = []
+        if gemini_key:
+            providers.append(("Gemini", GEMINI_URL, {"Authorization": f"Bearer {gemini_key}", "Content-Type": "application/json"}, GEMINI_MODELS))
+        if groq_key:
+            providers.append(("Groq", GROQ_URL, {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}, GROQ_MODELS))
 
         async with self._semaphore:
             async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-                if groq_key:
-                    groq_headers = {
-                        "Authorization": f"Bearer {groq_key}",
-                        "Content-Type": "application/json",
-                    }
-                    for model in GROQ_MODELS:
+                for provider, url, headers, models in providers:
+                    for model in models:
                         payload = {
                             "model": model,
                             "messages": self._prepare_messages_for_model(messages, model),
@@ -482,12 +642,17 @@ class LLMService:
                             "response_format": {"type": "json_object"},
                         }
                         try:
-                            response = await client.post(GROQ_URL, headers=groq_headers, json=payload)
-                            if response.status_code == 429:
-                                logger.warning("Groq 429 rate limit for model %s. Trying next Groq model...", model)
-                                continue
+                            response = await self._post_with_backoff(
+                                client, url, headers, payload, provider, model
+                            )
                             if response.status_code in (400, 404, 429, 500, 502, 503, 504):
-                                logger.warning("Groq error %s for model %s: %s", response.status_code, model, response.text[:100])
+                                logger.warning(
+                                    "%s error %s for model %s: %s",
+                                    provider,
+                                    response.status_code,
+                                    model,
+                                    response.text[:300],
+                                )
                                 continue
                             response.raise_for_status()
                             data = response.json()
@@ -495,86 +660,63 @@ class LLMService:
                             content = choice_msg.get("content") or choice_msg.get("reasoning") or ""
                             if content:
                                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                            if content:
-                                logger.info("LLM extraction succeeded via Groq (%s)", model)
-                                return content
-                        except httpx.HTTPError as err:
-                            logger.warning("HTTP error on Groq model %s: %s", model, err)
+                            if not content:
+                                logger.warning("%s returned an empty completion for model %s", provider, model)
+                                continue
+                            if require_json and self._parse_json(content) is None:
+                                # A complete prose reply such as the Gemini
+                                # 200 response in the Batch-2 incident must
+                                # not terminate the provider chain. Preserve
+                                # genuinely ragged JSON for _safe_json_call so
+                                # it can perform the larger-budget retry.
+                                if self._classify_empty_result(content) == "output_truncated":
+                                    return content
+                                logger.warning(
+                                    "%s returned non-JSON for model %s; trying the next configured fallback",
+                                    provider,
+                                    model,
+                                )
+                                continue
+                            usage = data.get("usage") or {}
+                            logger.info(
+                                "LLM extraction succeeded via %s (%s); usage prompt=%s completion=%s total=%s",
+                                provider,
+                                model,
+                                usage.get("prompt_tokens"),
+                                usage.get("completion_tokens"),
+                                usage.get("total_tokens"),
+                            )
+                            return content
+                        except (httpx.HTTPError, ValueError, IndexError, TypeError) as err:
+                            logger.warning("%s request failed for model %s: %s", provider, model, err)
                             continue
-                    logger.warning("All Groq models failed. Falling back to OpenRouter...")
+        raise RuntimeError("Gemini primary/fallback and Groq fallback all failed or were rate-limited.")
 
-                if openrouter_key:
-                    headers = {
-                        "Authorization": f"Bearer {openrouter_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://sgp.clinic",
-                        "X-Title": "SGP Clinical AI",
-                    }
-                    for model in MODEL_CANDIDATES:
-                        payload = {
-                            "model": model,
-                            "messages": self._prepare_messages_for_model(messages, model),
-                            "temperature": 0.1,
-                            "max_tokens": int(max_tokens),
-                        }
-                        try:
-                            response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-                            if response.status_code in (400, 404, 429, 500, 502, 503, 504):
-                                logger.warning("OpenRouter %s error for model %s: %s", response.status_code, model, response.text[:100])
-                                continue
-                            response.raise_for_status()
-                            data = response.json()
-                            choice_msg = data.get("choices", [{}])[0].get("message", {})
-                            content = choice_msg.get("content") or choice_msg.get("reasoning") or ""
-                            if content:
-                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                            if content:
-                                logger.info("LLM extraction succeeded via OpenRouter (%s)", model)
-                                return content
-                        except httpx.HTTPError as err:
-                            logger.warning("HTTP error on OpenRouter model %s: %s", model, err)
-                            continue
-                    logger.warning("All OpenRouter models failed. Falling back to Gemini...")
+    def _classify_empty_result(self, raw: Optional[str]) -> str:
+        """Classify an unparseable LLM result.
 
-                if gemini_key:
-                    gemini_headers = {
-                        "Authorization": f"Bearer {gemini_key}",
-                        "Content-Type": "application/json",
-                    }
-                    for model in GEMINI_MODELS:
-                        payload = {
-                            "model": model,
-                            "messages": self._prepare_messages_for_model(messages, model),
-                            "temperature": 0.1,
-                            "max_tokens": int(max_tokens),
-                            "response_format": {"type": "json_object"},
-                        }
-                        try:
-                            gemini_endpoint = f"{GEMINI_URL}?key={gemini_key}"
-                            response = await client.post(gemini_endpoint, headers=gemini_headers, json=payload)
-                            if response.status_code in (429, 503):
-                                logger.warning("Gemini %s temporary overload for model %s. Retrying in 1s...", response.status_code, model)
-                                await asyncio.sleep(1.0)
-                                response = await client.post(gemini_endpoint, headers=gemini_headers, json=payload)
-                            if response.status_code in (400, 404, 429, 500, 502, 503, 504):
-                                logger.warning("Gemini error %s for model %s: %s", response.status_code, model, response.text[:100])
-                                continue
-                            response.raise_for_status()
-                            data = response.json()
-                            choice_msg = data.get("choices", [{}])[0].get("message", {})
-                            content = choice_msg.get("content") or choice_msg.get("reasoning") or ""
-                            if content:
-                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                            if content:
-                                logger.info("LLM extraction succeeded via Gemini (%s)", model)
-                                return content
-                        except httpx.HTTPError as err:
-                            logger.warning("HTTP error on Gemini model %s: %s", model, err)
-                            continue
-                        except httpx.HTTPError as err:
-                            logger.warning("HTTP error on OpenRouter model %s: %s", model, err)
-                            continue
-        raise RuntimeError(f"All configured AI models (Gemini, Groq & OpenRouter) failed or were rate-limited.")
+        Returns one of: "output_truncated" | "empty_response" | "invalid_json".
+        Truncation heuristics (unbalanced trailing JSON) are checked first so a
+        MAX_TOKENS cutoff is never misreported as a chatty prose wrapper. The
+        native Gemini path overrides this via finish_reason==MAX_TOKENS.
+        """
+        if not raw or not raw.strip():
+            return "empty_response"
+        text = raw.strip()
+        # Balanced-or-prose → invalid_json; ragged trailing JSON → truncated.
+        opens_c = text.count("{")
+        closes_c = text.count("}")
+        opens_s = text.count("[")
+        closes_s = text.count("]")
+        trailing_open = opens_c > closes_c or opens_s > closes_s
+        ends_mid_value = bool(re.search(r'[:,\\[{,\\s]$', text))
+        last_close = max(text.rfind("}"), text.rfind("]"))
+        trailing_garbage = last_close != -1 and len(text) - last_close > 60
+        if (trailing_open and not trailing_garbage) or (
+            ends_mid_value and not text.rstrip().endswith(("}", "]", '"""'))
+        ):
+            return "output_truncated"
+        return "invalid_json"
 
     def _parse_json(self, raw: str) -> Optional[Any]:
         """Accept one complete JSON document only; never salvage partial facts."""

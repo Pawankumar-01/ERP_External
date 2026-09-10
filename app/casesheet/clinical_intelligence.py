@@ -673,6 +673,12 @@ def _prepare_pulse_transcript(raw: str) -> str:
         (r"\bK\s*B\b", "KUB"),
         (r"\bL\s*I\s*S\s*I\b", "LISI"),
         (r"\bLISMODERATE\b", "LISI moderate"),
+        # Spoken full names are equivalent to their dictated Pulse codes.
+        (r"\blarge\s+and\s+small\s+intestine\b", "LISI"),
+        (r"\blarge\s+intestine\b", "LI"),
+        (r"\bsmall\s+intestine\b", "SI"),
+        (r"\blower\s+back\b", "LB"),
+        (r"\bliver\b", "LIV"),
         (r"\bMILE\b", "mild"),
         # A single spoken P is frequently transcribed as B. This is safe only
         # here, after the section has already been identified as Pulse.
@@ -738,10 +744,18 @@ def _dominance_from_transcript(raw: str) -> Optional[str]:
 def normalize_pulse_diagnosis(data: Any, raw_transcript: str = "") -> Dict[str, Any]:
     """Canonical, source-first Pulse parser used by extraction and ERP export."""
     output = sanitize_section("pulse_diagnosis", data)
-    by_system = {
-        row["system"]: dict(row)
-        for row in _sanitize_pulse_systems(output.get("systems"))
-    }
+    # A Batch Pulse segment is the clinical source of truth.  Starting with
+    # LLM rows allowed an invented, but valid-looking, system (for example
+    # OBG) to survive even when the source segment only dictated CVS.
+    # Retain LLM-only rows only for legacy callers that truly have no source.
+    by_system = (
+        {}
+        if raw_transcript
+        else {
+            row["system"]: dict(row)
+            for row in _sanitize_pulse_systems(output.get("systems"))
+        }
+    )
 
     if raw_transcript:
         text = _prepare_pulse_transcript(raw_transcript)
@@ -767,7 +781,10 @@ def normalize_pulse_diagnosis(data: Any, raw_transcript: str = "") -> Dict[str, 
             row.update(parsed)
             row["raw_phrase"] = f"{code}{segment}".strip()
 
-        overall = output.get("overall_vpk") if isinstance(output.get("overall_vpk"), dict) else {}
+        # Do not preserve an LLM-inferred dominance that the doctor did not
+        # state.  With raw evidence, only the deterministic parser may supply
+        # this block.
+        overall: Dict[str, Any] = {}
         dominance = _dominance_from_transcript(raw_transcript)
         if dominance:
             overall = {**overall, "dominance": dominance}

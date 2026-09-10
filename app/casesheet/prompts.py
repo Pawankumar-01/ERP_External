@@ -511,7 +511,7 @@ Expected JSON: {
 IMPORTANT: Return ONLY valid JSON matching schema above.
 """,
 
-    "pulse_diagnosis": """\
+    "pulse_diagnosis": BASE_RULES + """\
 You are an expert clinical AI extracting Nadi Pariksha (Pulse Diagnosis) data from doctor dictation.
 
 Extraction Rules:
@@ -619,8 +619,8 @@ Expected JSON:
 }
 
 
-IMPORTANT: Return ONLY valid JSON matching the schema above.
-""",
+NOTE: Keep the systems array compact — one row per dictated system, short raw_phrase values.
+""" + _SECTION_FOOTER,
 
 
     "ayurvedic_assessment_extended": BASE_RULES + """\
@@ -1948,7 +1948,7 @@ SECTION_MAX_TOKENS: dict[str, int] = {
     "transcript_cleanup": 3000,
     "chief_complaint": 1800,
     "anamnesis": 2500,
-    "pulse_diagnosis": 2500,
+    "pulse_diagnosis": 5000,
     "ayurvedic_assessment_extended": 2500,
     "ayurvedic_supplements": 3000,
     "panchakarma": 3000,

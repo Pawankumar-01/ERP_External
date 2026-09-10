@@ -767,14 +767,16 @@ async def patch_draft(session_id: str, req: DraftPatchRequest, db: AsyncSession 
             if top_sec in current and isinstance(current[top_sec], dict):
                 current[top_sec] = enrich_section_data(top_sec, current[top_sec])
                 if top_sec == "pulse_diagnosis":
-                    raw = (current.get("_raw_transcripts") or {}).get(top_sec, "")
-                    current[top_sec] = normalize_pulse_diagnosis(current[top_sec], raw)
+                    # A doctor review is an explicit correction, so normalize
+                    # its vocabulary without overwriting it from an older STT
+                    # segment. Raw transcript precedence applies only to AI
+                    # batch extraction.
+                    current[top_sec] = normalize_pulse_diagnosis(current[top_sec])
         else:
             touched_sections.add(k)
             current[k] = enrich_section_data(k, v) if isinstance(v, dict) else v
             if k == "pulse_diagnosis" and isinstance(current[k], dict):
-                raw = (current.get("_raw_transcripts") or {}).get(k, "")
-                current[k] = normalize_pulse_diagnosis(current[k], raw)
+                current[k] = normalize_pulse_diagnosis(current[k])
 
     next_revision = _draft_revision(current) + 1
     current["_draft_revision"] = next_revision
@@ -1042,7 +1044,9 @@ def _merge_section_into_draft(current: dict, key: str, new_data: Any) -> None:
 # database receives a dedicated durable queue.  The job id/revision still lets
 # us reject duplicate uploads and, crucially, discard stale background writes.
 _ACTIVE_BATCH_STATUSES = frozenset({"queued", "transcribing", "extracting"})
-_REVIEW_SECTION_STATUSES = frozenset({"needs_review", "failed"})
+# "mapped_needs_review" = deterministic fallback data exists (regex rebuild)
+# but the LLM itself failed — the doctor must see it, so it counts as review.
+_REVIEW_SECTION_STATUSES = frozenset({"needs_review", "failed", "mapped_needs_review"})
 
 
 def _batch_info(session: CasesheetSession, batch_key: str) -> Dict[str, Any]:
@@ -1436,7 +1440,7 @@ async def _process_batch_audio_background(
                     status_info = {"status": "manual_preserved"}
                 else:
                     current.pop(section, None)
-                    if status_info.get("status") == "mapped" and section in batch_results:
+                    if status_info.get("status") in ("mapped", "mapped_needs_review") and section in batch_results:
                         current[section] = batch_results[section]
                     raw_transcripts[section] = str(raw_segments.get(section) or "")
                     section_meta[section] = {
@@ -2144,7 +2148,13 @@ def _map_draft_to_encounter(
     ayu_ext = draft.get("ayurvedic_assessment_extended") or {}
     pulse = (draft.get("pulse_diagnosis") or {}).get("systems") if isinstance(draft.get("pulse_diagnosis"), dict) else (draft.get("pulse_diagnosis") or [])
     pulse = pulse or []
-    raw_pulse_text = (draft.get("_raw_transcripts") or {}).get("pulse_diagnosis") or ""
+    pulse_meta = (draft.get("_section_meta") or {}).get("pulse_diagnosis") or {}
+    # The final ERP payload must retain a doctor-reviewed correction. For AI
+    # generated Pulse data, use the raw Batch-2 source once more as a final
+    # deterministic guard against stale or hallucinated rows.
+    raw_pulse_text = "" if pulse_meta.get("source") == "manual" else (
+        (draft.get("_raw_transcripts") or {}).get("pulse_diagnosis") or ""
+    )
     repaired_pulse = _parse_and_repair_pulse_systems(pulse, raw_pulse_text)
     ayur = draft.get("ayurvedic_supplements") or []
     panca = draft.get("panchakarma") or {}
