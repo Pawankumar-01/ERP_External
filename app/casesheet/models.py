@@ -14,6 +14,7 @@ class SessionStatus(str, Enum):
     ACTIVE     = "ACTIVE"
     PAUSED     = "PAUSED"
     PROCESSING = "PROCESSING"
+    FINALIZING = "FINALIZING"
     FINALIZED  = "FINALIZED"
     FAILED     = "FAILED"
 

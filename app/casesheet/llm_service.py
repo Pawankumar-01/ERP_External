@@ -28,6 +28,7 @@ from app.casesheet.prompts import (
 from app.casesheet.protocols import enrich_section_data
 from app.casesheet.clinical_intelligence import (
     postprocess_section,
+    normalize_pulse_diagnosis,
     with_variant_examples,
     with_batch_variant_examples,
     apply_nomenclature_to_section,
@@ -118,6 +119,8 @@ class LLMService:
         ):
             raw_result = postprocess_section(section, raw_result)
         result = enrich_section_data(section, raw_result)
+        if section == "pulse_diagnosis":
+            result = normalize_pulse_diagnosis(result, transcript)
         if settings.CASE_APPLY_NOMENCLATURE:
             result = apply_nomenclature_to_section(result)
         return result
@@ -127,7 +130,7 @@ class LLMService:
         batch_index: int,
         transcript: str,
     ) -> Dict[str, Any]:
-        if len(transcript.strip()) < 20:
+        if not transcript.strip():
             return {}
 
         prompt = MIDDLEWARE_SEGMENTER_PROMPTS.get(batch_index)
@@ -143,7 +146,10 @@ class LLMService:
             messages=messages,
             label=f"middleware_segmenter_batch:{batch_index}",
             fallback={},
-            max_tokens=4000,
+            # Batch 1 can contain twelve snippets.  The old 4k budget also
+            # carried a duplicate full transcript and routinely truncated the
+            # trailing sections; this result contains section evidence only.
+            max_tokens=6000,
         )
 
         if isinstance(res, dict) and not res.get("_error"):
@@ -160,126 +166,90 @@ class LLMService:
         transcript: str,
         on_section_done: Any = None,
     ) -> Dict[str, Dict[str, Any]]:
+        """Run the batch-only pipeline using each section's own evidence.
+
+        The segmenter is a router, not an extractor.  Sending its complete
+        cleaned batch back to every extractor was the root cause of fields
+        appearing under a transcript that had never been used to create them.
+        """
         if not transcript.strip():
-            return {}
+            return {"_batch_error": "empty transcript"}
 
-        batch_prompt = AMBIENT_BATCH_PROMPTS.get(batch_index)
         batch_sections = AMBIENT_BATCH_GROUPS.get(batch_index, [])
-        if not batch_prompt:
+        if not batch_sections:
             logger.warning("Invalid batch_index: %s", batch_index)
-            return {}
-
-        # Protocol sections (batch 3) get the canonical procedure taxonomy so
-        # all three extraction paths share the same vocabulary.
-        if batch_index == 3:
-            batch_prompt = with_protocol_taxonomy(batch_prompt)
+            return {"_batch_error": f"invalid batch index: {batch_index}"}
 
         segmented_map = await self._preprocess_and_segment_batch_transcript(batch_index, transcript)
-        full_cleaned = segmented_map.get("full_cleaned_transcript")
-        if not full_cleaned or len(full_cleaned.strip()) < (0.8 * len(transcript.strip())):
-            logger.info(f"Stage 1 full_cleaned_transcript missing or truncated ({len(full_cleaned or '')} vs {len(transcript)} chars). Using full raw transcript.")
-            full_cleaned = transcript
+        if not isinstance(segmented_map, dict) or segmented_map.get("_error"):
+            return {"_batch_error": "segmenter returned no valid JSON"}
 
-        # Sub-batch split: large batches are extracted as multiple focused
-        # parallel LLM calls (e.g. batch 2 -> "exam" + "pulse") so that huge
-        # schemas (pulse diagnosis) never crowd out other sections within one
-        # token budget. Batches without a registered split run as one call.
-        sub_groups = AMBIENT_SUBBATCH_GROUPS.get(batch_index) or {}
-        sub_prompts = AMBIENT_SUBBATCH_PROMPTS.get(batch_index) or {}
-        if sub_groups and sub_prompts:
-            sub_items = [
-                (name, sections, sub_prompts[name])
-                for name, sections in sub_groups.items()
-                if name in sub_prompts
-            ]
-            logger.info(f"Batch {batch_index} split into {len(sub_items)} sub-batches: {[n for n, _, _ in sub_items]}")
-        else:
-            sub_items = [("main", batch_sections, batch_prompt)]
-
-        async def _run_subbatch(name: str, sections: list, prompt: str) -> Dict[str, Any]:
-            sub_prompt = prompt
-            if settings.CASE_EMBED_VARIANT_EXAMPLES:
-                sub_prompt = with_batch_variant_examples(sections, sub_prompt)
-            messages = [
-                {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
-                {
-                    "role": "user",
-                    "content": f"{sub_prompt}\n\nNORMALIZED DOCTOR MONOLOGUE TRANSCRIPT:\n<<<\n{full_cleaned}\n>>>",
-                },
-            ]
-            return await self._safe_json_call(
-                messages=messages,
-                label=f"monologue_batch:{batch_index}:{name}",
-                fallback={},
-                max_tokens=(3500 if len(sections) == 1 else 4000),
-            )
-
-        sub_results = await asyncio.gather(
-            *[_run_subbatch(name, sections, prompt) for name, sections, prompt in sub_items],
-            return_exceptions=True,
-        )
-
-        batch_res: Dict[str, Any] = {}
-        failed_subs: list = []
-        for (name, _, _), res in zip(sub_items, sub_results):
-            if isinstance(res, Exception):
-                failed_subs.append(f"{name}: {res}")
-                continue
-            if isinstance(res, dict) and res.get("_error"):
-                failed_subs.append(f"{name}: {res.get('_error')}")
-                continue
-            if isinstance(res, dict):
-                for k, v in res.items():
-                    batch_res[k] = v
-
-        if not batch_res:
-            logger.warning(
-                "LLM extraction failed for batch %s (sub-batch errors: %s) — caller will preserve existing draft.",
-                batch_index, "; ".join(failed_subs) or "unknown",
-            )
-            return {}
-        if failed_subs:
-            logger.warning(
-                "Batch %s partially extracted — failed sub-batches: %s",
-                batch_index, "; ".join(failed_subs),
-            )
-
-        results: Dict[str, Dict[str, Any]] = {}
+        results: Dict[str, Any] = {}
         raw_section_transcripts: Dict[str, str] = {}
+        section_statuses: Dict[str, Dict[str, str]] = {}
 
-        if isinstance(batch_res, dict):
-            for sec_key in batch_sections:
-                sec_data = batch_res.get(sec_key)
-                sec_snippet = segmented_map.get(sec_key) if isinstance(segmented_map, dict) else None
+        snippets: Dict[str, str] = {}
+        seen_snippets: set[str] = set()
+        for section in batch_sections:
+            snippet = segmented_map.get(section)
+            snippet = snippet.strip() if isinstance(snippet, str) else ""
+            raw_section_transcripts[section] = snippet
+            if not snippet:
+                section_statuses[section] = {"status": "not_dictated"}
+                continue
+            fingerprint = re.sub(r"\W+", "", snippet).lower()
+            if fingerprint and fingerprint in seen_snippets:
+                # Identical evidence cannot safely belong to multiple clinical
+                # sections.  Leave it visible for review instead of guessing.
+                section_statuses[section] = {"status": "needs_review", "error": "duplicate segment evidence"}
+                continue
+            seen_snippets.add(fingerprint)
+            if not self._is_grounded_segment(snippet, transcript):
+                section_statuses[section] = {"status": "needs_review", "error": "segment contains unsupported text"}
+                continue
+            snippets[section] = snippet
 
-                if sec_snippet and isinstance(sec_snippet, str) and len(sec_snippet.strip()) > 10:
-                    if not sec_data or (isinstance(sec_data, dict) and len(sec_data) <= 1):
-                        logger.info(f"Targeted re-extraction for section '{sec_key}' using Stage 1 segmented snippet...")
-                        single_sec_res = await self.extract_section(sec_key, sec_snippet)
-                        if single_sec_res and not single_sec_res.get("_error"):
-                            sec_data = single_sec_res
+        async def _extract_one(section: str, snippet: str) -> tuple[str, Any, Dict[str, str]]:
+            data = await self.extract_section(section, snippet)
+            if isinstance(data, dict) and data.get("_error"):
+                return section, {}, {"status": "failed", "error": str(data.get("_error"))}
+            return section, data, {"status": "mapped"}
 
-                if sec_data is None:
-                    sec_data = {}
-                if (
-                    settings.CASE_SANITIZE
-                    and isinstance(sec_data, dict)
-                    and not sec_data.get("_error")
-                    and not sec_data.get("_reprompt")
-                ):
-                    sec_data = postprocess_section(sec_key, sec_data)
-                enriched = enrich_section_data(sec_key, sec_data)
-                if settings.CASE_APPLY_NOMENCLATURE:
-                    enriched = apply_nomenclature_to_section(enriched)
-                results[sec_key] = enriched
+        tasks = [asyncio.create_task(_extract_one(section, snippet)) for section, snippet in snippets.items()]
+        for task in asyncio.as_completed(tasks):
+            section, data, status = await task
+            section_statuses[section] = status
+            if status["status"] == "mapped":
+                results[section] = data
+            if on_section_done:
+                await on_section_done(section, data if status["status"] == "mapped" else {})
 
-                raw_section_transcripts[sec_key] = sec_snippet.strip() if (sec_snippet and isinstance(sec_snippet, str) and sec_snippet.strip()) else full_cleaned
-
-                if on_section_done:
-                    await on_section_done(sec_key, enriched)
+        # Progress must include visible no-content/review states too; otherwise
+        # a completed job looks permanently stuck when a doctor omitted a field.
+        for section in batch_sections:
+            if section not in snippets and on_section_done:
+                await on_section_done(section, {})
 
         results["_raw_section_transcripts"] = raw_section_transcripts
+        results["_section_statuses"] = section_statuses
         return results
+
+    @staticmethod
+    def _is_grounded_segment(snippet: str, raw_transcript: str) -> bool:
+        """Reject segmenter inventions before they reach a clinical extractor."""
+        raw_tokens = re.findall(r"[a-z0-9]+", raw_transcript.lower())
+        snippet_tokens = re.findall(r"[a-z0-9]+", snippet.lower())
+        if not snippet_tokens:
+            return False
+        raw_set = set(raw_tokens)
+        meaningful = [token for token in snippet_tokens if len(token) > 2 or token.isdigit()]
+        if not meaningful:
+            return True
+        overlap = sum(token in raw_set for token in meaningful) / len(meaningful)
+        # Numbers/doses are high-risk: a corrected or invented number must not
+        # be silently accepted merely because surrounding words match.
+        numbers_are_grounded = all(token in raw_set for token in meaningful if token.isdigit())
+        return overlap >= 0.85 and numbers_are_grounded
 
     async def extract_sections_from_full_transcript(
         self,
@@ -607,59 +577,18 @@ class LLMService:
         raise RuntimeError(f"All configured AI models (Gemini, Groq & OpenRouter) failed or were rate-limited.")
 
     def _parse_json(self, raw: str) -> Optional[Any]:
+        """Accept one complete JSON document only; never salvage partial facts."""
         if not raw:
             return None
         cleaned = re.sub(r"```(?:json)?", "", raw).strip()
         cleaned = re.sub(r"```", "", cleaned).strip()
-
         try:
             return json.loads(cleaned)
         except Exception:
-            pass
-
-        start_curly = cleaned.find("{")
-        end_curly = cleaned.rfind("}")
-        if start_curly != -1 and end_curly > start_curly:
-            json_str = cleaned[start_curly : end_curly + 1]
-            try:
-                return json.loads(json_str)
-            except Exception:
-                fixed_str = re.sub(r",\s*([\}\]])", r"\1", json_str)
-                try:
-                    return json.loads(fixed_str)
-                except Exception:
-                    pass
-                cleaned_ctl = re.sub(r"[\x00-\x1F\x7F]", " ", json_str)
-                try:
-                    return json.loads(cleaned_ctl)
-                except Exception:
-                    pass
-
-        start_bracket = cleaned.find("[")
-        end_bracket = cleaned.rfind("]")
-        if start_bracket != -1 and end_bracket > start_bracket:
-            json_str = cleaned[start_bracket : end_bracket + 1]
-            try:
-                return json.loads(json_str)
-            except Exception:
-                fixed_str = re.sub(r",\s*([\}\]])", r"\1", json_str)
-                try:
-                    return json.loads(fixed_str)
-                except Exception:
-                    pass
-
-        combined = {}
-        for match in re.finditer(r'\{[^{}]*"(?:[a-zA-Z0-9_]+)":\s*[^{}]*\}', cleaned, re.DOTALL):
-            try:
-                parsed_sub = json.loads(match.group(0))
-                if isinstance(parsed_sub, dict):
-                    combined.update(parsed_sub)
-            except Exception:
-                pass
-        if combined:
-            return combined
-
-        return None
+            # Partial JSON commonly means a truncated model response.  Saving
+            # the fragments produces plausible but unsafe clinical data, so
+            # callers must surface a failed/reviewable section instead.
+            return None
 
 
 llm_service = LLMService()

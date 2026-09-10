@@ -97,7 +97,7 @@ PROTOCOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "Abhyanga": {"category": CAT_PROCEDURES, "aliases": ["abhyanga", "abhyangam", "full body massage"], "instructions": ""},
     "Kati Vasti": {"category": CAT_PROCEDURES, "aliases": ["kati vasthi", "kati basti", "lumbar basti", "kativasti", "kativasthi"], "instructions": ""},
     "Janu Vasti": {"category": CAT_PROCEDURES, "aliases": ["januvasthi", "januvasti", "janu basti", "knee vasti"], "instructions": ""},
-    "Greeva Vasti": {"category": CAT_PROCEDURES, "aliases": ["greeva vasthi", "greeva basti", "neck basti"], "instructions": ""},
+    "Greeva Vasti": {"category": CAT_PROCEDURES, "aliases": ["greeva vasthi", "greeva basti", "griva vasti", "griever vasthi", "griever vasti", "neck basti"], "instructions": ""},
     "Pichu": {"category": CAT_PROCEDURES, "aliases": ["pichu", "jhanu pichu", "janu pichu"], "instructions": ""},
     "Shirodhara": {"category": CAT_PROCEDURES, "aliases": ["shirodhara", "shiro dhara", "sirodhara"], "instructions": ""},
     "Nadi Swedhana": {"category": CAT_PROCEDURES, "aliases": ["nadi swedana", "nadi swedanam"], "instructions": ""},
@@ -107,6 +107,13 @@ PROTOCOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "Hot Pack": {"category": CAT_PROCEDURES, "aliases": ["hot pack", "hot fomentation"], "instructions": ""},
     "Cold Pack": {"category": CAT_PROCEDURES, "aliases": ["cold pack", "ice pack"], "instructions": ""},
     "Nasya": {"category": CAT_PROCEDURES, "aliases": ["nasal drops therapy"], "instructions": ""},
+    "Virechana": {"category": CAT_PROCEDURES, "aliases": ["virechana", "virechan", "therapeutic purgation", "purgation therapy"], "instructions": ""},
+    "Vamana": {"category": CAT_PROCEDURES, "aliases": ["vamana", "therapeutic emesis", "emesis therapy"], "instructions": ""},
+    "Basti (General)": {"category": CAT_PROCEDURES, "aliases": ["basti therapy", "vasti therapy", "general basti"], "instructions": ""},
+    "Anuvasana Basti": {"category": CAT_PROCEDURES, "aliases": ["anuvasana basti", "sneha basti"], "instructions": ""},
+    "Niruha Basti": {"category": CAT_PROCEDURES, "aliases": ["niruha basti", "kashaya basti"], "instructions": ""},
+    "Uttara Basti": {"category": CAT_PROCEDURES, "aliases": ["uttara basti"], "instructions": ""},
+    "Matra Basti": {"category": CAT_PROCEDURES, "aliases": ["matra basti"], "instructions": ""},
     # -- Oil Applications --
     "Neelibhringadi": {"category": CAT_OILS, "aliases": ["neeli bringadi", "neelibhringadi keera tailam", "keera tailam"], "instructions": "Apply over the scalp on every alternate day."},
     "Nutex Oil": {"category": CAT_OILS, "aliases": ["nutex"], "instructions": ""},
@@ -132,8 +139,6 @@ PROTOCOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     # -- Detox / Panchakarma (home routines) --
     "Nitya Virechana (NVK)": {"category": CAT_DETOX, "aliases": ["nvk", "nithya virechana", "daily virechana", "nitya virechana karma"], "instructions": "At bedtime (2 hrs after dinner): warm water + 1-2 lemons + 2 pinch black salt, then Erand Tailam. Water ml = weight(kg)x10; Oil ml = weight(kg)/3."},
     "Prativaara Virechana (PVVK)": {"category": CAT_DETOX, "aliases": ["pvvk", "prathivaara virechana", "weekly virechana", "once a week virechana"], "instructions": "Once a week, same method as Nitya Virechana."},
-    "Virechana": {"category": CAT_DETOX, "aliases": ["purgation therapy"], "instructions": ""},
-    "Vamana": {"category": CAT_DETOX, "aliases": ["emesis therapy"], "instructions": ""},
     "D-Tox": {"category": CAT_DETOX, "aliases": ["dtox", "d tox"], "instructions": ""},
     "Gandusham": {"category": CAT_DETOX, "aliases": ["gandusha", "gandoosha", "oil pulling"], "instructions": "Swish 1-2 tbsp sesame oil 10-20 mins, do not swallow, rinse thoroughly."},
     "Anutailam": {"category": CAT_DETOX, "aliases": ["anu tailam", "anu taila", "nasya drops"], "instructions": "2 drops in each nostril and ears."},
@@ -262,10 +267,26 @@ PULSE_SYSTEM_ALIASES: Dict[str, str] = {
     "obg": "OBG",
     "obstetrics gynecology": "OBG",
     "li": "LI",
+    "l i": "LI",
     "large intestine": "LI",
     "si": "SI",
+    "s i": "SI",
     "small intestine": "SI",
+    "c v s": "CVS",
+    "r b": "RB",
+    "g b": "GB",
+    "r t": "RT",
+    "s s": "SS",
+    "l v": "LIV",
+    "i s e": "IS",
+    "ise": "IS",
+    "iscs": "LSCS",
 }
+
+PULSE_SYSTEM_CODES = frozenset({
+    "LI", "SI", "LISI", "CVS", "RB", "GIT", "IS", "PAN", "PRO",
+    "LB", "GB", "LIV", "RT", "SS", "KUB", "LSCS", "OBG",
+})
 
 # Severity spoken variance -> canonical severity token (as used by pulse JSON).
 SEVERITY_ALIASES: Dict[str, str] = {
@@ -277,8 +298,12 @@ SEVERITY_ALIASES: Dict[str, str] = {
     "trace": "very_mild",
     "slight": "mild",
     "mild": "mild",
+    "mild to moderate": "mild_moderate",
+    "mild moderate": "mild_moderate",
     "mod": "moderate",
     "moderate": "moderate",
+    "moderate to severe": "moderate_severe",
+    "moderate severe": "moderate_severe",
     "moderate +": "moderate",
     "severe": "severe",
     "high": "severe",
@@ -405,7 +430,8 @@ def normalize_system_code(value: Any) -> Optional[str]:
     low = _clean(value).lower().strip().rstrip(".:")
     if not low:
         return None
-    return PULSE_SYSTEM_ALIASES.get(low) or low.upper()
+    canonical = PULSE_SYSTEM_ALIASES.get(low) or low.upper()
+    return canonical if canonical in PULSE_SYSTEM_CODES else None
 
 
 def expand_dosha_shorthand(code: Any) -> Dict[str, str]:
@@ -574,7 +600,7 @@ def _sanitize_pulse_systems(systems: Any) -> List[Dict[str, Any]]:
     """Normalize pulse_diagnosis.systems entries (codes + severity vocab)."""
     if not isinstance(systems, list):
         return []
-    out: List[Dict[str, Any]] = []
+    by_system: Dict[str, Dict[str, Any]] = {}
     for entry in systems:
         if not isinstance(entry, dict):
             continue
@@ -597,8 +623,158 @@ def _sanitize_pulse_systems(systems: Any) -> List[Dict[str, Any]]:
         raw = entry.get("raw_phrase")
         if raw:
             normalized["raw_phrase"] = _clean(raw)
-        out.append(normalized)
-    return out
+        existing = by_system.get(code)
+        if existing is None:
+            by_system[code] = normalized
+        else:
+            for dosha in ("vata", "pitta", "kapha"):
+                if existing.get(dosha) is None and normalized.get(dosha) is not None:
+                    existing[dosha] = normalized[dosha]
+            if not existing.get("raw_phrase") and normalized.get("raw_phrase"):
+                existing["raw_phrase"] = normalized["raw_phrase"]
+    return list(by_system.values())
+
+
+_PULSE_CODES = (
+    "LISI", "LSCS", "CVS", "GIT", "KUB", "PAN", "PRO", "LIV",
+    "OBG", "RB", "IS", "LB", "GB", "RT", "SS", "LI", "SI",
+)
+_PULSE_SEVERITY = (
+    r"very\s+mild|mild\s+(?:to\s+)?moderate|"
+    r"moderate\s+(?:to\s+)?severe|mild|moderate|severe|low"
+)
+_PULSE_DOSHA = r"VPK|PV|VP|VK|KV|PK|KP|V|P|K"
+_PULSE_PAIR_RE = re.compile(
+    rf"(?:"
+    rf"(?P<severity>{_PULSE_SEVERITY})\s*(?:,|\band\b)?\s*(?P<dosha>{_PULSE_DOSHA})\b"
+    rf"|(?P<reverse_dosha>{_PULSE_DOSHA})\s*(?:,|\bis\b)?\s*(?P<reverse_severity>{_PULSE_SEVERITY})\b"
+    rf")",
+    re.IGNORECASE,
+)
+
+
+def _pulse_doshas(value: str) -> List[str]:
+    token = re.sub(r"[^vpk]", "", value.lower())
+    return DOSHA_COMPOUNDS.get(token, [SINGLE_DOSHA[token]] if token in SINGLE_DOSHA else [])
+
+
+def _prepare_pulse_transcript(raw: str) -> str:
+    """Apply only Pulse-specific ASR repairs, leaving unrelated sections untouched."""
+    text = raw or ""
+    # Compact common spoken/ASR variants before identifying the system code.
+    replacements = (
+        (r"\b(?:L|I)\s*S\s*C\s*S\b", "LSCS"),  # LSCS / ISCS
+        (r"\bC\s*V\s*S\b", "CVS"),
+        (r"\bP\s*R\s*O\b", "PRO"),
+        (r"\bR\s*T\b", "RT"),
+        (r"\bG\s*B\b", "GB"),
+        (r"\bL\s*V\b", "LIV"),
+        (r"\bS\s*S\b", "SS"),
+        (r"\bK\s*B\b", "KUB"),
+        (r"\bL\s*I\s*S\s*I\b", "LISI"),
+        (r"\bLISMODERATE\b", "LISI moderate"),
+        (r"\bMILE\b", "mild"),
+        # A single spoken P is frequently transcribed as B. This is safe only
+        # here, after the section has already been identified as Pulse.
+        (r"\b(?:P\s*B|B)\b", "P"),
+        (r"\b(?:kafa|kaffa|caffa)\b", "K"),
+        (r"\bvata\b", "V"),
+        (r"\bpitta\b", "P"),
+        (r"\bkapha\b", "K"),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+    # "LI SI mild P ..." is a single combined LISI reading.  Do not combine
+    # rows when LI and SI each have their own reading ("LI mild P, SI ...").
+    text = re.sub(
+        rf"\bLI\s+SI\b(?=\s*(?:,\s*)?(?:{_PULSE_SEVERITY}|{_PULSE_DOSHA})\b)",
+        "LISI",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+def _find_pulse_system_mentions(text: str) -> List[tuple[int, str]]:
+    """Find explicit Pulse system codes without treating ordinary ``is`` as IS."""
+    matches: List[tuple[int, str]] = []
+    for code in _PULSE_CODES:
+        for found in re.finditer(rf"\b{code}\b", text, re.IGNORECASE):
+            if code == "IS" and found.group() != "IS":
+                before = text[:found.start()].rstrip()
+                # Lowercase "is" is accepted only when it is deliberately
+                # separated like a code in a comma-list.  This excludes
+                # "Overall dominance is severe Pitta".
+                if before and before[-1] not in ",;:\n":
+                    continue
+            matches.append((found.start(), code))
+    return sorted(matches)
+
+
+def _dominance_from_transcript(raw: str) -> Optional[str]:
+    """Recover the explicitly stated overall VPK dominance, if present."""
+    match = re.search(
+        r"\boverall(?:\s+[vpk]+)?\s+dominance\b\s*(?:is|was|:)?\s*([^,.;]+)",
+        raw or "",
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    phrase = match.group(1).lower()
+    symbols = set()
+    if re.search(r"\bvata\b", phrase):
+        symbols.add("V")
+    if re.search(r"\bpitta\b", phrase):
+        symbols.add("P")
+    if re.search(r"\bkapha\b|\bkafa\b|\bkaffa\b", phrase):
+        symbols.add("K")
+    if not symbols:
+        for shorthand in re.findall(r"\b(?:vpk|pv|vp|vk|kv|pk|kp|v|p|k)\b", phrase):
+            symbols.update(d[0].upper() for d in _pulse_doshas(shorthand))
+    return "".join(code for code in ("V", "P", "K") if code in symbols) or None
+
+
+def normalize_pulse_diagnosis(data: Any, raw_transcript: str = "") -> Dict[str, Any]:
+    """Canonical, source-first Pulse parser used by extraction and ERP export."""
+    output = sanitize_section("pulse_diagnosis", data)
+    by_system = {
+        row["system"]: dict(row)
+        for row in _sanitize_pulse_systems(output.get("systems"))
+    }
+
+    if raw_transcript:
+        text = _prepare_pulse_transcript(raw_transcript)
+        mentions = _find_pulse_system_mentions(text)
+        for index, (start, code) in enumerate(mentions):
+            end = mentions[index + 1][0] if index + 1 < len(mentions) else len(text)
+            segment = text[start + len(code):end]
+            parsed: Dict[str, str] = {}
+            # One combined expression prevents the end-dosha of "mild P" from
+            # being reused as the beginning of a false "P moderate" pair.
+            for pair in _PULSE_PAIR_RE.finditer(segment):
+                severity = normalize_severity(pair.group("severity") or pair.group("reverse_severity"))
+                dosha_token = pair.group("dosha") or pair.group("reverse_dosha")
+                if severity and dosha_token:
+                    for dosha in _pulse_doshas(dosha_token):
+                        parsed[dosha] = severity
+            if not parsed:
+                continue
+            row = by_system.setdefault(
+                code,
+                {"system": code, "vata": None, "pitta": None, "kapha": None},
+            )
+            row.update(parsed)
+            row["raw_phrase"] = f"{code}{segment}".strip()
+
+        overall = output.get("overall_vpk") if isinstance(output.get("overall_vpk"), dict) else {}
+        dominance = _dominance_from_transcript(raw_transcript)
+        if dominance:
+            overall = {**overall, "dominance": dominance}
+        output["overall_vpk"] = overall
+
+    output["systems"] = _sanitize_pulse_systems(list(by_system.values()))
+    return output
 
 
 def _sanitize_dict_list(items: Any, allowed_keys: Optional[set] = None) -> List[Dict[str, Any]]:
@@ -834,7 +1010,10 @@ def _unwrap_data(value: Any) -> Any:
 
 def _list_item_key(item: Any) -> str:
     if isinstance(item, dict):
-        for k in ("name", "complaint", "condition", "surgery", "medicine"):
+        # Pulse rows have no name.  Their clinical identity is the system
+        # code, so retries must merge CVS with CVS rather than append a second
+        # contradictory row.
+        for k in ("system", "name", "complaint", "condition", "surgery", "medicine"):
             if item.get(k):
                 return _clean(item[k]).lower().strip(".")
         return _clean(str(item)).lower().strip(".")
@@ -842,12 +1021,34 @@ def _list_item_key(item: Any) -> str:
 
 
 def _merge_lists(old_items: List[Any], new_items: List[Any]) -> List[Any]:
-    """Merge two lists deduping by canonical (lowercased) item identity."""
-    if not _is_empty(old_items):
-        if not _is_empty(new_items):
-            return sanitize_items_merge(_dedupe_lists(old_items, new_items))
-        return old_items
-    return new_items
+    """Merge lists by clinical identity while retaining non-empty old fields."""
+    if _is_empty(old_items):
+        return sanitize_items_merge(new_items)
+    if _is_empty(new_items):
+        return sanitize_items_merge(old_items)
+
+    merged: Dict[str, Any] = {}
+    order: List[str] = []
+    for item in old_items:
+        key = _list_item_key(item)
+        if not key:
+            continue
+        if key not in merged:
+            merged[key] = item
+            order.append(key)
+    for item in new_items:
+        key = _list_item_key(item)
+        if not key:
+            continue
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(item, dict):
+            merged[key] = merge_section_data(existing, item)
+        else:
+            # A non-empty newer scalar is an intentional correction.
+            merged[key] = item if not _is_empty(item) else existing
+        if key not in order:
+            order.append(key)
+    return sanitize_items_merge([merged[key] for key in order])
 
 
 def _dedupe_lists(old_items: List[Any], new_items: List[Any]) -> List[Any]:
@@ -1381,7 +1582,7 @@ def is_protocol_section(section: str) -> bool:
 
 PROTOCOL_TAXONOMY_PROMPT_BLOCK = (
     "PROCEDURE / THERAPY TAXONOMY (canonical names + categories):\n"
-    "- Procedures (in-clinic): Abhyanga, Kati Vasti, Janu Vasti, Greeva Vasti, Pichu, "
+    "- Procedures (in-clinic): Abhyanga, Virechana, Vamana, Basti, Kati Vasti, Janu Vasti, Greeva Vasti, Pichu, "
     "Shirodhara, Nadi Swedhana, Navara Lepanam, Takradhara, Swedana (incl. sauna/steam bath), "
     "Hot Pack, Cold Pack, Nasya.\n"
     "- Oil Applications (never standalone procedures): Neelibhringadi, Nutex Oil, Chandanadi Thailam, "
@@ -1389,14 +1590,16 @@ PROTOCOL_TAXONOMY_PROMPT_BLOCK = (
     "- Yoga / Exercises: Surya Namaskar, Naukasana, Bhujangasana, Kegel, Walking, Leg Exercises, "
     "Hip Rotation, Stretching, Gym, Knee Strengthening.\n"
     "- Breathing: DNB (Differential Nostril Breathing), R-DNB, Reverse DNB.\n"
-    "- Detox / Panchakarma (home routines): Nitya Virechana (NVK), Prativaara Virechana (PVVK), "
-    "Virechana, Vamana, D-Tox, Gandusham, Anutailam, Steam Inhalations.\n"
+    "- Detox (home routines): Nitya Virechana (NVK), Prativaara Virechana (PVVK), "
+    "D-Tox, Gandusham, Anutailam, Steam Inhalations. Virechana and Vamana are ALWAYS in-clinic procedures.\n"
     "- Diet / Food: Fennel Water, soups (Barley/Rice/Tapioca/Raagi/Jowar), CCRSTT, Coriander Milk, "
     "Ginger Tea, Curd Rice.\n"
     "- Abbreviations MUST be expanded: NVK -> Nitya Virechana (NVK); PVVK -> Prativaara Virechana (PVVK); "
     "DNB -> DNB (Differential Nostril Breathing).\n"
     "- INSTRUCTIONS PRIORITY: if the doctor dictates specific instructions for an item, put them verbatim "
     "in 'instructions'. Attach the clinic standard instruction only when nothing is dictated.\n"
+    "- NEVER add a catalog item merely because it appears in this taxonomy. Add it only when the doctor explicitly names it.\n"
+    "- Session counts apply only to the procedure the doctor explicitly associates with that count; never copy a total across named procedures.\n"
     "- Always store the canonical spelling above in the 'name' field.\n"
 )
 
@@ -1476,6 +1679,32 @@ def apply_protocol_boundaries(draft: Dict[str, Any]) -> int:
             moved += 1
         else:
             keep_detox.append(it)
-    detox["detox_items"] = keep_detox
-    panca["sessions"] = panca_sessions
+    detox["detox_items"] = _dedupe_protocol_items(keep_detox)
+    panca["sessions"] = _dedupe_protocol_items(panca_sessions)
+    if isinstance(yoga, dict) and yoga_list is not None:
+        yoga["exercises"] = _dedupe_protocol_items(yoga_list)
     return moved
+
+
+def _dedupe_protocol_items(items: List[Any]) -> List[Any]:
+    """Keep one patient-specific item per canonical procedure/remedy."""
+    merged: Dict[str, Any] = {}
+    order: List[str] = []
+    for item in items:
+        label = _item_label(item)
+        _category, canonical = classify_protocol_item(label)
+        key = (canonical or label).strip().lower()
+        if not key:
+            continue
+        normalized = enrich_protocol_item(item)
+        if key not in merged:
+            merged[key] = normalized
+            order.append(key)
+            continue
+        # A repeated extraction may fill omitted fields, but it cannot create
+        # a second row or silently replace an explicit earlier session count.
+        if isinstance(merged[key], dict) and isinstance(normalized, dict):
+            for field, value in normalized.items():
+                if field not in merged[key] or _is_empty(merged[key].get(field)):
+                    merged[key][field] = value
+    return [merged[key] for key in order]

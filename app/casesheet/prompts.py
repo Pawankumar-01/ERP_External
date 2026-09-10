@@ -201,6 +201,34 @@ WHISPER_AMBIENT_PROMPT = (
     "CAG Nuts RESERVE CISSUES QUADRANGULARIES."
 )
 
+# The product records one bounded monologue at a time.  Giving speech-to-text
+# only that batch's vocabulary reduces cross-domain substitutions (especially
+# procedure names and terse Nadi codes) before the segmenter ever sees text.
+WHISPER_BATCH_PROMPTS: dict[int, str] = {
+    1: (
+        _MEDICAL_BASE
+        + "Batch one: patient identity, encounter type, chief complaint, HPI, past medical and surgical history, "
+        "current medicines, allergies, family history, personal history, menstrual/obstetric history, follow-up."
+    ),
+    2: (
+        _AYU_BASE
+        + _MEDICAL_BASE
+        + "Batch two: vitals, general examination, systemic examination, investigation reports, Nadi Pariksha and Ayurvedic assessment. "
+        "Pulse codes: LI, SI, LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, LIV, RT, SS, KUB, LSCS, OBG. "
+        "Keep LI, SI and LISI distinct. Doshas Vata Pitta Kapha, shorthand V P K, mild to moderate, moderate to severe. "
+        "Greeva is not relevant in this batch."
+    ),
+    3: (
+        _AYU_BASE
+        + _MEDICINE_BASE
+        + _PANCHAKARMA_BASE
+        + "Batch three: SGP supplements and doses, in-clinic Physiological Recalibration Protocol procedures, home detox remedies, "
+        "exercise/yoga, treatment background, diagnoses, diet and follow-up plan. "
+        "Procedure names include Virechana, Vamana, Abhyanga, Greeva Vasti, Kati Vasti, Basti, Swedana. "
+        "Home remedies include NVK, PVVK, Gandusham, Anutailam, Fennel Water, Rice Soup, Tapioca Soup, Barley Soup, Raagi Soup."
+    ),
+}
+
 AMBIENT_SECTION_GROUPS = [
     ["patient_identity", "encounter_context", "followup_details"],
     ["chief_complaint", "anamnesis"],
@@ -269,7 +297,11 @@ SGP System Codes for Pulse Diagnosis:
 CVS (cardiovascular) | GIT (gastrointestinal) | IS (immune system) | PAN (pancreas) |
 KUB (kidney ureter bladder) | PRO (prostate) | RT (respiratory tract) | LB (lower back) |
 GB (gallbladder) | LIV (liver) | SS (skeletal system) | LSCS (lumbo sacro cranial) |
-LISI (large intestine small intestine) | RB (reproductive bladder) | OBG (obstetrics gynecology)
+LI (large intestine) | SI (small intestine) | LISI (combined large/small-intestine reading) |
+RB (reproductive bladder) | OBG (obstetrics gynecology)
+
+Pulse identity boundary: LI, SI and LISI are three distinct row identities.
+Never create or collapse one from another unless the source explicitly states the combined LISI reading.
 
 CRITICAL OUTPUT RULES:
 - If any transcript segment contains non-ASCII, non-Latin, non-Sanskrit characters
@@ -487,9 +519,11 @@ Extraction Rules:
 2. Valid System Codes ONLY: [LI, SI, LISI, CVS, GIT, IS, PAN, KUB, PRO, RT, LB, GB, LIV, SS, LSCS, RB, OBG]. Never invent other system codes.
 3. STT Phonetic & Alias Mappings (Apply BEFORE extracting):
    - "caffa", "kafa", "kaffa" -> Kapha
+   - a standalone "B" in a dosha/severity pair is a known ASR rendering of Pitta -> P
    - "LI", "Large Intestine" -> LI
    - "SI", "Small Intestine" -> SI
    - "LISI", "Large and Small Intestine" -> LISI
+   - Never turn LI or SI into LISI. Keep separate LI and SI readings separate.
    - "Liver", "Liv" -> LIV
    - "KB", "KUB" -> KUB
    - "Lower Back" -> LB
@@ -539,13 +573,13 @@ Dictation:
 Expected JSON:
 {
   "overall_vpk": {
-    "dominance": "VK",
+    "dominance": null,
     "prakriti": null,
     "vikriti": null,
     "notes": null
   },
   "systems": [
-    { "system": "LISI", "vata": null, "pitta": null, "kapha": "mild", "raw_phrase": "LI, large in this multistance, mildly aggravated caffa", "needs_doctor_confirmation": [] },
+    { "system": "LI", "vata": null, "pitta": null, "kapha": "mild", "raw_phrase": "LI, large in this multistance, mildly aggravated caffa", "needs_doctor_confirmation": [] },
     { "system": "CVS", "vata": "mild_moderate", "pitta": null, "kapha": "mild_moderate", "raw_phrase": "CVS mild to moderate V and mild to moderate K", "needs_doctor_confirmation": [] },
     { "system": "RB", "vata": "moderate", "pitta": null, "kapha": "moderate", "raw_phrase": "RB moderate V and moderate K", "needs_doctor_confirmation": [] },
     { "system": "GIT", "vata": null, "pitta": "mild", "kapha": "mild", "raw_phrase": "GIT mild P and mild K", "needs_doctor_confirmation": [] },
@@ -558,8 +592,6 @@ Expected JSON:
     { "system": "GB", "vata": null, "pitta": "mild", "kapha": "mild", "raw_phrase": "GB mild P and mild K", "needs_doctor_confirmation": [] },
     { "system": "LIV", "vata": null, "pitta": null, "kapha": "moderate", "raw_phrase": "LIV moderate K", "needs_doctor_confirmation": [] },
     { "system": "SS", "vata": null, "pitta": null, "kapha": "moderate", "raw_phrase": "SS moderate K", "needs_doctor_confirmation": [] }
-    { "system": "LI", "vata": null, "pitta": null, "kapha": "mild", "raw_phrase": "LI, large in this multistance, mildly aggravated caffa", "needs_doctor_confirmation": [] },
-    { "system": "SI", "vata": null, "pitta": null, "kapha": "mild", "raw_phrase": "SI, small in this multistance, mildly aggravated caffa", "needs_doctor_confirmation": [] },
   ],
   "needs_doctor_confirmation": []
 }
@@ -769,6 +801,7 @@ CANONICAL PROCEDURE CORRECTION TABLE:
 - abhyanga, full body massage -> Abhyanga
 - shirodhara, shiro dhara -> Shirodhara
 - greeva vasthi, greeva basti -> Greeva Vasthi
+- griever vasthi, griever vasti, griva vasti -> Greeva Vasti
 - kati vasthi, kati basti -> Kati Vasthi
 
 CANONICAL OIL CORRECTION TABLE (ALWAYS put in oils_or_ingredients array):
@@ -780,7 +813,8 @@ CANONICAL OIL CORRECTION TABLE (ALWAYS put in oils_or_ingredients array):
 Strict Rules:
 1. Oils (Nutex Oil, Chandanadi Thailam) are ALWAYS ingredients, NEVER standalone procedures!
 2. Sauna/Savana/Steam bath must ALWAYS normalize to canonical "Swedana".
-3. Filter out home detox remedies (Raagi soup, Jowar/Java soup, Fennel tea, Anutailam, Nithya Virechana) -> Leave those for detox_procedures.
+3. Virechana and Vamana are ALWAYS in-clinic procedures. Filter out home detox remedies (Raagi soup, Jowar/Java soup, Fennel tea, Anutailam, Nithya Virechana, Prathivaara Virechana, Gandusham) -> Leave those for detox_procedures.
+4. Assign a session_count only to the named procedure the doctor explicitly connects to it. Do not copy a combined protocol total to every named procedure. If the scope is unclear, leave session_count null and preserve the phrase for review.
 
 Schema:
 {
@@ -811,7 +845,7 @@ Dictation:
 
 Expected JSON:
 {
-  "total_sessions": 5,
+  "total_sessions": null,
   "sessions": [
     {
       "procedure": "Abhyanga",
@@ -833,12 +867,12 @@ Expected JSON:
       "body_site": null,
       "laterality": "generalized",
       "oils_or_ingredients": [],
-      "session_count": 5,
+      "session_count": null,
       "duration_per_session": null,
       "temperature_celsius": 60,
-      "sequence_or_schedule": "5 sessions at 60 deg C",
+      "sequence_or_schedule": "at 60 deg C",
       "status": "prescribed",
-      "remarks": "Sauna/Steam bath at 60 degrees centigrade",
+      "remarks": "Sauna/Steam bath at 60 degrees centigrade; session count not explicitly associated",
       "needs_doctor_confirmation": []
     }
   ],
@@ -1495,10 +1529,12 @@ CANONICAL DETOX & REMEDY NAMES:
 - nithya virechana, daily virechana -> Nithya Virechana Process
 - prathivaara virechana -> Prathivaara Virechana Karma
 - gandusham, oil pulling -> Gandusham
+- Virechana and Vamana are in-clinic Physiological Recalibration Protocol procedures; NEVER include them here.
 
 Extraction Rules:
 1. Preserve exact quantity, volume (ml/liters), and frequency instructions (e.g. "150-250 ml on alternate days", "2 liters daily").
-2. Include preparation instructions in remarks so downstream SGP pre-saved usage templates attach properly.
+2. Include a detox item ONLY when the doctor explicitly names it. Do not add default remedies merely because clinic templates exist.
+3. Keep doctor-specific preparation instructions in remarks. The backend will attach the clinic template only to a named item that has no doctor-specific instructions.
 
 Schema:
 {
@@ -2239,7 +2275,7 @@ Rules:
 MIDDLEWARE_SEGMENTER_PROMPTS = {
     1: f"""\
 You are an expert Clinical Normalizer & Section Segmenter for SGP Integrative Medicine.
-TASK: Clean ASR errors, normalize medical terminology, and segment raw monologue dictation for Batch 1 (Demographics & History).
+TASK: Preserve raw ASR evidence and route it to the correct section for Batch 1 (Demographics & History).
 
 SECTIONS TO SEGMENT:
 - "patient_identity": Patient name, age, gender, phone, patient ID, OP number, doctor name, date.
@@ -2256,11 +2292,11 @@ SECTIONS TO SEGMENT:
 - "followup_details": Next visit date, follow-up notes.
 
 RULES:
-1. SPELL & PHONETIC CORRECTION:
-   - "finite mg" -> "500mg", "before foot" -> "before food", "telmesartan" -> "Telmisartan", "pantoprazole" -> "Pantoprazole".
-2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
-3. CRITICAL NON-TRUNCATION RULE: You MUST capture 100% of all spoken content from the start to the very end of the recording. NEVER omit or drop trailing speech at the bottom of the transcript. Ensure full_cleaned_transcript contains the COMPLETE transcript.
-4. OUTPUT FORMAT: Return ONLY a valid JSON object:
+1. EVIDENCE ONLY: this is routing, not extraction. Copy the exact raw words for a fact into ONE relevant section; do not summarize, infer, add a default, or move a fact merely because it resembles another section.
+2. Do not correct spelling in this step. The section-specific extractor will normalize aliases while retaining this evidence.
+3. Use an empty string when a section was not dictated. Never put the entire monologue into multiple keys.
+4. CRITICAL NON-TRUNCATION RULE: account for speech from start to finish. If wording does not belong to a listed section, leave it out rather than placing it in a wrong section.
+5. OUTPUT FORMAT: Return ONLY a valid JSON object:
 {{
   "patient_identity": string,
   "encounter_context": string,
@@ -2273,44 +2309,40 @@ RULES:
   "family_history_detailed": string,
   "personal_history": string,
   "menstrual_obstetric_history": string,
-  "followup_details": string,
-  "full_cleaned_transcript": string
+  "followup_details": string
 }}
 """,
     2: f"""\
 You are an expert Clinical Normalizer & Section Segmenter for SGP Integrative Medicine.
-TASK: Clean ASR errors, normalize medical terminology, and segment raw monologue dictation for Batch 2 (Vitals, Exam & Pulse).
+TASK: Preserve raw ASR evidence and route it to the correct section for Batch 2 (Vitals, Exam & Pulse).
 
 SECTIONS TO SEGMENT:
 - "vitals_anthropometry": Height cm, Weight kg, BP (130/80), Pulse (58 bpm), Temp (98.4 F), Wrist (6.5 inches / 16.5 cm), Waist, Forearm, Hip.
 - "general_examination": Built, nourishment, pallor, icterus, edema (right leg swelling), cyanosis, clubbing, orientation.
 - "systemic_examination": Cardiovascular (CVS, S1 S2 heard), Respiratory (RS, NVBS, crepitations, wheeze), Abdomen (PA, soft, non-tender), Nervous System (CNS), Musculoskeletal (spine, SLR test, joint range of motion), Local Examination (varicose veins, ulcers).
 - "investigation_reports": Lab tests reviewed (HbA1c 6.8%, Creatinine 0.9), Imaging (MRI Lumbar spine L4-L5 bulge, USG Prostatomegaly & gallstones).
-- "pulse_diagnosis": Nadi Pariksha VPK readings across organ system codes (LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, LIV, RT, SS, KUB, LSCS, OBG) and compound VPK severities (PV, VK, PK, VPK, low V).
+- "pulse_diagnosis": Nadi Pariksha VPK readings across organ system codes (LI, SI, LISI, CVS, RB, GIT, IS, PAN, PRO, LB, GB, LIV, RT, SS, KUB, LSCS, OBG) and compound VPK severities (PV, VK, PK, VPK, low V).
 - "ayurvedic_assessment_extended": Prakriti, Vikriti, VPK Dominance summary, Samprapti summary.
 
 RULES:
-1. SPELL & PHONETIC CORRECTION:
-   - "LSI" / "LISMODERATE" / "LI" / "SI" -> "LISI"
-   - "LV" / "Liv" / "Liver" -> "LIV" (liver) or "LB" (lungs/lower back)
-   - "KB" / "KUB" -> "KUB", "Pro" -> "PRO", "R T" -> "RT", "G B" -> "GB", "S S" -> "SS", "LSCS" -> "LSCS"
-   - "MILE" -> "mild", "PV" -> "Pitta Vata", "VK" -> "Vata Kapha", "PK" -> "Pitta Kapha"
-2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
-3. CRITICAL NON-TRUNCATION RULE: You MUST capture 100% of all spoken content from the start to the very end of the recording. NEVER omit or drop trailing speech at the bottom of the transcript. Ensure full_cleaned_transcript contains the COMPLETE transcript.
-4. OUTPUT FORMAT: Return ONLY a valid JSON object:
+1. EVIDENCE ONLY: copy exact raw words into ONE relevant section. Do not summarize, correct, infer, or make up a Pulse row.
+2. KEEP PULSE IDENTITIES DISTINCT: LI, SI and LISI are separate systems. Never rewrite LI or SI as LISI. A literal "LISI" belongs to LISI; separate LI and SI readings remain separate.
+3. Route an explicit Nadi code/list to pulse_diagnosis. Do not treat the ordinary English word "is" as system code IS.
+4. Use an empty string when a section was not dictated. Never put the entire monologue into multiple keys.
+5. CRITICAL NON-TRUNCATION RULE: account for speech from start to finish. If wording does not belong to a listed section, leave it out rather than placing it in a wrong section.
+6. OUTPUT FORMAT: Return ONLY a valid JSON object:
 {{
   "vitals_anthropometry": string,
   "general_examination": string,
   "systemic_examination": string,
   "investigation_reports": string,
   "pulse_diagnosis": string,
-  "ayurvedic_assessment_extended": string,
-  "full_cleaned_transcript": string
+  "ayurvedic_assessment_extended": string
 }}
 """,
     3: f"""\
 You are an expert Clinical Normalizer & Section Segmenter for SGP Integrative Medicine.
-TASK: Clean ASR errors, normalize medical terminology, and segment raw monologue dictation for Batch 3 (Protocols, Remedies & Plan).
+TASK: Preserve raw ASR evidence and route it to the correct section for Batch 3 (Protocols, Remedies & Plan).
 
 SECTIONS TO SEGMENT:
 - "ayurvedic_supplements": Prescribed SGP medicines (APD, ATHEROLYZIN, MIGRANONE, IMUMODULIN, NEUROTROPIN, CISSUES, D-TOX), doses ("1/2", "1"), start week, durations.
@@ -2321,20 +2353,18 @@ SECTIONS TO SEGMENT:
 - "assessment_and_plan": Allopathic/Ayurvedic diagnosis, weekly diet plans (PAD, KPD, VPD, PPD), include/exclude foods, follow-up timeline.
 
 RULES:
-1. SPELL & PHONETIC CORRECTION:
-   - "neurotropin" -> "NEUROTROPIN", "migranine" -> "MIGRANONE", "ethylizine" -> "ATHEROLYZIN"
-   - "Kati Vasthi" -> Panchakarma, "Gandusham" -> Detox procedures
-2. SEGMENTATION: Assign exact spoken sentences relevant to each section key into a clean snippet string.
-3. CRITICAL NON-TRUNCATION RULE: You MUST capture 100% of all spoken content from the start to the very end of the recording. NEVER omit or drop trailing speech at the bottom of the transcript. Ensure full_cleaned_transcript contains the COMPLETE transcript.
-4. OUTPUT FORMAT: Return ONLY a valid JSON object:
+1. EVIDENCE ONLY: this is routing, not extraction. Copy exact raw words into ONE relevant section. Do not add a remedy/procedure from the catalog or correct a name here.
+2. Route in-clinic procedures (including Virechana/Vamana) to panchakarma. Route named home remedies (including NVK, PVVK, Gandusham, Anutailam and soups) to detox_procedures.
+3. Use an empty string when a section was not dictated. Never put the entire monologue into multiple keys.
+4. CRITICAL NON-TRUNCATION RULE: account for speech from start to finish. If wording does not belong to a listed section, leave it out rather than placing it in a wrong section.
+5. OUTPUT FORMAT: Return ONLY a valid JSON object:
 {{
   "ayurvedic_supplements": string,
   "panchakarma": string,
   "detox_procedures": string,
   "exercises_yoga": string,
   "treatment_and_background": string,
-  "assessment_and_plan": string,
-  "full_cleaned_transcript": string
+  "assessment_and_plan": string
 }}
 """,
 }

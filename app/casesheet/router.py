@@ -1,7 +1,9 @@
 
+import hashlib
 import logging
 import re
 import uuid
+from copy import deepcopy
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -15,8 +17,20 @@ from app.config.settings import settings
 from app.casesheet.models import CasesheetSession, CasesheetDraft, SessionStatus
 from app.casesheet.transcription import transcribe_audio
 from app.casesheet.llm_service import llm_service
-from app.casesheet.prompts import VALID_SECTIONS, WHISPER_INITIAL_PROMPTS, WHISPER_AMBIENT_PROMPT, AMBIENT_BATCH_GROUPS
-from app.casesheet.clinical_intelligence import merge_section_data, apply_nomenclature_to_section
+from app.casesheet.prompts import (
+    VALID_SECTIONS,
+    WHISPER_INITIAL_PROMPTS,
+    WHISPER_AMBIENT_PROMPT,
+    WHISPER_BATCH_PROMPTS,
+    AMBIENT_BATCH_GROUPS,
+)
+from app.casesheet.clinical_intelligence import (
+    merge_section_data,
+    apply_nomenclature_to_section,
+    apply_protocol_boundaries,
+    normalize_pulse_diagnosis,
+    salvage_cross_section_fields,
+)
 from app.erp_bridge.service import erp_bridge_service
 from app.events.logger import event_logger, EventType
 
@@ -400,9 +414,24 @@ async def process_batch_consultation_audio(
     audio: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await _get_session(db, session_id)
+    if batch_index not in AMBIENT_BATCH_GROUPS:
+        raise HTTPException(status_code=400, detail="batch_index must be 1, 2, or 3")
+
+    # Serialize submissions for this session.  Without a row lock two nearly
+    # simultaneous taps could both start a background job and race to replace
+    # the same JSON draft.
+    result = await db.execute(
+        select(CasesheetSession)
+        .where(CasesheetSession.id == session_id)
+        .with_for_update()
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if session.status == SessionStatus.FINALIZED:
         raise HTTPException(status_code=409, detail="Session already finalized")
+    if session.status == SessionStatus.FINALIZING:
+        raise HTTPException(status_code=409, detail="Session is being finalized")
 
     audio_bytes = await audio.read()
     if not audio_bytes:
@@ -413,19 +442,38 @@ async def process_batch_consultation_audio(
         f"size={len(audio_bytes)} bytes"
     )
 
-    batch_total = 12 if batch_index == 1 else (6 if batch_index in (2, 3) else 24)
-
     existing_prog = dict(session.processing_progress or {})
+    batch_key = f"batch_{batch_index}"
+    old_batch = dict(existing_prog.get(batch_key) or {})
+    if old_batch.get("status") in _ACTIVE_BATCH_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Batch {batch_index} is already processing. Wait for job {old_batch.get('job_id', '')}.",
+        )
+
+    draft_res = await db.execute(
+        select(CasesheetDraft).where(CasesheetDraft.session_id == session_id)
+    )
+    draft_row = draft_res.scalar_one_or_none()
+    submitted_draft_revision = _draft_revision(dict(draft_row.draft or {})) if draft_row else 0
+    batch_total = len(AMBIENT_BATCH_GROUPS[batch_index])
+    job_id = str(uuid.uuid4())
+    batch_revision = int(old_batch.get("revision") or 0) + 1
     existing_prog[f"batch_{batch_index}"] = {
-        "status": "transcribing",
+        "status": "queued",
         "batch_index": batch_index,
+        "job_id": job_id,
+        "revision": batch_revision,
+        "replace_mode": "replace",
+        "submitted_draft_revision": submitted_draft_revision,
+        "audio_sha256": hashlib.sha256(audio_bytes).hexdigest(),
         "mode": mode,
         "sections_done": 0,
         "total_sections": batch_total,
         "transcript_length": 0,
         "error": None,
     }
-    existing_prog["status"] = "transcribing"
+    existing_prog["status"] = "queued"
     existing_prog["batch_index"] = batch_index
 
     session.status = SessionStatus.PROCESSING
@@ -437,6 +485,8 @@ async def process_batch_consultation_audio(
         session_id=session_id,
         audio_bytes=audio_bytes,
         batch_index=batch_index,
+        job_id=job_id,
+        batch_revision=batch_revision,
         language=language,
         mode=mode or "monologue",
     )
@@ -445,6 +495,9 @@ async def process_batch_consultation_audio(
         "status": "processing",
         "session_id": session_id,
         "batch_index": batch_index,
+        "job_id": job_id,
+        "batch_revision": batch_revision,
+        "replace_mode": "replace",
         "message": f"Batch {batch_index} audio received. Monologue extraction in progress.",
     }
 
@@ -662,15 +715,29 @@ async def get_draft(session_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.patch("/{session_id}/draft")
 async def patch_draft(session_id: str, req: DraftPatchRequest, db: AsyncSession = Depends(get_db)):
-    session = await _get_session(db, session_id)
+    session_res = await db.execute(
+        select(CasesheetSession)
+        .where(CasesheetSession.id == session_id)
+        .with_for_update()
+    )
+    session = session_res.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if session.status == SessionStatus.FINALIZED:
         raise HTTPException(status_code=409, detail="Cannot edit a finalized session")
-    result = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
+    if session.status == SessionStatus.FINALIZING:
+        raise HTTPException(status_code=409, detail="Cannot edit while finalization is in progress")
+    result = await db.execute(
+        select(CasesheetDraft)
+        .where(CasesheetDraft.session_id == session_id)
+        .with_for_update()
+    )
     draft_row = result.scalar_one_or_none()
     if not draft_row:
         raise HTTPException(status_code=404, detail="Draft not found")
     current = dict(draft_row.draft or {})
     from app.casesheet.protocols import enrich_section_data
+    touched_sections = set()
     for k, v in req.updates.items():
         if "." in k:
             parts = k.split(".")
@@ -696,10 +763,32 @@ async def patch_draft(session_id: str, req: DraftPatchRequest, db: AsyncSession 
                     target.append(None)
                 target[idx] = v
             top_sec = parts[0]
+            touched_sections.add(top_sec)
             if top_sec in current and isinstance(current[top_sec], dict):
                 current[top_sec] = enrich_section_data(top_sec, current[top_sec])
+                if top_sec == "pulse_diagnosis":
+                    raw = (current.get("_raw_transcripts") or {}).get(top_sec, "")
+                    current[top_sec] = normalize_pulse_diagnosis(current[top_sec], raw)
         else:
+            touched_sections.add(k)
             current[k] = enrich_section_data(k, v) if isinstance(v, dict) else v
+            if k == "pulse_diagnosis" and isinstance(current[k], dict):
+                raw = (current.get("_raw_transcripts") or {}).get(k, "")
+                current[k] = normalize_pulse_diagnosis(current[k], raw)
+
+    next_revision = _draft_revision(current) + 1
+    current["_draft_revision"] = next_revision
+    section_meta = current.setdefault("_section_meta", {})
+    if isinstance(section_meta, dict):
+        for section in touched_sections:
+            if section in VALID_SECTIONS:
+                section_meta[section] = {
+                    "source": "manual",
+                    "status": "manual_reviewed",
+                    "draft_revision": next_revision,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+    apply_protocol_boundaries(current)
     draft_row.draft = current
     await db.commit()
     logger.info(f"Draft updated: session={session_id} sections={list(req.updates.keys())}")
@@ -738,7 +827,14 @@ async def retranscribe_section(
 
 @router.post("/{session_id}/finalize", response_model=FinalizeResponse)
 async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
-    session = await _get_session(db, session_id)
+    session_res = await db.execute(
+        select(CasesheetSession)
+        .where(CasesheetSession.id == session_id)
+        .with_for_update()
+    )
+    session = session_res.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
     if session.status == SessionStatus.FINALIZED:
         return FinalizeResponse(
@@ -749,13 +845,28 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
             status="already_finalized",
             message="This session was already submitted to ERPNext.",
         )
+    if session.status == SessionStatus.FINALIZING:
+        raise HTTPException(status_code=409, detail="Finalization is already in progress")
+    if session.status == SessionStatus.PROCESSING:
+        raise HTTPException(status_code=409, detail="Cannot finalize while a batch is processing")
 
-    result = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
+    result = await db.execute(
+        select(CasesheetDraft)
+        .where(CasesheetDraft.session_id == session_id)
+        .with_for_update()
+    )
     draft_row = result.scalar_one_or_none()
-    draft_data = draft_row.draft if draft_row else {}
+    draft_data = deepcopy(draft_row.draft) if draft_row else {}
 
     if not draft_data:
         raise HTTPException(status_code=400, detail="Draft is empty. Record at least one section before finalizing.")
+
+    blockers = _batch_finalize_blockers(session.processing_progress, draft_data)
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot finalize until batch processing/review is resolved: " + "; ".join(blockers),
+        )
 
     encounter_payload = _map_draft_to_encounter(
         patient_id=session.patient_id,
@@ -764,6 +875,15 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
         draft=draft_data,
         lead_id=session.lead_id,
         )
+
+    # Commit a durable finalizing state before the outbound ERP call.  A
+    # second request will now see FINALIZING rather than creating a duplicate
+    # encounter from the same draft.
+    session.status = SessionStatus.FINALIZING
+    progress = dict(session.processing_progress or {})
+    progress["status"] = "finalizing"
+    session.processing_progress = progress
+    await db.commit()
 
     try:
         encounter = await erp_bridge_service.create_encounter(encounter_payload)
@@ -916,6 +1036,86 @@ def _merge_section_into_draft(current: dict, key: str, new_data: Any) -> None:
     if settings.CASE_SANITIZE:
         from app.casesheet.clinical_intelligence import apply_protocol_boundaries
         apply_protocol_boundaries(current)
+
+
+# Batch-only job state is persisted in ``processing_progress`` until the
+# database receives a dedicated durable queue.  The job id/revision still lets
+# us reject duplicate uploads and, crucially, discard stale background writes.
+_ACTIVE_BATCH_STATUSES = frozenset({"queued", "transcribing", "extracting"})
+_REVIEW_SECTION_STATUSES = frozenset({"needs_review", "failed"})
+
+
+def _batch_info(session: CasesheetSession, batch_key: str) -> Dict[str, Any]:
+    progress = session.processing_progress or {}
+    value = progress.get(batch_key) if isinstance(progress, dict) else {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _is_current_batch_job(session: Optional[CasesheetSession], batch_key: str, job_id: str) -> bool:
+    return bool(session and _batch_info(session, batch_key).get("job_id") == job_id)
+
+
+def _refresh_session_processing_state(session: CasesheetSession) -> None:
+    """Keep session status correct when different batches finish out of order."""
+    progress = dict(session.processing_progress or {})
+    active = [
+        value for key, value in progress.items()
+        if key.startswith("batch_") and isinstance(value, dict)
+        and value.get("status") in _ACTIVE_BATCH_STATUSES
+    ]
+    if active:
+        session.status = SessionStatus.PROCESSING
+        newest = active[-1]
+        progress["status"] = newest.get("status", "processing")
+        progress["batch_index"] = newest.get("batch_index")
+    elif session.status not in (SessionStatus.FINALIZING, SessionStatus.FINALIZED):
+        session.status = SessionStatus.ACTIVE
+        progress["status"] = "completed"
+    session.processing_progress = progress
+
+
+def _section_is_manually_newer(meta: Any, submitted_revision: int) -> bool:
+    if not isinstance(meta, dict) or meta.get("source") != "manual":
+        return False
+    try:
+        return int(meta.get("draft_revision") or 0) > submitted_revision
+    except (TypeError, ValueError):
+        return False
+
+
+def _draft_revision(draft: Dict[str, Any]) -> int:
+    try:
+        return int(draft.get("_draft_revision") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _batch_finalize_blockers(progress: Any, draft: Dict[str, Any]) -> List[str]:
+    """Return unsafe batch states that must be resolved before ERP export."""
+    if not isinstance(progress, dict):
+        return []
+    section_meta = draft.get("_section_meta") if isinstance(draft, dict) else {}
+    section_meta = section_meta if isinstance(section_meta, dict) else {}
+    blockers: List[str] = []
+    for key, info in progress.items():
+        if not key.startswith("batch_") or not isinstance(info, dict):
+            continue
+        status = info.get("status")
+        if status in _ACTIVE_BATCH_STATUSES:
+            blockers.append(f"{key} is still {status}")
+            continue
+        if status == "failed":
+            blockers.append(f"{key} failed: {info.get('error') or 'unknown error'}")
+            continue
+        for section, section_status in (info.get("section_statuses") or {}).items():
+            state = section_status.get("status") if isinstance(section_status, dict) else None
+            if state not in _REVIEW_SECTION_STATUSES:
+                continue
+            meta = section_meta.get(section)
+            if isinstance(meta, dict) and meta.get("source") == "manual":
+                continue
+            blockers.append(f"{section} requires review ({state})")
+    return blockers
 
 
 async def _process_audio_background(session_id: str, section: str, audio_bytes: bytes, language: Optional[str]) -> None:
@@ -1107,141 +1307,213 @@ async def _process_batch_audio_background(
     session_id: str,
     audio_bytes: bytes,
     batch_index: int,
+    job_id: str,
+    batch_revision: int,
     language: Optional[str] = None,
     mode: str = "monologue",
 ) -> None:
     from app.config.database import AsyncSessionLocal
 
-    batch_total = 12 if batch_index == 1 else (6 if batch_index in (2, 3) else 24)
+    batch_key = f"batch_{batch_index}"
+    batch_sections = list(AMBIENT_BATCH_GROUPS.get(batch_index, []))
+    batch_total = len(batch_sections)
 
-    async with AsyncSessionLocal() as db:
-        batch_key = f"batch_{batch_index}"
-        try:
-            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
-            session = sess_res.scalar_one_or_none()
-            if session:
-                session.status = SessionStatus.PROCESSING
-                prog = dict(session.processing_progress or {})
-                prog[batch_key] = {
-                    "status": "transcribing",
-                    "batch_index": batch_index,
-                    "mode": mode,
-                    "sections_done": 0,
-                    "total_sections": batch_total,
-                    "transcript_length": 0,
-                    "error": None,
-                }
-                prog["status"] = "transcribing"
-                prog["batch_index"] = batch_index
-                session.processing_progress = prog
-                await db.commit()
-
-            transcript = await transcribe_audio(
-                audio_bytes,
-                language=language,
-                initial_prompt=WHISPER_AMBIENT_PROMPT,
+    async def _update_progress(status: str, **updates: Any) -> bool:
+        """Update only the current attempt; stale jobs become harmless."""
+        async with AsyncSessionLocal() as update_db:
+            result = await update_db.execute(
+                select(CasesheetSession)
+                .where(CasesheetSession.id == session_id)
+                .with_for_update()
             )
-            logger.info(f"Batch {batch_index} STT complete for session={session_id}: len={len(transcript)}")
+            session = result.scalar_one_or_none()
+            if not _is_current_batch_job(session, batch_key, job_id):
+                logger.info("Discarding stale Batch %s job %s progress update", batch_index, job_id)
+                return False
+            progress = dict(session.processing_progress or {})
+            info = dict(progress.get(batch_key) or {})
+            info.update(updates)
+            info.update({
+                "status": status,
+                "batch_index": batch_index,
+                "job_id": job_id,
+                "revision": batch_revision,
+                "mode": mode,
+                "total_sections": batch_total,
+            })
+            progress[batch_key] = info
+            progress["sections_done"] = info.get("sections_done", 0)
+            progress["current_section"] = info.get("current_section")
+            session.processing_progress = progress
+            _refresh_session_processing_state(session)
+            await update_db.commit()
+            return True
 
-            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
-            session = sess_res.scalar_one_or_none()
-            if session:
-                prog = dict(session.processing_progress or {})
-                prog[batch_key] = {
-                    "status": "extracting",
-                    "batch_index": batch_index,
-                    "mode": mode,
-                    "sections_done": 0,
-                    "total_sections": batch_total,
-                    "transcript_length": len(transcript),
-                    "raw_transcript": transcript,
-                    "error": None,
-                }
-                prog["status"] = "extracting"
-                prog["batch_index"] = batch_index
-                session.processing_progress = prog
-                await db.commit()
+    try:
+        if not await _update_progress("transcribing", sections_done=0, transcript_length=0, error=None):
+            return
 
-            sections_done_counter = 0
+        transcript = await transcribe_audio(
+            audio_bytes,
+            language=language,
+            initial_prompt=WHISPER_BATCH_PROMPTS.get(batch_index, WHISPER_AMBIENT_PROMPT),
+        )
+        if not transcript or not transcript.strip():
+            raise RuntimeError("speech-to-text returned an empty transcript")
+        logger.info("Batch %s STT complete for session=%s: len=%s", batch_index, session_id, len(transcript))
 
-            async def _on_sec_done(sec_key: str, sec_data: Dict[str, Any]):
-                nonlocal sections_done_counter
-                sections_done_counter += 1
-                try:
-                    async with AsyncSessionLocal() as sub_db:
-                        s_res = await sub_db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
-                        s_obj = s_res.scalar_one_or_none()
-                        if s_obj:
-                            prog = dict(s_obj.processing_progress or {})
-                            b_info = dict(prog.get(batch_key) or {})
-                            b_info["sections_done"] = sections_done_counter
-                            b_info["current_section"] = sec_key
-                            prog[batch_key] = b_info
-                            prog["sections_done"] = sections_done_counter
-                            prog["current_section"] = sec_key
-                            s_obj.processing_progress = prog
-                            await sub_db.commit()
-                except Exception as poll_err:
-                    logger.debug(f"Progress update callback error: {poll_err}")
+        if not await _update_progress(
+            "extracting",
+            sections_done=0,
+            transcript_length=len(transcript),
+            error=None,
+        ):
+            return
 
-            batch_results = await llm_service.extract_batch_transcript(batch_index, transcript, on_section_done=_on_sec_done)
+        sections_done_counter = 0
 
-            d_res = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
-            draft_row = d_res.scalar_one_or_none()
-            if draft_row:
-                current = dict(draft_row.draft or {})
-                if "_raw_transcripts" not in current or not isinstance(current["_raw_transcripts"], dict):
-                    current["_raw_transcripts"] = {}
+        async def _on_sec_done(sec_key: str, _sec_data: Any) -> None:
+            nonlocal sections_done_counter
+            sections_done_counter += 1
+            try:
+                await _update_progress(
+                    "extracting",
+                    sections_done=sections_done_counter,
+                    current_section=sec_key,
+                )
+            except Exception as poll_err:
+                logger.debug("Progress update callback error: %s", poll_err)
 
-                allowed_batch_keys = set(AMBIENT_BATCH_GROUPS.get(batch_index, []))
-                raw_transcripts_map = batch_results.pop("_raw_section_transcripts", {}) or {}
-                for k, v in batch_results.items():
-                    if k in allowed_batch_keys:
-                        _merge_section_into_draft(current, k, v)
-                        clean_snippet = raw_transcripts_map.get(k) or transcript
-                        current["_raw_transcripts"][k] = clean_snippet
+        batch_results = await llm_service.extract_batch_transcript(
+            batch_index,
+            transcript,
+            on_section_done=_on_sec_done,
+        )
+        if batch_results.get("_batch_error"):
+            raise RuntimeError(str(batch_results["_batch_error"]))
 
-                current["_raw_transcripts"][f"_batch_{batch_index}_full"] = transcript
+        # Commit the complete batch result atomically.  A re-record replaces
+        # the prior AI result for *this batch's* sections; it cannot leave old
+        # pulse/procedure rows mixed with the corrected recording.
+        async with AsyncSessionLocal() as write_db:
+            session_res = await write_db.execute(
+                select(CasesheetSession)
+                .where(CasesheetSession.id == session_id)
+                .with_for_update()
+            )
+            session = session_res.scalar_one_or_none()
+            if not _is_current_batch_job(session, batch_key, job_id):
+                logger.info("Discarding stale Batch %s job %s result", batch_index, job_id)
+                return
 
-                draft_row.draft = current
+            draft_res = await write_db.execute(
+                select(CasesheetDraft)
+                .where(CasesheetDraft.session_id == session_id)
+                .with_for_update()
+            )
+            draft_row = draft_res.scalar_one_or_none()
+            if not draft_row:
+                raise RuntimeError("casesheet draft is missing")
 
-            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
-            session = sess_res.scalar_one_or_none()
-            if session:
-                session.status = SessionStatus.ACTIVE
-                prog = dict(session.processing_progress or {})
-                prog[batch_key] = {
-                    "status": "completed",
-                    "batch_index": batch_index,
-                    "mode": mode,
-                    "sections_done": len(batch_results),
-                    "total_sections": batch_total,
-                    "transcript_length": len(transcript),
-                    "error": None,
-                }
-                prog["status"] = "completed"
-                prog["batch_index"] = batch_index
-                session.processing_progress = prog
-            await db.commit()
-            logger.info(f"Batch {batch_index} extraction completed for session={session_id}: {len(batch_results)} sections merged")
+            current = dict(draft_row.draft or {})
+            raw_transcripts = current.setdefault("_raw_transcripts", {})
+            section_meta = current.setdefault("_section_meta", {})
+            batch_runs = current.setdefault("_batch_runs", {})
+            if not isinstance(raw_transcripts, dict) or not isinstance(section_meta, dict):
+                raise RuntimeError("draft metadata has an invalid shape")
 
-        except Exception as exc:
-            logger.error(f"Batch {batch_index} processing failed for session={session_id}: {exc}", exc_info=True)
-            sess_res = await db.execute(select(CasesheetSession).where(CasesheetSession.id == session_id))
-            session = sess_res.scalar_one_or_none()
-            if session:
-                session.status = SessionStatus.ACTIVE
-                prog = dict(session.processing_progress or {})
-                prog[batch_key] = {
-                    "status": "failed",
-                    "batch_index": batch_index,
-                    "mode": mode,
-                    "error": str(exc),
-                }
-                prog["status"] = "failed"
-                prog["batch_index"] = batch_index
-                session.processing_progress = prog
-                await db.commit()
+            progress = dict(session.processing_progress or {})
+            job_info = dict(progress.get(batch_key) or {})
+            submitted_revision = int(job_info.get("submitted_draft_revision") or 0)
+            raw_segments = batch_results.get("_raw_section_transcripts") or {}
+            statuses = batch_results.get("_section_statuses") or {}
+            current_revision = _draft_revision(current)
+            next_revision = current_revision + 1
+
+            for section in batch_sections:
+                status_info = dict(statuses.get(section) or {"status": "not_dictated"})
+                if _section_is_manually_newer(section_meta.get(section), submitted_revision):
+                    status_info = {"status": "manual_preserved"}
+                else:
+                    current.pop(section, None)
+                    if status_info.get("status") == "mapped" and section in batch_results:
+                        current[section] = batch_results[section]
+                    raw_transcripts[section] = str(raw_segments.get(section) or "")
+                    section_meta[section] = {
+                        "source": "batch",
+                        "batch_index": batch_index,
+                        "job_id": job_id,
+                        "status": status_info.get("status"),
+                        "error": status_info.get("error"),
+                        "draft_revision": next_revision,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
+                statuses[section] = status_info
+
+            raw_key = f"_batch_{batch_index}_{job_id}_full"
+            raw_transcripts[raw_key] = transcript
+            raw_transcripts[f"_batch_{batch_index}_full"] = transcript
+            current["_draft_revision"] = next_revision
+            apply_protocol_boundaries(current)
+            salvage_cross_section_fields(current)
+            draft_row.draft = current
+
+            requires_review = any(
+                isinstance(value, dict) and value.get("status") in _REVIEW_SECTION_STATUSES
+                for value in statuses.values()
+            )
+            run_record = {
+                "job_id": job_id,
+                "revision": batch_revision,
+                "status": "completed",
+                "requires_review": requires_review,
+                "transcript_key": raw_key,
+                "transcript_length": len(transcript),
+                "section_statuses": statuses,
+                "completed_at": datetime.utcnow().isoformat(),
+                "pipeline": "batch_section_evidence_v2",
+            }
+            history = batch_runs.setdefault(batch_key, [])
+            if not isinstance(history, list):
+                history = []
+                batch_runs[batch_key] = history
+            history.append(run_record)
+
+            job_info.update({
+                "status": "completed",
+                "sections_done": batch_total,
+                "transcript_length": len(transcript),
+                "section_statuses": statuses,
+                "requires_review": requires_review,
+                "error": None,
+                "completed_at": datetime.utcnow().isoformat(),
+            })
+            progress[batch_key] = job_info
+            session.processing_progress = progress
+            _refresh_session_processing_state(session)
+            await write_db.commit()
+
+        logger.info(
+            "Batch %s job %s completed for session=%s: %s mapped sections",
+            batch_index,
+            job_id,
+            session_id,
+            sum(1 for value in statuses.values() if value.get("status") == "mapped"),
+        )
+
+    except Exception as exc:
+        logger.error(
+            "Batch %s job %s failed for session=%s: %s",
+            batch_index,
+            job_id,
+            session_id,
+            exc,
+            exc_info=True,
+        )
+        try:
+            await _update_progress("failed", error=str(exc), failed_at=datetime.utcnow().isoformat())
+        except Exception:
+            logger.exception("Unable to persist Batch %s failure state", batch_index)
 
 
 
@@ -1396,91 +1668,11 @@ def _clean_pulse_severity(val: Any) -> Optional[str]:
 
 
 def _parse_and_repair_pulse_systems(pulse_raw: Any, raw_transcript: str = "") -> list:
-    systems_map = {}
-    valid_codes_list = ["LISI", "CVS", "RB", "GIT", "IS", "PAN", "PRO", "LB", "GB", "RT", "LIV", "SS", "LSCS", "OBG", "KUB"]
-    valid_codes = set(valid_codes_list)
-
-    items = pulse_raw if isinstance(pulse_raw, list) else []
-    if isinstance(pulse_raw, dict):
-        items = pulse_raw.get("systems") or []
-
-    for item in items:
-        if isinstance(item, dict):
-            sys_code = (item.get("system") or "").strip().upper()
-            if sys_code in ["LV", "L V"]: sys_code = "LIV"
-            if sys_code in ["LI", "SI", "L I", "S I", "LARGE INTESTINE", "SMALL INTESTINE"]: sys_code = "LISI"
-            if sys_code == "R T": sys_code = "RT"
-            if sys_code == "G B": sys_code = "GB"
-            if sys_code == "S S": sys_code = "SS"
-            if sys_code == "C V S": sys_code = "CVS"
-            if sys_code == "ISE": sys_code = "IS"
-
-            v = _clean_pulse_severity(item.get("vata"))
-            p = _clean_pulse_severity(item.get("pitta"))
-            k = _clean_pulse_severity(item.get("kapha"))
-
-            if sys_code and sys_code in valid_codes:
-                if sys_code in systems_map:
-                    existing = systems_map[sys_code]
-                    systems_map[sys_code] = {
-                        "system": sys_code,
-                        "vata": v or existing.get("vata"),
-                        "pitta": p or existing.get("pitta"),
-                        "kapha": k or existing.get("kapha"),
-                    }
-                else:
-                    systems_map[sys_code] = {"system": sys_code, "vata": v, "pitta": p, "kapha": k}
-
-    if raw_transcript:
-        cleaned = raw_transcript
-        cleaned = re.sub(r'\bMILE\b', 'MILD', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bMILE TO MODERATE\b', 'MILD TO MODERATE', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bL\s*I\b', 'LISI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bS\s*I\b', 'LISI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bLARGE INTESTINE\b', 'LISI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bSMALL INTESTINE\b', 'LISI', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bR\s+T\b', 'RT', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bG\s+B\b', 'GB', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bL\s+V\b', 'LIV', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bS\s+S\b', 'SS', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bLISMODERATE\b', 'LISI MODERATE', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bISE\b', 'IS', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bk\s+b\b', 'LB', cleaned, flags=re.IGNORECASE)
-
-        matches = []
-        for code in valid_codes_list:
-            for m in re.finditer(rf"\b{code}\b", cleaned, re.IGNORECASE):
-                matches.append((m.start(), code))
-        
-        matches.sort(key=lambda x: x[0])
-
-        for idx, (pos, code) in enumerate(matches):
-            next_pos = matches[idx + 1][0] if idx + 1 < len(matches) else len(cleaned)
-            segment = cleaned[pos + len(code):next_pos].lower()
-
-            v_val = None
-            p_val = None
-            k_val = None
-
-            for sev_str, sev_key in [
-                ("moderate severe", "moderate_severe"), ("moderate to severe", "moderate_severe"),
-                ("mild moderate", "mild_moderate"), ("mild to moderate", "mild_moderate"),
-                ("very mild", "very_mild"), ("very-mild", "very_mild"), ("low", "very_mild"),
-                ("moderate", "moderate"), ("mild", "mild"), ("severe", "severe")
-            ]:
-                if not v_val and (f"{sev_str} v" in segment or f"v {sev_str}" in segment or f"vata {sev_str}" in segment):
-                    v_val = sev_key
-                if not p_val and (f"{sev_str} p" in segment or f"p {sev_str}" in segment or f"pitta {sev_str}" in segment):
-                    p_val = sev_key
-                if not k_val and (f"{sev_str} k" in segment or f"k {sev_str}" in segment or f"kapha {sev_str}" in segment or f"caffa {sev_str}" in segment or f"{sev_str} caffa" in segment):
-                    k_val = sev_key
-
-            if v_val or p_val or k_val:
-                systems_map[code] = {"system": code, "vata": v_val, "pitta": p_val, "kapha": k_val}
-            elif code in systems_map:
-                pass
-
-    return list(systems_map.values())
+    # Extraction, draft review and ERP export must use the same parser.  The
+    # former legacy repair path collapsed LI/SI into LISI and could therefore
+    # change a correct review screen into a wrong ERP payload at finalization.
+    source = pulse_raw if isinstance(pulse_raw, dict) else {"systems": pulse_raw or []}
+    return normalize_pulse_diagnosis(source, raw_transcript).get("systems", [])
 
 
 def _format_pulse(pulse: Any) -> str:
@@ -1672,6 +1864,13 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
     fup = draft.get("followup_details") or {}
     plan_fup = plan.get("follow_up") if isinstance(plan, dict) else {}
     plan_fup = plan_fup or {}
+    dictated_dietwk = plan.get("diet_plan_weeks") if isinstance(plan, dict) else []
+    if not existing_dietwk and isinstance(dictated_dietwk, list):
+        existing_dietwk = [
+            _normalize_diet_week(dw)
+            for dw in dictated_dietwk
+            if isinstance(dw, dict) and (dw.get("diet_type") or dw.get("diet_item"))
+        ]
 
     allopathic_meds = existing_qs.get("allopathy_medicines")
     if not allopathic_meds:
@@ -1683,7 +1882,12 @@ def _synthesize_prescription_sheet(draft: Dict[str, Any]) -> Dict[str, Any]:
     if not pk_summary and isinstance(panca, dict):
         sessions = panca.get("sessions") or []
         if sessions:
-            pk_summary = "\n".join([f"• {s.get('procedure') or ''} ({s.get('session_count') or ''} sessions)" for s in sessions if isinstance(s, dict)])
+            pk_summary = "\n".join([
+                f"• {s.get('procedure') or s.get('name') or ''}"
+                + (f" ({s.get('session_count')} sessions)" if s.get("session_count") is not None else "")
+                for s in sessions
+                if isinstance(s, dict) and (s.get("procedure") or s.get("name"))
+            ])
         else:
             pk_summary = _clean(panca.get("overall_remarks") or "") or None
 
@@ -1831,19 +2035,16 @@ def _normalize_supplements_weeks(supplements: Any) -> list:
     norm = []
     for item in supplements:
         if isinstance(item, str) and item.strip():
-            norm.append({
-                "name": item.strip(),
-                "quantity_mg": "1000mg",
-                "weeks": ["1"] * 8,
-                "dose": "1",
-                "frequency": "QD"
-            })
+            # A bare named supplement is still useful, but the doctor did not
+            # dictate a strength, dose, schedule or frequency.  Never invent
+            # those values merely to fill the ERP child-table columns.
+            norm.append({"name": item.strip(), "weeks": [""] * 8})
             continue
         if not isinstance(item, dict):
             continue
         new_item = dict(item)
         if not new_item.get("quantity_mg"):
-            new_item["quantity_mg"] = str(new_item.get("quantity") or new_item.get("strength") or "1000mg").strip()
+            new_item["quantity_mg"] = str(new_item.get("quantity") or new_item.get("strength") or "").strip()
         weeks = new_item.get("weeks")
         if not weeks or not isinstance(weeks, list):
             dose_val = _clean(new_item.get("dose") or new_item.get("dose_morning") or "")
@@ -1854,13 +2055,13 @@ def _normalize_supplements_weeks(supplements: Any) -> list:
                 elif len(parts) == 2:
                     new_item["weeks"] = [parts[0], parts[0], parts[0], parts[0], parts[1], parts[1], parts[1], parts[1]]
                 else:
-                    new_item["weeks"] = [parts[0] if parts else "1"] * 8
+                    new_item["weeks"] = [parts[0] if parts else ""] * 8
             else:
-                base_dose = dose_val if (dose_val and any(c.isdigit() for c in dose_val)) else "1"
+                base_dose = dose_val if (dose_val and any(c.isdigit() for c in dose_val)) else ""
                 new_item["weeks"] = [base_dose] * 8
         else:
             existing = list(weeks)
-            last = existing[-1] if existing else "1"
+            last = existing[-1] if existing else ""
             while len(existing) < 8:
                 existing.append(last)
             existing = existing[:8]
@@ -2138,6 +2339,9 @@ def _map_draft_to_encounter(
     synth_rx = _synthesize_prescription_sheet(draft)
     norm_supp = _normalize_supplements_weeks(draft.get("ayurvedic_supplements"))
     diet_plan_weeks = synth_rx.get("diet_plan_weeks") or (diet.get("plan_weeks") if isinstance(diet, dict) else []) or (draft.get("diet_and_lifestyle", {}).get("plan_weeks") if isinstance(draft.get("diet_and_lifestyle"), dict) else [])
+    daily_regimen = synth_rx.get("daily_regimen") if isinstance(synth_rx, dict) else {}
+    daily_regimen = daily_regimen or {}
+    panchakarma_text = _format_panchakarma(panca)
 
     rx_quick_str = _clean(erp.get("rx_quick_summary"))
     if not rx_quick_str and isinstance(synth_rx.get("quick_summary"), dict):
@@ -2211,7 +2415,7 @@ def _map_draft_to_encounter(
         "sgp_diet_weeks": [
             {
                 "week_range": _clean(dw.get("week_range") or f"Week {dw.get('no_of_weeks', '')}"),
-                "diet_type": _clean(dw.get("diet_type") or dw.get("diet_item") or "VPD"),
+                "diet_type": _clean(dw.get("diet_type") or dw.get("diet_item") or ""),
                 "diet_items": _clean(dw.get("diet_items") or dw.get("instructions") or ""),
                 "notes": _clean(dw.get("notes") or ""),
             }
@@ -2221,17 +2425,17 @@ def _map_draft_to_encounter(
         "sgp_supplements_table": [
             {
                 "supplement_name": _clean(s.get("name") or "") or "Unknown",
-                "quantity_mg": _clean(s.get("quantity_mg")) or "1000mg",
-                "start_week": str(s.get("start_week") or "1"),
-                "w1": str((s.get("weeks") or [""] * 8)[0] or ""),
-                "w2": str((s.get("weeks") or [""] * 8)[1] or ""),
-                "w3": str((s.get("weeks") or [""] * 8)[2] or ""),
-                "w4": str((s.get("weeks") or [""] * 8)[3] or ""),
-                "w5": str((s.get("weeks") or [""] * 8)[4] or ""),
-                "w6": str((s.get("weeks") or [""] * 8)[5] or ""),
-                "w7": str((s.get("weeks") or [""] * 8)[6] or ""),
-                "w8": str((s.get("weeks") or [""] * 8)[7] or ""),
-                "frequency": _clean(s.get("frequency")) or "BID",
+                "quantity_mg": _clean(s.get("quantity_mg")),
+                "start_week": str(s.get("start_week") or ""),
+                "w1": str((_as_list(s.get("weeks")) + [""] * 8)[0] or ""),
+                "w2": str((_as_list(s.get("weeks")) + [""] * 8)[1] or ""),
+                "w3": str((_as_list(s.get("weeks")) + [""] * 8)[2] or ""),
+                "w4": str((_as_list(s.get("weeks")) + [""] * 8)[3] or ""),
+                "w5": str((_as_list(s.get("weeks")) + [""] * 8)[4] or ""),
+                "w6": str((_as_list(s.get("weeks")) + [""] * 8)[5] or ""),
+                "w7": str((_as_list(s.get("weeks")) + [""] * 8)[6] or ""),
+                "w8": str((_as_list(s.get("weeks")) + [""] * 8)[7] or ""),
+                "frequency": _clean(s.get("frequency")),
                 "remarks_instructions": _clean(s.get("timing")) or _clean(s.get("remarks")) or _clean(s.get("indication")) or ""
             }
             for s in (norm_supp if isinstance(norm_supp, list) else [])
@@ -2261,12 +2465,12 @@ def _map_draft_to_encounter(
         "surgical_history": _clean(erp.get("surgical_history")) or surg_text,
         "menstrual_obstetric_history": _clean(erp.get("menstrual_obstetric_history")) or obgyn_text,
         "investigation_reports": _clean(erp.get("investigation_reports")) or inv_reports_text,
-        "detox_procedures": _clean(erp.get("detox_procedures")) or None,
-        "oil_applications": _clean(erp.get("oil_applications")) or None,
-        "breathing_exercises": _clean(erp.get("breathing_exercises")) or None,
+        "panchakarma": _clean(erp.get("panchakarma")) or panchakarma_text or None,
+        "detox_procedures": _clean(erp.get("detox_procedures")) or detox_text or _clean(daily_regimen.get("detox_procedures")) or None,
+        "oil_applications": _clean(erp.get("oil_applications")) or _clean(daily_regimen.get("oil_applications")) or None,
+        "breathing_exercises": _clean(erp.get("breathing_exercises")) or _clean(daily_regimen.get("breathing_exercises")) or None,
         "exercises_yoga": _clean(erp.get("exercises_yoga")) or exercises_text,
         "rx_quick_summary": rx_quick_str,
         "rx_daily_regimen": rx_regimen_str,
         "followup_doc": _clean(erp.get("followup_doc")) or fup_doc_text,
     }
-
