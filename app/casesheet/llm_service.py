@@ -45,7 +45,8 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/compl
 # Retrying five Groq models and then an unfunded OpenRouter account was what
 # starved the Pulse request in the recorded Batch-2 incident.
 GEMINI_PRIMARY_MODEL = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.5-flash")
-GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+# Gemini reported in production that 2.5 Flash is retired for new users.
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
 # Lone non-Gemini last resort (proven: 3 successes in the Batch-2 incident log).
 GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "qwen/qwen3.8-27b")
 GEMINI_MODELS = list(dict.fromkeys((GEMINI_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL)))
@@ -541,15 +542,20 @@ class LLMService:
                 messages=messages,
                 max_tokens=max_tokens,
                 require_json=True,
+                trace_label=label,
             )
-            self._log_llm_output(label, "raw_response", raw)
             parsed = self._parse_json(raw)
             if parsed is None:
                 finish = self._classify_empty_result(raw)
                 if finish == "output_truncated":
                     logger.warning("LLM output truncated for %s; retrying once with ~2x tokens", label)
                     try:
-                        raw_retry = await self._call_llm(messages=messages, max_tokens=int(max_tokens) * 2)
+                        raw_retry = await self._call_llm(
+                            messages=messages,
+                            max_tokens=int(max_tokens) * 2,
+                            require_json=True,
+                            trace_label=f"{label}:larger_budget_retry",
+                        )
                     except RuntimeError:
                         raw_retry = None
                     if raw_retry:
@@ -641,6 +647,7 @@ class LLMService:
         messages: list,
         max_tokens: int,
         require_json: bool = False,
+        trace_label: Optional[str] = None,
     ) -> str:
         gemini_key = getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
         groq_key = getattr(settings, "GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
@@ -686,6 +693,12 @@ class LLMService:
                             if not content:
                                 logger.warning("%s returned an empty completion for model %s", provider, model)
                                 continue
+                            if trace_label:
+                                self._log_llm_output(
+                                    f"{trace_label} provider={provider} model={model}",
+                                    "provider_response",
+                                    content,
+                                )
                             if require_json and self._parse_json(content) is None:
                                 # A complete prose reply such as the Gemini
                                 # 200 response in the Batch-2 incident must
