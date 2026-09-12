@@ -525,7 +525,8 @@ Extraction Rules:
    - "LISI", "Large and Small Intestine" -> LISI
    - Never turn LI or SI into LISI. Keep separate LI and SI readings separate.
    - "Liver", "Liv" -> LIV
-   - "KB", "KUB" -> KUB
+   - "KB", "KUP", "KUB" -> KUB
+   - "vatha" -> Vata
    - "Lower Back" -> LB
 4. Compound & Range Severities:
    - "mild to moderate", "mild-mod" -> "mild_moderate"
@@ -543,6 +544,15 @@ Extraction Rules:
    - "IS, mild PV" -> IS vata = "mild", pitta = "mild".
    - "GB, moderate PV" -> GB vata = "moderate", pitta = "moderate".
 7. Filter Out Non-Pulse Dictation: Ignore height/weight, blood group, labs, or narrative progress commentary mixed into the transcript.
+8. ONE ROW PER SYSTEM: Emit at most one object for each system code. Combine
+   non-conflicting doshas for that system into that one object. Do not create a
+   second row for SS, LI, LISI, or any other code.
+9. SOURCE EVIDENCE: raw_phrase must be a short, exact phrase copied from the
+   transcript for that row. Do not treat a normal word such as "like" as the
+   code LI. Do not invent a system merely to complete a usual system sequence.
+10. AMBIGUITY: If a system label or severity is genuinely unclear after using
+    the stated aliases, leave the uncertain value null and add a concise reason
+    to needs_doctor_confirmation. Never select between conflicting readings.
 
 Schema:
 {
@@ -2325,7 +2335,9 @@ SECTIONS TO SEGMENT:
 - "ayurvedic_assessment_extended": Prakriti, Vikriti, VPK Dominance summary, Samprapti summary.
 
 RULES:
-1. EVIDENCE ONLY: copy exact raw words into ONE relevant section. Do not summarize, correct, infer, or make up a Pulse row.
+1. EVIDENCE ONLY: copy exact raw words into ONE relevant section as one
+   contiguous excerpt from the monologue. Do not summarize, correct spelling,
+   reorder words, infer, or make up a Pulse row.
 2. KEEP PULSE IDENTITIES DISTINCT: LI, SI and LISI are separate systems. Never rewrite LI or SI as LISI. A literal "LISI" belongs to LISI; separate LI and SI readings remain separate.
 3. Route an explicit Nadi code/list to pulse_diagnosis. Do not treat the ordinary English word "is" as system code IS.
 4. Use an empty string when a section was not dictated. Never put the entire monologue into multiple keys.

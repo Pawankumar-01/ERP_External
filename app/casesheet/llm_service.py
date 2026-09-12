@@ -29,6 +29,8 @@ from app.casesheet.protocols import enrich_section_data
 from app.casesheet.clinical_intelligence import (
     postprocess_section,
     normalize_pulse_diagnosis,
+    normalize_severity,
+    normalize_system_code,
     with_variant_examples,
     with_batch_variant_examples,
     apply_nomenclature_to_section,
@@ -67,6 +69,45 @@ LOG_LLM_OUTPUTS = os.getenv("CASE_LOG_LLM_OUTPUTS", "true").strip().lower() in {
 LLM_OUTPUT_LOG_LIMIT = max(1_000, int(os.getenv("CASE_LLM_OUTPUT_LOG_LIMIT", "40000")))
 
 
+# A row must be anchored to a real code/alias in its own quoted source phrase.
+# This is intentionally stricter than a whole-transcript search: otherwise a
+# model can turn an ordinary word such as "like" into the LI system merely
+# because LI appears in the canonical code list.
+_PULSE_SOURCE_CODE_PATTERNS = {
+    "LI": r"\b(?:li|l\s+i|large\s+intestine)\b",
+    "SI": r"\b(?:si|s\s+i|small\s+intestine)\b",
+    "LISI": r"\b(?:lisi|li\s+si|large\s+(?:and\s+)?small\s+intestine)\b",
+    "CVS": r"\b(?:cvs|c\s+v\s+s|heart)\b",
+    "RB": r"\b(?:rb|r\s+b|renal\s+bladder|kidney\s+bladder)\b",
+    "GIT": r"\b(?:git|gastrointestinal)\b",
+    # Lowercase "is" is ordinary English, not a reliable system code.
+    "IS": r"(?:\bIS\b|\bi\s+s\b|\bise\b|\bimmune(?:\s+system)?\b)",
+    "PAN": r"\b(?:pan|pancreas|pancreatic)\b",
+    "PRO": r"\b(?:pro|p\s+r\s+o|prostate(?:\s+reproductive)?)\b",
+    "LB": r"\b(?:lb|lower\s+back|lungs?)\b",
+    "GB": r"\b(?:gb|g\s+b|gall\s*bladder)\b",
+    "LIV": r"\b(?:liv|l\s+v|liver)\b",
+    "RT": r"\b(?:rt|r\s+t|respiratory\s+tract)\b",
+    "SS": r"\b(?:ss|s\s+s|skeletal(?:\s+system)?)\b",
+    "KUB": r"\b(?:kub|kup|kb|k\s+b)\b",
+    "LSCS": r"\b(?:lscs|iscs|l\s*s\s*c\s*s|lumbo\s+sacro\s+cranial)\b",
+    "OBG": r"\b(?:obg|obstetrics\s+gynecology)\b",
+}
+
+
+def _pulse_source_is_anchored(code: str, phrase: str) -> bool:
+    pattern = _PULSE_SOURCE_CODE_PATTERNS.get(code)
+    if not pattern or not phrase:
+        return False
+    # IS deliberately retains case sensitivity for the bare code; the other
+    # known aliases are safe case-insensitively.
+    if code == "IS":
+        return bool(re.search(pattern, phrase)) or bool(
+            re.search(r"\b(?:i\s+s|ise|immune(?:\s+system)?)\b", phrase, re.IGNORECASE)
+        )
+    return bool(re.search(pattern, phrase, re.IGNORECASE))
+
+
 class LLMService:
 
     def __init__(self):
@@ -89,6 +130,133 @@ class LLMService:
         if len(text) > LLM_OUTPUT_LOG_LIMIT:
             text = f"{text[:LLM_OUTPUT_LOG_LIMIT]}… [truncated for log]"
         logger.info("LLM_OUTPUT label=%s stage=%s payload=%s", label, stage, text)
+
+    @staticmethod
+    def _pulse_quality_issues(data: Any, transcript: str = "") -> list[str]:
+        """Return semantic defects that merit one focused Pulse repair call.
+
+        These checks never select a clinical value.  They only identify model
+        output that cannot safely be reconciled locally: duplicate/conflicting
+        rows, a system inferred from an unanchored phrase, or an incomplete
+        severity expression.  A clean duplicate with complementary fields is
+        harmless because the normalizer can merge it without choosing between
+        two values.
+        """
+        if not isinstance(data, dict):
+            return ["Pulse response is not a JSON object"]
+        systems = data.get("systems")
+        if not isinstance(systems, list) or not systems:
+            return ["Pulse response has no system rows"]
+
+        issues: list[str] = []
+        seen: Dict[str, Dict[str, Optional[str]]] = {}
+        for index, entry in enumerate(systems, start=1):
+            if not isinstance(entry, dict):
+                issues.append(f"Pulse row {index} is not an object")
+                continue
+            code = normalize_system_code(entry.get("system"))
+            if not code:
+                issues.append(f"Pulse row {index} has an invalid system code")
+                continue
+
+            phrase = entry.get("raw_phrase")
+            if not isinstance(phrase, str) or not phrase.strip():
+                issues.append(f"{code} is missing its raw source phrase")
+            elif not _pulse_source_is_anchored(code, phrase):
+                issues.append(f"{code} is not anchored to a code/alias in its raw phrase")
+            else:
+                if transcript:
+                    normalized_phrase = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", phrase.lower())).strip()
+                    normalized_transcript = re.sub(
+                        r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", transcript.lower())
+                    ).strip()
+                    if normalized_phrase not in normalized_transcript:
+                        issues.append(f"{code} raw phrase is not a verbatim source excerpt")
+                if re.search(
+                    r"\b(?:very\s+mild|mild|moderate)\s+to\s+"
+                    r"(?:vata|vatha|pitta|kapha|kafa|kaffa|[vpkb])\b",
+                    phrase,
+                    re.IGNORECASE,
+                ):
+                    issues.append(f"{code} has an incomplete severity phrase")
+
+            row = {
+                dosha: normalize_severity(entry.get(dosha))
+                for dosha in ("vata", "pitta", "kapha")
+            }
+            existing = seen.get(code)
+            if existing is None:
+                seen[code] = row
+            else:
+                conflicts = [
+                    dosha for dosha in row
+                    if existing.get(dosha) is not None
+                    and row.get(dosha) is not None
+                    and existing[dosha] != row[dosha]
+                ]
+                if conflicts:
+                    issues.append(
+                        f"{code} has conflicting duplicate values for {', '.join(conflicts)}"
+                    )
+                else:
+                    # Complementary duplicates can be combined mechanically,
+                    # but the model still violated the one-row contract.  Do
+                    # not force a costly repair when no clinical value differs.
+                    for dosha, value in row.items():
+                        if existing.get(dosha) is None:
+                            existing[dosha] = value
+
+            confirmations = entry.get("needs_doctor_confirmation")
+            if isinstance(confirmations, list) and any(str(v).strip() for v in confirmations):
+                issues.append(f"{code} is marked uncertain by the model")
+
+        top_confirmations = data.get("needs_doctor_confirmation")
+        if isinstance(top_confirmations, list) and any(str(v).strip() for v in top_confirmations):
+            issues.append("Pulse response is marked uncertain by the model")
+        return list(dict.fromkeys(issues))
+
+    async def _repair_pulse_semantics(
+        self,
+        transcript: str,
+        candidate: Dict[str, Any],
+        issues: list[str],
+    ) -> Dict[str, Any]:
+        """Ask the clinical mapper—not regex—to resolve a detected conflict."""
+        repair_prompt = """\
+You are repairing a Nadi Pariksha extraction. Use ONLY the original transcript
+as clinical evidence. Return ONLY valid JSON with the same schema as the Pulse
+section: overall_vpk, systems, and needs_doctor_confirmation.
+
+Rules:
+- Emit at most one row per canonical system code.
+- raw_phrase must be copied verbatim from the original transcript for its row.
+- Keep LI, SI, and LISI distinct unless the transcript explicitly gives one
+  combined LISI reading.
+- Resolve ASR aliases only when supported by the phrase and surrounding Pulse
+  sequence. Do not turn normal words such as \"like\" into LI.
+- If the source remains genuinely ambiguous, leave only that value null and
+  state the concise reason in needs_doctor_confirmation. Never invent a value.
+"""
+        messages = [
+            {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
+            {
+                "role": "user",
+                "content": (
+                    f"{repair_prompt}\n\n"
+                    f"ORIGINAL PULSE TRANSCRIPT:\n<<<\n{transcript}\n>>>\n\n"
+                    f"PREVIOUS CANDIDATE JSON:\n{json.dumps(candidate, ensure_ascii=False)}\n\n"
+                    f"VALIDATION FINDINGS:\n- " + "\n- ".join(issues)
+                ),
+            },
+        ]
+        return await self._safe_json_call(
+            messages=messages,
+            label="section:pulse_diagnosis:semantic_repair",
+            fallback={},
+            # A Pulse repair contains at most one compact system array; this
+            # budget is ample while avoiding a second large generation.
+            max_tokens=min(GEMINI_PULSE_MAX_TOKENS, 2_000),
+        )
 
     async def extract_section(self, section: str, transcript: str) -> Dict[str, Any]:
         if not transcript.strip():
@@ -128,6 +296,41 @@ class LLMService:
             max_tokens=max_tokens,
         )
         self._log_llm_output(f"section:{section}", "parsed_candidate", raw_result)
+        pulse_quality_issues: list[str] = []
+        if (
+            section == "pulse_diagnosis"
+            and isinstance(raw_result, dict)
+            and not raw_result.get("_error")
+            and not raw_result.get("_reprompt")
+        ):
+            pulse_quality_issues = self._pulse_quality_issues(raw_result, transcript)
+            if pulse_quality_issues:
+                logger.warning(
+                    "Pulse candidate needs semantic repair: %s",
+                    "; ".join(pulse_quality_issues),
+                )
+                repaired = await self._repair_pulse_semantics(
+                    transcript,
+                    raw_result,
+                    pulse_quality_issues,
+                )
+                self._log_llm_output(
+                    f"section:{section}", "semantic_repair_candidate", repaired
+                )
+                if isinstance(repaired, dict) and not repaired.get("_error"):
+                    repaired_issues = self._pulse_quality_issues(repaired, transcript)
+                    if not repaired_issues:
+                        raw_result = repaired
+                        pulse_quality_issues = []
+                        logger.info("Pulse semantic repair succeeded")
+                    else:
+                        pulse_quality_issues = repaired_issues
+                        logger.warning(
+                            "Pulse semantic repair remains unresolved: %s",
+                            "; ".join(repaired_issues),
+                        )
+                else:
+                    pulse_quality_issues.append("Pulse semantic repair did not return valid JSON")
         # Provenance: _safe_json_call failure codes must survive the
         # deterministic fallback below. normalize/sanitize strip every "_*"
         # key by design, so capture the pre-normalize error here and re-attach
@@ -154,6 +357,12 @@ class LLMService:
         if settings.CASE_APPLY_NOMENCLATURE:
             result = apply_nomenclature_to_section(result)
         if section == "pulse_diagnosis":
+            if pulse_quality_issues:
+                # Stored with the draft so the UI/finalization state reflects
+                # an unresolved semantic conflict rather than a false clean
+                # success.  It is attached after sanitize() because internal
+                # bookkeeping keys are correctly stripped by sanitizers.
+                result["_quality_issues"] = pulse_quality_issues
             self._log_llm_output(f"section:{section}", "reconciled_mapping", result)
         return result
 
@@ -185,6 +394,9 @@ class LLMService:
         )
 
         if isinstance(res, dict) and not res.get("_error"):
+            self._log_llm_output(
+                f"middleware_segmenter_batch:{batch_index}", "segmented_sections", res
+            )
             logger.info(
                 f"Stage 1 Middleware Segmenter success for Batch {batch_index}: "
                 f"segmented keys={[k for k, v in res.items() if v]}"
@@ -239,6 +451,9 @@ class LLMService:
             if not self._is_grounded_segment(snippet, transcript):
                 section_statuses[section] = {"status": "needs_review", "error": "segment contains unsupported text"}
                 continue
+            self._log_llm_output(
+                f"batch:{batch_index}:section:{section}", "segmented_source", snippet
+            )
             snippets[section] = snippet
 
         async def _extract_one(section: str, snippet: str) -> tuple[str, Any, Dict[str, str]]:
@@ -252,6 +467,10 @@ class LLMService:
                 return section, {}, {"status": "failed", "error": str(data.get("_error"))}
             if not data or (isinstance(data, dict) and data.get("_reprompt")):
                 return section, {}, {"status": "needs_review"}
+            if isinstance(data, dict) and data.get("_quality_issues"):
+                issues = data.get("_quality_issues")
+                detail = "; ".join(str(issue) for issue in issues) if isinstance(issues, list) else str(issues)
+                return section, data, {"status": "mapped_needs_review", "error": detail}
             return section, data, {"status": "mapped"}
 
         tasks = [asyncio.create_task(_extract_one(section, snippet)) for section, snippet in snippets.items()]
@@ -293,20 +512,19 @@ class LLMService:
 
     @staticmethod
     def _is_grounded_segment(snippet: str, raw_transcript: str) -> bool:
-        """Reject segmenter inventions before they reach a clinical extractor."""
-        raw_tokens = re.findall(r"[a-z0-9]+", raw_transcript.lower())
-        snippet_tokens = re.findall(r"[a-z0-9]+", snippet.lower())
-        if not snippet_tokens:
-            return False
-        raw_set = set(raw_tokens)
-        meaningful = [token for token in snippet_tokens if len(token) > 2 or token.isdigit()]
-        if not meaningful:
-            return True
-        overlap = sum(token in raw_set for token in meaningful) / len(meaningful)
-        # Numbers/doses are high-risk: a corrected or invented number must not
-        # be silently accepted merely because surrounding words match.
-        numbers_are_grounded = all(token in raw_set for token in meaningful if token.isdigit())
-        return overlap >= 0.85 and numbers_are_grounded
+        """Accept only an evidence-exact section span from the batch audio.
+
+        A bag-of-words overlap permits a segmenter to reorder or silently
+        change a severity/code while still appearing "grounded".  Whitespace
+        and punctuation may differ, but the normalized section text must occur
+        contiguously in the original Batch transcript.
+        """
+        def normalize_evidence(value: str) -> str:
+            return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
+
+        normalized_snippet = normalize_evidence(snippet)
+        normalized_raw = normalize_evidence(raw_transcript)
+        return bool(normalized_snippet and normalized_snippet in normalized_raw)
 
     async def extract_sections_from_full_transcript(
         self,
@@ -537,6 +755,11 @@ class LLMService:
         fallback: Dict[str, Any],
         max_tokens: int,
     ) -> Dict[str, Any]:
+        validated_section = (
+            label.removeprefix("section:").split(":", 1)[0]
+            if label.startswith("section:")
+            else None
+        )
         try:
             raw = await self._call_llm(
                 messages=messages,
@@ -561,8 +784,8 @@ class LLMService:
                     if raw_retry:
                         retried = self._parse_json(raw_retry)
                         if retried is not None:
-                            if isinstance(retried, dict) and label.startswith("section:"):
-                                self._validate_section_semantics(label.split(":", 1)[1], retried)
+                            if isinstance(retried, dict) and validated_section:
+                                self._validate_section_semantics(validated_section, retried)
                             logger.info("LLM JSON success for %s (after truncation retry)", label)
                             return retried
                         if self._classify_empty_result(raw_retry) != "output_truncated":
@@ -575,8 +798,8 @@ class LLMService:
                     return {**fallback, "_llm_output": raw or "", "_error": "empty_response"}
                 logger.warning("LLM returned non-JSON for %s", label)
                 return {**fallback, "_llm_output": raw, "_error": "invalid_json"}
-            if isinstance(parsed, dict) and label.startswith("section:"):
-                self._validate_section_semantics(label.split(":", 1)[1], parsed)
+            if isinstance(parsed, dict) and validated_section:
+                self._validate_section_semantics(validated_section, parsed)
             logger.info("LLM JSON success for %s", label)
             return parsed
         except httpx.TimeoutException:

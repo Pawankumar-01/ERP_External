@@ -325,83 +325,30 @@ async def start_session(
 @router.post("/{session_id}/audio", status_code=202)
 async def upload_audio(
     session_id: str,
-    background_tasks: BackgroundTasks,
-    section: str = Form(...),
-    language: Optional[str] = Form(None),
-    audio: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
 ):
-    if section not in VALID_SECTIONS:
-        raise HTTPException(status_code=400, detail=f"Invalid section '{section}'. Valid: {', '.join(sorted(VALID_SECTIONS))}")
-
-    session = await _get_session(db, session_id)
-    if session.status == SessionStatus.FINALIZED:
-        raise HTTPException(status_code=409, detail="Session already finalized")
-
-    audio_bytes = await audio.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="Empty audio file received")
-
-    logger.info(f"Audio received: session={session_id} section={section} size={len(audio_bytes)} bytes lang={language}")
-
-    background_tasks.add_task(
-        _process_audio_background,
-        session_id=session_id,
-        section=section,
-        audio_bytes=audio_bytes,
-        language=language,
+    """Retired: clinical recording is deliberately batch-only."""
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Section-level audio is retired. Record the relevant Batch 1, 2, "
+            "or 3 dictation through /process-batch-audio, then use Edit for "
+            "a doctor correction."
+        ),
     )
-
-    return {"status": "processing", "session_id": session_id, "section": section, "message": "Audio received. Processing in background."}
 
 
 @router.post("/{session_id}/process-full-audio", status_code=202)
 async def process_full_consultation_audio(
     session_id: str,
-    background_tasks: BackgroundTasks,
-    language: Optional[str] = Form(None),
-    mode: Optional[str] = Form("ambient"),
-    audio: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
 ):
-    session = await _get_session(db, session_id)
-    if session.status == SessionStatus.FINALIZED:
-        raise HTTPException(status_code=409, detail="Session already finalized")
-
-    audio_bytes = await audio.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="Empty audio file received")
-
-    logger.info(
-        f"Ambient full audio received: session={session_id} mode={mode} "
-        f"size={len(audio_bytes)} bytes lang={language}"
+    """Retired: a full monologue must not be fanned out into all batches."""
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Full-consultation audio is retired. Submit one of the three "
+            "purpose-specific recordings through /process-batch-audio."
+        ),
     )
-
-    session.status = SessionStatus.PROCESSING
-    session.processing_progress = {
-        "status": "transcribing",
-        "mode": mode,
-        "sections_done": 0,
-        "total_sections": 24,
-        "transcript_length": 0,
-        "error": None,
-    }
-    await db.commit()
-
-    background_tasks.add_task(
-        _process_full_audio_background,
-        session_id=session_id,
-        audio_bytes=audio_bytes,
-        language=language,
-        mode=mode or "ambient",
-    )
-
-    return {
-        "status": "processing",
-        "session_id": session_id,
-        "mode": mode,
-        "message": "Full consultation audio received. Ambient extraction in progress.",
-    }
 
 
 @router.post("/{session_id}/process-batch-audio", status_code=202)

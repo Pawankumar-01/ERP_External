@@ -670,7 +670,10 @@ def _prepare_pulse_transcript(raw: str) -> str:
         (r"\bG\s*B\b", "GB"),
         (r"\bL\s*V\b", "LIV"),
         (r"\bS\s*S\b", "SS"),
-        (r"\bK\s*B\b", "KUB"),
+        # KUB is commonly rendered by ASR as KB or KUP.  Limit this repair to
+        # Pulse-only preprocessing so an ordinary word in another section can
+        # never become a clinical system code.
+        (r"\b(?:K\s*B|KUP)\b", "KUB"),
         (r"\bL\s*I\s*S\s*I\b", "LISI"),
         (r"\bLISMODERATE\b", "LISI moderate"),
         # Spoken full names are equivalent to their dictated Pulse codes.
@@ -684,7 +687,7 @@ def _prepare_pulse_transcript(raw: str) -> str:
         # here, after the section has already been identified as Pulse.
         (r"\b(?:P\s*B|B)\b", "P"),
         (r"\b(?:kafa|kaffa|caffa)\b", "K"),
-        (r"\bvata\b", "V"),
+        (r"\b(?:vata|vatha)\b", "V"),
         (r"\bpitta\b", "P"),
         (r"\bkapha\b", "K"),
     )
@@ -795,10 +798,15 @@ def normalize_pulse_diagnosis(data: Any, raw_transcript: str = "") -> Dict[str, 
                     "raw_phrase": f"{code}{segment}".strip(),
                 }
             elif not ambiguous_dosha:
-                # Clean direct evidence corrects narrowly scoped, known ASR
-                # failures such as Pitta rendered as "B". It does not alter
-                # LLM values when the raw span is structurally ambiguous.
-                row.update(parsed)
+                # The section LLM is the primary clinical mapper.  Raw Pulse
+                # parsing is deliberately only a source-backed *fill* layer:
+                # it may recover a field the LLM omitted (for example B -> P),
+                # but it must not replace an already-extracted clinical value.
+                # Choosing between conflicting readings belongs to the
+                # focused LLM repair pass, not a local regex.
+                for dosha, value in parsed.items():
+                    if row.get(dosha) is None:
+                        row[dosha] = value
                 if not row.get("raw_phrase"):
                     row["raw_phrase"] = f"{code}{segment}".strip()
 

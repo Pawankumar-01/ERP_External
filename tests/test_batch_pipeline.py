@@ -6,7 +6,14 @@ from app.casesheet.clinical_intelligence import (
     normalize_pulse_diagnosis,
 )
 from app.casesheet.llm_service import LLMService
-from app.casesheet.router import _batch_finalize_blockers, _map_draft_to_encounter
+from fastapi import HTTPException
+
+from app.casesheet.router import (
+    _batch_finalize_blockers,
+    _map_draft_to_encounter,
+    process_full_consultation_audio,
+    upload_audio,
+)
 
 
 RAW_PULSE_SAMPLE = """Overall PPK dominance was severe Pitta, CVS mild to moderate P,
@@ -55,6 +62,50 @@ class InvalidPulseFallbackLLM(LLMService):
         # extract_section must retain this error after the deterministic Pulse
         # parser rebuilt rows from the raw source segment.
         return {**fallback, "_error": "invalid_json"}
+
+
+class RepairingPulseLLM(LLMService):
+    """First Pulse candidate conflicts; focused repair resolves it."""
+
+    def __init__(self):
+        super().__init__()
+        self.responses = [
+            {
+                "overall_vpk": {},
+                "systems": [
+                    {
+                        "system": "SS",
+                        "vata": None,
+                        "pitta": "mild_moderate",
+                        "kapha": "mild_moderate",
+                        "raw_phrase": "SS mild to moderate pitta and kapha",
+                    },
+                    {
+                        "system": "SS",
+                        "vata": "mild",
+                        "pitta": "mild",
+                        "kapha": None,
+                        "raw_phrase": "SS mild pitta and vata",
+                    },
+                ],
+            },
+            {
+                "overall_vpk": {},
+                "systems": [
+                    {
+                        "system": "SS",
+                        "vata": "mild",
+                        "pitta": "mild_moderate",
+                        "kapha": "mild_moderate",
+                        "raw_phrase": "SS mild to moderate pitta and kapha, mild vata",
+                    },
+                ],
+                "needs_doctor_confirmation": [],
+            },
+        ]
+
+    async def _safe_json_call(self, **_kwargs):
+        return self.responses.pop(0)
 
 
 class BatchPipelineTests(unittest.TestCase):
@@ -107,6 +158,29 @@ class BatchPipelineTests(unittest.TestCase):
         self.assertEqual(parsed["systems"][0]["pitta"], "mild_moderate")
         self.assertIsNone(parsed["systems"][0]["kapha"])
 
+    def test_raw_pulse_parser_fills_missing_values_but_never_overwrites_llm(self):
+        transcript = "CVS mild to moderate B."
+        preserved = normalize_pulse_diagnosis(
+            {"systems": [{"system": "CVS", "pitta": "mild"}]}, transcript
+        )
+        filled = normalize_pulse_diagnosis(
+            {"systems": [{"system": "CVS", "pitta": None}]}, transcript
+        )
+        self.assertEqual(preserved["systems"][0]["pitta"], "mild")
+        self.assertEqual(filled["systems"][0]["pitta"], "mild_moderate")
+
+    def test_pulse_conflict_is_repaired_by_llm_before_reconciliation(self):
+        result = asyncio.run(
+            RepairingPulseLLM().extract_section(
+                "pulse_diagnosis",
+                "SS mild to moderate pitta and kapha, mild vata.",
+            )
+        )
+        self.assertNotIn("_quality_issues", result)
+        self.assertEqual(len(result["systems"]), 1)
+        self.assertEqual(result["systems"][0]["system"], "SS")
+        self.assertEqual(result["systems"][0]["pitta"], "mild_moderate")
+
     def test_pulse_list_merge_has_one_row_per_system(self):
         merged = merge_section_data(
             {"systems": [{"system": "CVS", "pitta": "mild"}]},
@@ -130,6 +204,17 @@ class BatchPipelineTests(unittest.TestCase):
         )
         self.assertEqual(result["_raw_section_transcripts"]["pulse_diagnosis"], "CVS mild P, LI mild K.")
         self.assertEqual(result["_section_statuses"]["general_examination"]["status"], "not_dictated")
+
+    def test_segment_must_be_a_contiguous_source_excerpt(self):
+        raw = "CVS mild P, RB moderate VK."
+        self.assertTrue(LLMService._is_grounded_segment("CVS mild P", raw))
+        self.assertFalse(LLMService._is_grounded_segment("RB moderate VK CVS mild P", raw))
+
+    def test_legacy_recording_routes_are_retired(self):
+        for endpoint in (upload_audio, process_full_consultation_audio):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(endpoint("session-id"))
+            self.assertEqual(raised.exception.status_code, 410)
 
     def test_invalid_llm_json_is_not_silently_salvaged(self):
         service = LLMService()

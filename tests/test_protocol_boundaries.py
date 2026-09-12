@@ -47,7 +47,7 @@ class ProtocolBoundaryTests(unittest.TestCase):
 
     def test_pulse_parser_corrects_b_and_keeps_li_si_lisi_distinct(self):
         pulse = normalize_pulse_diagnosis(
-            {"systems": [{"system": "CVS", "pitta": "mild"}, {"system": "CVS", "vata": "severe"}]},
+            {"systems": [{"system": "CVS", "pitta": None}, {"system": "CVS", "vata": "severe"}]},
             "Overall PPK dominance was severe Pitta. CVS mild to moderate B, "
             "LI mild P, SI moderate K, LISI severe V.",
         )
