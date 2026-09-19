@@ -2,6 +2,7 @@
 import hashlib
 import logging
 import re
+import time
 import uuid
 from copy import deepcopy
 from datetime import date, datetime
@@ -17,6 +18,11 @@ from app.config.settings import settings
 from app.casesheet.models import CasesheetSession, CasesheetDraft, SessionStatus
 from app.casesheet.transcription import transcribe_audio
 from app.casesheet.llm_service import llm_service
+from app.casesheet.evaluation_capture import (
+    begin_llm_trace,
+    end_llm_trace,
+    evaluation_capture,
+)
 from app.casesheet.prompts import (
     VALID_SECTIONS,
     WHISPER_INITIAL_PROMPTS,
@@ -685,7 +691,18 @@ async def patch_draft(session_id: str, req: DraftPatchRequest, db: AsyncSession 
     current = dict(draft_row.draft or {})
     from app.casesheet.protocols import enrich_section_data
     touched_sections = set()
+    correction_records = []
     for k, v in req.updates.items():
+        if evaluation_capture.enabled:
+            previous_present, previous_value = _draft_value_at_path(current, k)
+            correction_records.append({
+                "kind": "draft_field_edit",
+                "source": "draft_patch_api",
+                "field_path": k,
+                "previous_present": previous_present,
+                "previous_value": deepcopy(previous_value),
+                "requested_value": deepcopy(v),
+            })
         if "." in k:
             parts = k.split(".")
             target = current
@@ -740,6 +757,19 @@ async def patch_draft(session_id: str, req: DraftPatchRequest, db: AsyncSession 
     apply_protocol_boundaries(current)
     draft_row.draft = current
     await db.commit()
+    for record in correction_records:
+        resulting_present, resulting_value = _draft_value_at_path(current, record["field_path"])
+        await evaluation_capture.append_correction(
+            session_id,
+            {
+                **record,
+                "resulting_present": resulting_present,
+                "resulting_value": deepcopy(resulting_value),
+                "draft_revision": next_revision,
+                "touched_sections": sorted(touched_sections),
+            },
+        )
+    await evaluation_capture.write_revision_snapshot(session_id, next_revision, current)
     logger.info(f"Draft updated: session={session_id} sections={list(req.updates.keys())}")
     return {"status": "updated", "session_id": session_id, "sections_updated": list(req.updates.keys())}
 
@@ -762,14 +792,32 @@ async def retranscribe_section(
         raise HTTPException(status_code=400, detail="transcript must not be empty")
     result = await db.execute(select(CasesheetDraft).where(CasesheetDraft.session_id == session_id))
     draft_row = result.scalar_one_or_none()
+    previous_transcript = None
+    draft_revision = 0
     if draft_row:
         current = dict(draft_row.draft or {})
+        if evaluation_capture.enabled:
+            draft_revision = _draft_revision(current)
+            existing_transcripts = current.get("_raw_transcripts") or {}
+            if isinstance(existing_transcripts, dict):
+                previous_transcript = existing_transcripts.get(section)
         current[section] = {"status": "processing"}
         if "_raw_transcripts" not in current:
             current["_raw_transcripts"] = {}
         current["_raw_transcripts"][section] = transcript
         draft_row.draft = current
         await db.commit()
+        await evaluation_capture.append_correction(
+            session_id,
+            {
+                "kind": "section_transcript_correction",
+                "source": "retranscribe_api",
+                "section": section,
+                "previous_transcript": previous_transcript,
+                "corrected_transcript": transcript,
+                "draft_revision": draft_revision,
+            },
+        )
     background_tasks.add_task(_reprocess_transcript_background, session_id=session_id, section=section, transcript=transcript)
     return {"status": "processing", "session_id": session_id, "section": section, "message": "Re-extraction running."}
 
@@ -817,6 +865,9 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
             detail="Cannot finalize until batch processing/review is resolved: " + "; ".join(blockers),
         )
 
+    # The mapper performs deterministic enrichment on its input. Preserve the
+    # exact doctor-reviewed revision before that projection mutates the copy.
+    reviewed_draft_snapshot = deepcopy(draft_data)
     encounter_payload = _map_draft_to_encounter(
         patient_id=session.patient_id,
         doctor_id=session.doctor_id,
@@ -824,6 +875,8 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
         draft=draft_data,
         lead_id=session.lead_id,
         )
+    finalization_attempt_id = str(uuid.uuid4())
+    reviewed_revision = _draft_revision(reviewed_draft_snapshot)
 
     # Commit a durable finalizing state before the outbound ERP call.  A
     # second request will now see FINALIZING rather than creating a duplicate
@@ -834,15 +887,53 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
     session.processing_progress = progress
     await db.commit()
 
+    await evaluation_capture.write_finalization_artifact(
+        session_id,
+        finalization_attempt_id,
+        "reviewed_draft.json",
+        {
+            "draft_revision": reviewed_revision,
+            "captured_at": datetime.utcnow().isoformat(),
+            "draft": reviewed_draft_snapshot,
+        },
+    )
+    await evaluation_capture.write_finalization_artifact(
+        session_id,
+        finalization_attempt_id,
+        "erp_request_payload.json",
+        encounter_payload,
+    )
+    await evaluation_capture.append_event(
+        session_id,
+        "finalization_started",
+        {
+            "attempt_id": finalization_attempt_id,
+            "draft_revision": reviewed_revision,
+        },
+    )
+
     try:
         encounter = await erp_bridge_service.create_encounter(encounter_payload)
     except Exception as exc:
+        await evaluation_capture.write_finalization_artifact(
+            session_id,
+            finalization_attempt_id,
+            "erp_error.json",
+            {"error_type": type(exc).__name__, "error": str(exc)},
+        )
         error_msg = f"ERPNext encounter creation error: {exc}"
         logger.error(f"Session {session_id}: {error_msg}")
         session.status     = SessionStatus.FAILED
         session.last_error = error_msg[:2000]
         await db.commit()
         raise HTTPException(status_code=502, detail=error_msg)
+
+    await evaluation_capture.write_finalization_artifact(
+        session_id,
+        finalization_attempt_id,
+        "erp_response.json",
+        encounter,
+    )
 
     if not encounter:
         error_msg = "Failed to create encounter in ERPNext — empty response received."
@@ -856,6 +947,15 @@ async def finalize_session(session_id: str, db: AsyncSession = Depends(get_db)):
     session.erp_encounter_id = encounter_id
     session.last_error       = None
     await db.commit()
+    await evaluation_capture.append_event(
+        session_id,
+        "finalization_completed",
+        {
+            "attempt_id": finalization_attempt_id,
+            "draft_revision": reviewed_revision,
+            "encounter_id": encounter_id,
+        },
+    )
 
     try:
         await _attach_draft_images_to_encounter(encounter_id, draft_data)
@@ -1039,6 +1139,24 @@ def _draft_revision(draft: Dict[str, Any]) -> int:
         return int(draft.get("_draft_revision") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _draft_value_at_path(draft: Dict[str, Any], path: str) -> tuple[bool, Any]:
+    """Read a PATCH-style dotted path without mutating the draft."""
+    current: Any = draft
+    for part in path.split("."):
+        if isinstance(current, dict):
+            if part not in current:
+                return False, None
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit():
+            index = int(part)
+            if index >= len(current):
+                return False, None
+            current = current[index]
+        else:
+            return False, None
+    return True, current
 
 
 def _batch_finalize_blockers(progress: Any, draft: Dict[str, Any]) -> List[str]:
@@ -1268,6 +1386,19 @@ async def _process_batch_audio_background(
     batch_key = f"batch_{batch_index}"
     batch_sections = list(AMBIENT_BATCH_GROUPS.get(batch_index, []))
     batch_total = len(batch_sections)
+    batch_started = time.perf_counter()
+
+    await evaluation_capture.capture_batch_audio(
+        session_id=session_id,
+        batch_index=batch_index,
+        job_id=job_id,
+        audio_bytes=audio_bytes,
+        metadata={
+            "batch_revision": batch_revision,
+            "language_requested": language,
+            "mode": mode,
+        },
+    )
 
     async def _update_progress(status: str, **updates: Any) -> bool:
         """Update only the current attempt; stale jobs become harmless."""
@@ -1302,15 +1433,34 @@ async def _process_batch_audio_background(
 
     try:
         if not await _update_progress("transcribing", sections_done=0, transcript_length=0, error=None):
+            await evaluation_capture.append_event(
+                session_id,
+                "batch_job_stale_before_transcription",
+                {"batch_index": batch_index, "job_id": job_id},
+            )
             return
 
+        asr_started = time.perf_counter()
         transcript = await transcribe_audio(
             audio_bytes,
             language=language,
             initial_prompt=WHISPER_BATCH_PROMPTS.get(batch_index, WHISPER_AMBIENT_PROMPT),
         )
+        asr_seconds = time.perf_counter() - asr_started
         if not transcript or not transcript.strip():
             raise RuntimeError("speech-to-text returned an empty transcript")
+        await evaluation_capture.write_job_artifact(
+            session_id,
+            batch_index,
+            job_id,
+            "asr_transcript.json",
+            {
+                "transcript": transcript,
+                "language_requested": language,
+                "duration_seconds": round(asr_seconds, 6),
+                "completed_at": datetime.utcnow().isoformat(),
+            },
+        )
         logger.info("Batch %s STT complete for session=%s: len=%s", batch_index, session_id, len(transcript))
 
         if not await _update_progress(
@@ -1335,11 +1485,64 @@ async def _process_batch_audio_background(
             except Exception as poll_err:
                 logger.debug("Progress update callback error: %s", poll_err)
 
-        batch_results = await llm_service.extract_batch_transcript(
+        extraction_started = time.perf_counter()
+        trace_token = begin_llm_trace(session_id, batch_index, job_id)
+        extraction_error: Optional[Exception] = None
+        try:
+            batch_results = await llm_service.extract_batch_transcript(
+                batch_index,
+                transcript,
+                on_section_done=_on_sec_done,
+            )
+        except Exception as exc:
+            extraction_error = exc
+            batch_results = {}
+        finally:
+            llm_trace = end_llm_trace(trace_token)
+        extraction_seconds = time.perf_counter() - extraction_started
+
+        await evaluation_capture.write_job_artifact(
+            session_id,
             batch_index,
-            transcript,
-            on_section_done=_on_sec_done,
+            job_id,
+            "llm_trace.json",
+            {"entries": llm_trace},
         )
+        await evaluation_capture.write_job_artifact(
+            session_id,
+            batch_index,
+            job_id,
+            "segmented_transcripts.json",
+            batch_results.get("_raw_section_transcripts") or {},
+        )
+        await evaluation_capture.write_job_artifact(
+            session_id,
+            batch_index,
+            job_id,
+            "extracted_sections.json",
+            {
+                "sections": {
+                    section: batch_results[section]
+                    for section in batch_sections
+                    if section in batch_results
+                },
+                "section_statuses": batch_results.get("_section_statuses") or {},
+                "batch_error": batch_results.get("_batch_error"),
+            },
+        )
+        await evaluation_capture.write_job_artifact(
+            session_id,
+            batch_index,
+            job_id,
+            "timings.json",
+            {
+                "asr_seconds": round(asr_seconds, 6),
+                "extraction_seconds": round(extraction_seconds, 6),
+                "elapsed_seconds_at_extraction_end": round(time.perf_counter() - batch_started, 6),
+            },
+        )
+        if extraction_error is not None:
+            raise extraction_error
         if batch_results.get("_batch_error"):
             raise RuntimeError(str(batch_results["_batch_error"]))
 
@@ -1444,6 +1647,30 @@ async def _process_batch_audio_background(
             _refresh_session_processing_state(session)
             await write_db.commit()
 
+        await evaluation_capture.write_job_artifact(
+            session_id,
+            batch_index,
+            job_id,
+            "committed_draft.json",
+            {
+                "draft_revision": next_revision,
+                "draft": current,
+                "committed_at": datetime.utcnow().isoformat(),
+            },
+        )
+        await evaluation_capture.append_event(
+            session_id,
+            "batch_job_completed",
+            {
+                "batch_index": batch_index,
+                "job_id": job_id,
+                "batch_revision": batch_revision,
+                "draft_revision": next_revision,
+                "total_seconds": round(time.perf_counter() - batch_started, 6),
+                "requires_review": requires_review,
+            },
+        )
+
         logger.info(
             "Batch %s job %s completed for session=%s: %s mapped sections",
             batch_index,
@@ -1465,6 +1692,18 @@ async def _process_batch_audio_background(
             await _update_progress("failed", error=str(exc), failed_at=datetime.utcnow().isoformat())
         except Exception:
             logger.exception("Unable to persist Batch %s failure state", batch_index)
+        await evaluation_capture.write_job_artifact(
+            session_id,
+            batch_index,
+            job_id,
+            "failure.json",
+            {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "failed_at": datetime.utcnow().isoformat(),
+                "total_seconds": round(time.perf_counter() - batch_started, 6),
+            },
+        )
 
 
 

@@ -1,0 +1,67 @@
+{
+  "prediction_version": "1.0.0",
+  "description": "Reference prediction file demonstrating the evaluator contract. Batch 2 intentionally preserves one ASR substitution while extracting the intended Pulse value.",
+  "predictions": [
+    {
+      "case_id": "synthetic_batch_1_history",
+      "observed_transcript": "The patient reports burning urination for five days and no fever. Hypertension is an old active condition. Currently taking amlodipine 5 milligrams once daily. No known drug allergies. The father has diabetes.",
+      "facts": [
+        {"section": "chief_complaint", "concept": "complaint", "entity": "burning urination", "attribute": "present", "value": true, "qualifiers": {"temporality": "current", "negated": false}, "source_kind": "explicit", "evidence": "burning urination"},
+        {"section": "chief_complaint", "concept": "complaint", "entity": "burning urination", "attribute": "duration", "value": "5 days", "qualifiers": {"temporality": "current", "negated": false}, "source_kind": "explicit", "evidence": "burning urination for five days"},
+        {"section": "anamnesis", "concept": "symptom", "entity": "fever", "attribute": "present", "value": false, "qualifiers": {"temporality": "current", "negated": true}, "source_kind": "explicit", "evidence": "no fever"},
+        {"section": "past_medical_history", "concept": "condition", "entity": "hypertension", "attribute": "status", "value": "active", "qualifiers": {"temporality": "historical_and_current", "negated": false}, "source_kind": "explicit", "evidence": "Hypertension is an old active condition"},
+        {"section": "medication_history", "concept": "medication", "entity": "amlodipine", "attribute": "dose", "value": "5 mg", "qualifiers": {"status": "current"}, "source_kind": "explicit", "evidence": "amlodipine 5 milligrams"},
+        {"section": "medication_history", "concept": "medication", "entity": "amlodipine", "attribute": "frequency", "value": "once daily", "qualifiers": {"status": "current"}, "source_kind": "explicit", "evidence": "amlodipine 5 milligrams once daily"},
+        {"section": "allergy_history", "concept": "allergy", "entity": "drug", "attribute": "known", "value": false, "qualifiers": {"negated": true}, "source_kind": "explicit", "evidence": "No known drug allergies"},
+        {"section": "family_history_detailed", "concept": "family_condition", "entity": "father", "attribute": "condition", "value": "diabetes", "qualifiers": {"subject": "family"}, "source_kind": "explicit", "evidence": "father has diabetes"}
+      ],
+      "erp_payload": {
+        "chief_complaint": "Burning urination — five days",
+        "medication_history": "Amlodipine 5 mg once daily",
+        "allergies": "No known drug allergies",
+        "family_history": "Father: diabetes"
+      }
+    },
+    {
+      "case_id": "synthetic_batch_2_exam_pulse",
+      "observed_transcript": "Blood pressure is 128 over 82. There is no pedal edema. Pulse diagnosis: CVS mild Vata and mild Pitta; LI mild Pitta; SI moderate Kapha; LISI severe Vata; RT mild to moderate Bitta.",
+      "facts": [
+        {"section": "vitals_anthropometry", "concept": "vital", "entity": "blood_pressure", "attribute": "value", "value": "128/82", "qualifiers": {}, "source_kind": "explicit", "evidence": "Blood pressure is 128 over 82"},
+        {"section": "general_examination", "concept": "finding", "entity": "pedal_edema", "attribute": "present", "value": false, "qualifiers": {"negated": true}, "source_kind": "explicit", "evidence": "no pedal edema"},
+        {"section": "pulse_diagnosis", "concept": "system_dosha", "entity": "CVS", "attribute": "vata", "value": "mild", "qualifiers": {}, "source_kind": "explicit", "evidence": "CVS mild Vata and mild Pitta"},
+        {"section": "pulse_diagnosis", "concept": "system_dosha", "entity": "CVS", "attribute": "pitta", "value": "mild", "qualifiers": {}, "source_kind": "explicit", "evidence": "CVS mild Vata and mild Pitta"},
+        {"section": "pulse_diagnosis", "concept": "system_dosha", "entity": "LI", "attribute": "pitta", "value": "mild", "qualifiers": {}, "source_kind": "explicit", "evidence": "LI mild Pitta"},
+        {"section": "pulse_diagnosis", "concept": "system_dosha", "entity": "SI", "attribute": "kapha", "value": "moderate", "qualifiers": {}, "source_kind": "explicit", "evidence": "SI moderate Kapha"},
+        {"section": "pulse_diagnosis", "concept": "system_dosha", "entity": "LISI", "attribute": "vata", "value": "severe", "qualifiers": {}, "source_kind": "explicit", "evidence": "LISI severe Vata"},
+        {"section": "pulse_diagnosis", "concept": "system_dosha", "entity": "RT", "attribute": "pitta", "value": "mild_moderate", "qualifiers": {}, "source_kind": "explicit", "evidence": "RT mild to moderate Bitta"}
+      ],
+      "erp_payload": {
+        "bp": "128/82",
+        "general_examination": "Pedal edema: absent",
+        "sgp_pulse_table": [
+          {"system": "CVS", "vata": "mild", "pitta": "mild", "kapha": null},
+          {"system": "LI", "vata": null, "pitta": "mild", "kapha": null},
+          {"system": "SI", "vata": null, "pitta": null, "kapha": "moderate"},
+          {"system": "LISI", "vata": "severe", "pitta": null, "kapha": null},
+          {"system": "RT", "vata": null, "pitta": "mild_moderate", "kapha": null}
+        ]
+      }
+    },
+    {
+      "case_id": "synthetic_batch_3_plan",
+      "observed_transcript": "Prescribe Greeva Vasti for five sessions. Virechana was advised in clinic but was not done. Gandusham at home once daily. Naukasana daily for ten minutes. Do not prescribe Abhyanga.",
+      "facts": [
+        {"section": "panchakarma", "concept": "procedure", "entity": "Greeva Vasti", "attribute": "session_count", "value": 5, "qualifiers": {"status": "prescribed", "setting": "clinic"}, "source_kind": "explicit", "evidence": "Greeva Vasti for five sessions"},
+        {"section": "panchakarma", "concept": "procedure", "entity": "Virechana", "attribute": "status", "value": "not_done", "qualifiers": {"setting": "clinic"}, "source_kind": "explicit", "evidence": "Virechana was advised in clinic but was not done"},
+        {"section": "detox_procedures", "concept": "home_detox", "entity": "Gandusham", "attribute": "frequency", "value": "once daily", "qualifiers": {"setting": "home", "status": "prescribed"}, "source_kind": "explicit", "evidence": "Gandusham at home once daily"},
+        {"section": "exercises_yoga", "concept": "exercise", "entity": "Naukasana", "attribute": "duration", "value": "10 minutes daily", "qualifiers": {"status": "prescribed"}, "source_kind": "explicit", "evidence": "Naukasana daily for ten minutes"},
+        {"section": "panchakarma", "concept": "procedure", "entity": "Abhyanga", "attribute": "prescribed", "value": false, "qualifiers": {"negated": true}, "source_kind": "explicit", "evidence": "Do not prescribe Abhyanga"}
+      ],
+      "erp_payload": {
+        "panchakarma": "Greeva Vasti x5\nVirechana not done in clinic",
+        "detox_procedures": "Gandusham — once daily at home",
+        "exercises_yoga": "Naukasana — 10 minutes daily"
+      }
+    }
+  ]
+}

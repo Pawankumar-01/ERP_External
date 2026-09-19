@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Dict, Optional
 
 import httpx
@@ -38,6 +39,7 @@ from app.casesheet.clinical_intelligence import (
     is_protocol_section,
 )
 from app.config.settings import settings
+from app.casesheet.evaluation_capture import record_llm_trace
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +61,27 @@ GROQ_MODELS = [GROQ_FALLBACK_MODEL]
 GEMINI_BATCH_MAX_TOKENS = int(os.getenv("GEMINI_BATCH_MAX_TOKENS", "6000"))
 GEMINI_PULSE_MAX_TOKENS = int(os.getenv("GEMINI_PULSE_MAX_TOKENS", "5000"))
 
+# Long-running tasks such as vision/composition can retain the broader timeout,
+# but a batch section must not hold every later clinical section hostage to an
+# overloaded provider for a full minute.  The batch path has a dedicated,
+# environment-overridable deadline and immediately tries the next model.
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+LLM_BATCH_TIMEOUT = min(
+    LLM_TIMEOUT,
+    max(5.0, float(os.getenv("CASE_LLM_BATCH_TIMEOUT_SECONDS", "25"))),
+)
 DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS_DEFAULT", "1200"))
-LLM_CONCURRENCY = max(1, int(os.getenv("CASE_LLM_CONCURRENCY", "1")))
-LLM_TRANSIENT_RETRIES = max(0, int(os.getenv("CASE_LLM_TRANSIENT_RETRIES", "1")))
+# Each section is independent once the segmenter has produced source-backed
+# evidence.  Two concurrent calls nearly halve normal batch wall-clock time
+# without creating the quota bursts caused by unrestricted fan-out.
+LLM_CONCURRENCY = max(1, int(os.getenv("CASE_LLM_CONCURRENCY", "2")))
+# A 503 "high demand" retry is normally another slow 503.  Fail over instead;
+# operators can explicitly restore retries if a provider begins returning a
+# useful Retry-After value.
+LLM_TRANSIENT_RETRIES = max(0, int(os.getenv("CASE_LLM_TRANSIENT_RETRIES", "0")))
+LLM_CIRCUIT_COOLDOWN = max(
+    5.0, float(os.getenv("CASE_LLM_CIRCUIT_COOLDOWN_SECONDS", "60"))
+)
 # Diagnostic switch. The response contains clinical data, so production may
 # disable it after mapping investigation with CASE_LOG_LLM_OUTPUTS=false.
 LOG_LLM_OUTPUTS = os.getenv("CASE_LOG_LLM_OUTPUTS", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -111,14 +130,58 @@ def _pulse_source_is_anchored(code: str, phrase: str) -> bool:
 class LLMService:
 
     def __init__(self):
-        # One request at a time is intentional for clinical batch extraction:
-        # it prevents the six Batch-2 extractors from exhausting a shared
-        # account's rate limit before the Pulse call gets its turn.
+        # The bounded semaphore applies to the whole provider chain, so a
+        # short failure cannot generate an unbounded fallback storm.  The
+        # section tasks themselves are concurrent after segmentation.
         self._semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
+        # Provider/model -> monotonic time at which the model may be tried
+        # again.  This is deliberately model-scoped: a 3.5 outage must not
+        # prevent a healthy 3.6 or Groq fallback from serving the same batch.
+        self._circuit_open_until: Dict[tuple[str, str], float] = {}
+
+    @staticmethod
+    def _is_batch_mapping_call(trace_label: Optional[str]) -> bool:
+        """Whether this request is on the time-sensitive recorded-batch path."""
+        return bool(trace_label) and (
+            trace_label.startswith("section:")
+            or trace_label.startswith("middleware_segmenter_batch:")
+        )
+
+    def _is_model_quarantined(self, provider: str, model: str) -> bool:
+        key = (provider, model)
+        until = self._circuit_open_until.get(key, 0.0)
+        now = time.monotonic()
+        if until <= now:
+            self._circuit_open_until.pop(key, None)
+            return False
+        logger.info(
+            "Skipping quarantined %s model %s for %.1fs after a transient provider failure",
+            provider,
+            model,
+            until - now,
+        )
+        return True
+
+    def _quarantine_model(self, provider: str, model: str, reason: str) -> None:
+        until = time.monotonic() + LLM_CIRCUIT_COOLDOWN
+        self._circuit_open_until[(provider, model)] = until
+        logger.warning(
+            "Quarantining %s model %s for %.0fs after %s; using the next provider/model",
+            provider,
+            model,
+            LLM_CIRCUIT_COOLDOWN,
+            reason,
+        )
+
+    def _clear_model_quarantine(self, provider: str, model: str) -> None:
+        self._circuit_open_until.pop((provider, model), None)
 
     @staticmethod
     def _log_llm_output(label: str, stage: str, payload: Any) -> None:
         """Log an inspectable model response without ever logging credentials."""
+        # Evaluation capture is independent of ordinary production logging and
+        # buffers the exact payload until the owning batch job writes it.
+        record_llm_trace(label, stage, payload)
         if not LOG_LLM_OUTPUTS:
             return
         try:
@@ -424,9 +487,15 @@ Rules:
             logger.warning("Invalid batch_index: %s", batch_index)
             return {"_batch_error": f"invalid batch index: {batch_index}"}
 
+        batch_started = time.perf_counter()
         segmented_map = await self._preprocess_and_segment_batch_transcript(batch_index, transcript)
         if not isinstance(segmented_map, dict) or segmented_map.get("_error"):
             return {"_batch_error": "segmenter returned no valid JSON"}
+        logger.info(
+            "Batch %s segmenter completed in %.2fs",
+            batch_index,
+            time.perf_counter() - batch_started,
+        )
 
         results: Dict[str, Any] = {}
         raw_section_transcripts: Dict[str, str] = {}
@@ -457,8 +526,17 @@ Rules:
             snippets[section] = snippet
 
         async def _extract_one(section: str, snippet: str) -> tuple[str, Any, Dict[str, str]]:
+            section_started = time.perf_counter()
             data = await self.extract_section(section, snippet)
+            elapsed = time.perf_counter() - section_started
             if isinstance(data, dict) and data.get("_error"):
+                logger.info(
+                    "Batch %s section %s completed in %.2fs with provider failure=%s",
+                    batch_index,
+                    section,
+                    elapsed,
+                    data.get("_error"),
+                )
                 # Only Pulse has a deterministic, source-grounded fallback.
                 # A generic section fallback is merely raw text and must never
                 # be represented as extracted clinical data.
@@ -466,11 +544,29 @@ Rules:
                     return section, data, {"status": "mapped_needs_review", "error": str(data.get("_error"))}
                 return section, {}, {"status": "failed", "error": str(data.get("_error"))}
             if not data or (isinstance(data, dict) and data.get("_reprompt")):
+                logger.info(
+                    "Batch %s section %s completed in %.2fs with no usable mapping",
+                    batch_index,
+                    section,
+                    elapsed,
+                )
                 return section, {}, {"status": "needs_review"}
             if isinstance(data, dict) and data.get("_quality_issues"):
                 issues = data.get("_quality_issues")
                 detail = "; ".join(str(issue) for issue in issues) if isinstance(issues, list) else str(issues)
+                logger.info(
+                    "Batch %s section %s completed in %.2fs and needs review",
+                    batch_index,
+                    section,
+                    elapsed,
+                )
                 return section, data, {"status": "mapped_needs_review", "error": detail}
+            logger.info(
+                "Batch %s section %s mapped in %.2fs",
+                batch_index,
+                section,
+                elapsed,
+            )
             return section, data, {"status": "mapped"}
 
         tasks = [asyncio.create_task(_extract_one(section, snippet)) for section, snippet in snippets.items()]
@@ -493,6 +589,12 @@ Rules:
 
         results["_raw_section_transcripts"] = raw_section_transcripts
         results["_section_statuses"] = section_statuses
+        logger.info(
+            "Batch %s extraction completed in %.2fs: %s source-backed section calls",
+            batch_index,
+            time.perf_counter() - batch_started,
+            len(snippets),
+        )
         return results
 
     @staticmethod
@@ -883,10 +985,17 @@ Rules:
         if groq_key:
             providers.append(("Groq", GROQ_URL, {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}, GROQ_MODELS))
 
+        timeout_seconds = (
+            LLM_BATCH_TIMEOUT
+            if self._is_batch_mapping_call(trace_label)
+            else LLM_TIMEOUT
+        )
         async with self._semaphore:
-            async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
                 for provider, url, headers, models in providers:
                     for model in models:
+                        if self._is_model_quarantined(provider, model):
+                            continue
                         payload = {
                             "model": model,
                             "messages": self._prepare_messages_for_model(messages, model),
@@ -894,16 +1003,47 @@ Rules:
                             "max_tokens": int(max_tokens),
                             "response_format": {"type": "json_object"},
                         }
+                        capture_label = trace_label or "llm_call"
+                        record_llm_trace(
+                            capture_label,
+                            "provider_request",
+                            {
+                                "provider": provider,
+                                "model": model,
+                                "timeout_seconds": timeout_seconds,
+                                "payload": payload,
+                            },
+                        )
                         try:
+                            request_started = time.perf_counter()
                             response = await self._post_with_backoff(
                                 client, url, headers, payload, provider, model
                             )
+                            request_elapsed = time.perf_counter() - request_started
                             if response.status_code in (400, 404, 429, 500, 502, 503, 504):
+                                record_llm_trace(
+                                    capture_label,
+                                    "provider_http_error",
+                                    {
+                                        "provider": provider,
+                                        "model": model,
+                                        "status_code": response.status_code,
+                                        "elapsed_seconds": request_elapsed,
+                                        "response_body": response.text,
+                                    },
+                                )
+                                if response.status_code in (429, 500, 502, 503, 504):
+                                    self._quarantine_model(
+                                        provider,
+                                        model,
+                                        f"HTTP {response.status_code}",
+                                    )
                                 logger.warning(
-                                    "%s error %s for model %s: %s",
+                                    "%s error %s for model %s after %.2fs: %s",
                                     provider,
                                     response.status_code,
                                     model,
+                                    request_elapsed,
                                     response.text[:300],
                                 )
                                 continue
@@ -914,6 +1054,15 @@ Rules:
                             if content:
                                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
                             if not content:
+                                record_llm_trace(
+                                    capture_label,
+                                    "provider_empty_response",
+                                    {
+                                        "provider": provider,
+                                        "model": model,
+                                        "elapsed_seconds": request_elapsed,
+                                    },
+                                )
                                 logger.warning("%s returned an empty completion for model %s", provider, model)
                                 continue
                             if trace_label:
@@ -935,18 +1084,65 @@ Rules:
                                     provider,
                                     model,
                                 )
+                                record_llm_trace(
+                                    capture_label,
+                                    "provider_invalid_json",
+                                    {"provider": provider, "model": model},
+                                )
                                 continue
+                            self._clear_model_quarantine(provider, model)
                             usage = data.get("usage") or {}
+                            record_llm_trace(
+                                capture_label,
+                                "provider_success",
+                                {
+                                    "provider": provider,
+                                    "model": model,
+                                    "elapsed_seconds": request_elapsed,
+                                    "usage": usage,
+                                },
+                            )
                             logger.info(
-                                "LLM extraction succeeded via %s (%s); usage prompt=%s completion=%s total=%s",
+                                "LLM extraction succeeded via %s (%s) in %.2fs; usage prompt=%s completion=%s total=%s",
                                 provider,
                                 model,
+                                request_elapsed,
                                 usage.get("prompt_tokens"),
                                 usage.get("completion_tokens"),
                                 usage.get("total_tokens"),
                             )
                             return content
+                        except httpx.TimeoutException as err:
+                            record_llm_trace(
+                                capture_label,
+                                "provider_timeout",
+                                {
+                                    "provider": provider,
+                                    "model": model,
+                                    "timeout_seconds": timeout_seconds,
+                                    "error": str(err),
+                                },
+                            )
+                            self._quarantine_model(provider, model, f"timeout after {timeout_seconds:.0f}s")
+                            logger.warning(
+                                "%s request timed out for model %s after %.2fs: %s",
+                                provider,
+                                model,
+                                time.perf_counter() - request_started,
+                                err,
+                            )
+                            continue
                         except (httpx.HTTPError, ValueError, IndexError, TypeError) as err:
+                            record_llm_trace(
+                                capture_label,
+                                "provider_exception",
+                                {
+                                    "provider": provider,
+                                    "model": model,
+                                    "error_type": type(err).__name__,
+                                    "error": str(err),
+                                },
+                            )
                             logger.warning("%s request failed for model %s: %s", provider, model, err)
                             continue
         raise RuntimeError("Gemini primary/fallback and Groq fallback all failed or were rate-limited.")

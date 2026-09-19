@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     #    Protocol"). JSON keys are never renamed, only display text.
     CASE_APPLY_NOMENCLATURE: bool = True
 
+    # Disabled-by-default capture of private evaluation artifacts. The capture
+    # directory is never mounted as a FastAPI static directory.
+    CASE_EVAL_CAPTURE_ENABLED: bool = False
+    CASE_EVAL_CAPTURE_ROOT: str = "var/casesheet_evaluation"
+    CASE_EVAL_CAPTURE_MAX_AUDIO_MB: int = 100
+
 
 
 settings = Settings()

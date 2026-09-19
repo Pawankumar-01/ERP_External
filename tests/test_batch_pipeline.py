@@ -1,4 +1,5 @@
 import asyncio
+import time
 import unittest
 
 from app.casesheet.clinical_intelligence import (
@@ -108,6 +109,27 @@ class RepairingPulseLLM(LLMService):
         return self.responses.pop(0)
 
 
+class ParallelBatchLLM(LLMService):
+    """Exercises the bounded concurrent section scheduler without a provider."""
+
+    async def _preprocess_and_segment_batch_transcript(self, batch_index, transcript):
+        return {
+            "vitals_anthropometry": "BP 120 over 80.",
+            "pulse_diagnosis": "CVS mild P.",
+            "general_examination": "",
+            "systemic_examination": "",
+            "investigation_reports": "",
+            "ayurvedic_assessment_extended": "",
+        }
+
+    async def extract_section(self, section, transcript):
+        # Mirror a provider call: this test verifies that the service-level
+        # semaphore permits two independent sections simultaneously.
+        async with self._semaphore:
+            await asyncio.sleep(0.06)
+        return {"source_section": section}
+
+
 class BatchPipelineTests(unittest.TestCase):
     def test_pulse_sample_recovers_all_terse_rows_without_false_is(self):
         parsed = normalize_pulse_diagnosis({}, RAW_PULSE_SAMPLE)
@@ -204,6 +226,27 @@ class BatchPipelineTests(unittest.TestCase):
         )
         self.assertEqual(result["_raw_section_transcripts"]["pulse_diagnosis"], "CVS mild P, LI mild K.")
         self.assertEqual(result["_section_statuses"]["general_examination"]["status"], "not_dictated")
+
+    def test_batch_sections_run_with_bounded_parallelism(self):
+        service = ParallelBatchLLM()
+        # Make the expected clinical batch limit explicit, independent of a
+        # developer's local environment variable.
+        service._semaphore = asyncio.Semaphore(2)
+        started = time.perf_counter()
+        result = asyncio.run(service.extract_batch_transcript(2, "BP 120 over 80. CVS mild P."))
+        elapsed = time.perf_counter() - started
+
+        self.assertLess(elapsed, 0.11)  # serial execution takes roughly 0.12s
+        self.assertEqual(result["_section_statuses"]["vitals_anthropometry"]["status"], "mapped")
+        self.assertEqual(result["_section_statuses"]["pulse_diagnosis"]["status"], "mapped")
+
+    def test_transient_model_circuit_is_model_scoped(self):
+        service = LLMService()
+        service._quarantine_model("Gemini", "gemini-3.5-flash", "HTTP 503")
+
+        self.assertTrue(service._is_model_quarantined("Gemini", "gemini-3.5-flash"))
+        self.assertFalse(service._is_model_quarantined("Gemini", "gemini-3.6-flash"))
+        self.assertFalse(service._is_model_quarantined("Groq", "qwen/qwen3.8-27b"))
 
     def test_segment_must_be_a_contiguous_source_excerpt(self):
         raw = "CVS mild P, RB moderate VK."

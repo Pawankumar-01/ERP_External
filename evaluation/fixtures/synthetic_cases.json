@@ -1,0 +1,284 @@
+{
+  "dataset_version": "1.0.0",
+  "description": "Synthetic three-batch dictations for deterministic casesheet evaluation. No real patient information is present.",
+  "cases": [
+    {
+      "case_id": "synthetic_batch_1_history",
+      "batch_index": 1,
+      "data_classification": "synthetic",
+      "gold_transcript": "The patient reports burning urination for five days and no fever. Hypertension is an old active condition. Currently taking amlodipine 5 milligrams once daily. No known drug allergies. The father has diabetes.",
+      "expected_facts": [
+        {
+          "section": "chief_complaint",
+          "concept": "complaint",
+          "entity": "burning urination",
+          "attribute": "present",
+          "value": true,
+          "qualifiers": {"temporality": "current", "negated": false},
+          "source_kind": "explicit",
+          "evidence": "burning urination",
+          "critical": false
+        },
+        {
+          "section": "chief_complaint",
+          "concept": "complaint",
+          "entity": "burning urination",
+          "attribute": "duration",
+          "value": "5 days",
+          "qualifiers": {"temporality": "current", "negated": false},
+          "source_kind": "explicit",
+          "evidence": "burning urination for five days",
+          "critical": false
+        },
+        {
+          "section": "anamnesis",
+          "concept": "symptom",
+          "entity": "fever",
+          "attribute": "present",
+          "value": false,
+          "qualifiers": {"temporality": "current", "negated": true},
+          "source_kind": "explicit",
+          "evidence": "no fever",
+          "critical": true
+        },
+        {
+          "section": "past_medical_history",
+          "concept": "condition",
+          "entity": "hypertension",
+          "attribute": "status",
+          "value": "active",
+          "qualifiers": {"temporality": "historical_and_current", "negated": false},
+          "source_kind": "explicit",
+          "evidence": "Hypertension is an old active condition",
+          "critical": true
+        },
+        {
+          "section": "medication_history",
+          "concept": "medication",
+          "entity": "amlodipine",
+          "attribute": "dose",
+          "value": "5 mg",
+          "qualifiers": {"status": "current"},
+          "source_kind": "explicit",
+          "evidence": "amlodipine 5 milligrams",
+          "critical": true
+        },
+        {
+          "section": "medication_history",
+          "concept": "medication",
+          "entity": "amlodipine",
+          "attribute": "frequency",
+          "value": "once daily",
+          "qualifiers": {"status": "current"},
+          "source_kind": "explicit",
+          "evidence": "amlodipine 5 milligrams once daily",
+          "critical": true
+        },
+        {
+          "section": "allergy_history",
+          "concept": "allergy",
+          "entity": "drug",
+          "attribute": "known",
+          "value": false,
+          "qualifiers": {"negated": true},
+          "source_kind": "explicit",
+          "evidence": "No known drug allergies",
+          "critical": true
+        },
+        {
+          "section": "family_history_detailed",
+          "concept": "family_condition",
+          "entity": "father",
+          "attribute": "condition",
+          "value": "diabetes",
+          "qualifiers": {"subject": "family"},
+          "source_kind": "explicit",
+          "evidence": "father has diabetes",
+          "critical": false
+        }
+      ],
+      "expected_erp_assertions": [
+        {"path": "chief_complaint", "operator": "contains", "value": "burning urination", "critical": true},
+        {"path": "medication_history", "operator": "contains", "value": "amlodipine 5 mg", "critical": true},
+        {"path": "allergies", "operator": "contains", "value": "no known drug allergies", "critical": true},
+        {"path": "family_history", "operator": "contains", "value": "father: diabetes", "critical": false}
+      ]
+    },
+    {
+      "case_id": "synthetic_batch_2_exam_pulse",
+      "batch_index": 2,
+      "data_classification": "synthetic",
+      "gold_transcript": "Blood pressure is 128 over 82. There is no pedal edema. Pulse diagnosis: CVS mild Vata and mild Pitta; LI mild Pitta; SI moderate Kapha; LISI severe Vata; RT mild to moderate Pitta.",
+      "expected_facts": [
+        {
+          "section": "vitals_anthropometry",
+          "concept": "vital",
+          "entity": "blood_pressure",
+          "attribute": "value",
+          "value": "128/82",
+          "qualifiers": {},
+          "source_kind": "explicit",
+          "evidence": "Blood pressure is 128 over 82",
+          "critical": true
+        },
+        {
+          "section": "general_examination",
+          "concept": "finding",
+          "entity": "pedal_edema",
+          "attribute": "present",
+          "value": false,
+          "qualifiers": {"negated": true},
+          "source_kind": "explicit",
+          "evidence": "no pedal edema",
+          "critical": true
+        },
+        {
+          "section": "pulse_diagnosis",
+          "concept": "system_dosha",
+          "entity": "CVS",
+          "attribute": "vata",
+          "value": "mild",
+          "qualifiers": {},
+          "source_kind": "explicit",
+          "evidence": "CVS mild Vata and mild Pitta",
+          "critical": true
+        },
+        {
+          "section": "pulse_diagnosis",
+          "concept": "system_dosha",
+          "entity": "CVS",
+          "attribute": "pitta",
+          "value": "mild",
+          "qualifiers": {},
+          "source_kind": "explicit",
+          "evidence": "CVS mild Vata and mild Pitta",
+          "critical": true
+        },
+        {
+          "section": "pulse_diagnosis",
+          "concept": "system_dosha",
+          "entity": "LI",
+          "attribute": "pitta",
+          "value": "mild",
+          "qualifiers": {},
+          "source_kind": "explicit",
+          "evidence": "LI mild Pitta",
+          "critical": true
+        },
+        {
+          "section": "pulse_diagnosis",
+          "concept": "system_dosha",
+          "entity": "SI",
+          "attribute": "kapha",
+          "value": "moderate",
+          "qualifiers": {},
+          "source_kind": "explicit",
+          "evidence": "SI moderate Kapha",
+          "critical": true
+        },
+        {
+          "section": "pulse_diagnosis",
+          "concept": "system_dosha",
+          "entity": "LISI",
+          "attribute": "vata",
+          "value": "severe",
+          "qualifiers": {},
+          "source_kind": "explicit",
+          "evidence": "LISI severe Vata",
+          "critical": true
+        },
+        {
+          "section": "pulse_diagnosis",
+          "concept": "system_dosha",
+          "entity": "RT",
+          "attribute": "pitta",
+          "value": "mild_moderate",
+          "qualifiers": {},
+          "source_kind": "explicit",
+          "evidence": "RT mild to moderate Pitta",
+          "critical": true
+        }
+      ],
+      "expected_erp_assertions": [
+        {"path": "bp", "operator": "equals", "value": "128/82", "critical": true},
+        {"path": "general_examination", "operator": "contains", "value": "pedal edema: absent", "critical": true},
+        {"path": "sgp_pulse_table[system=CVS].vata", "operator": "equals", "value": "mild", "critical": true},
+        {"path": "sgp_pulse_table[system=CVS].pitta", "operator": "equals", "value": "mild", "critical": true},
+        {"path": "sgp_pulse_table[system=LI].pitta", "operator": "equals", "value": "mild", "critical": true},
+        {"path": "sgp_pulse_table[system=SI].kapha", "operator": "equals", "value": "moderate", "critical": true},
+        {"path": "sgp_pulse_table[system=LISI].vata", "operator": "equals", "value": "severe", "critical": true},
+        {"path": "sgp_pulse_table[system=RT].pitta", "operator": "equals", "value": "mild_moderate", "critical": true}
+      ]
+    },
+    {
+      "case_id": "synthetic_batch_3_plan",
+      "batch_index": 3,
+      "data_classification": "synthetic",
+      "gold_transcript": "Prescribe Greeva Vasti for five sessions. Virechana was advised in clinic but was not done. Gandusham at home once daily. Naukasana daily for ten minutes. Do not prescribe Abhyanga.",
+      "expected_facts": [
+        {
+          "section": "panchakarma",
+          "concept": "procedure",
+          "entity": "Greeva Vasti",
+          "attribute": "session_count",
+          "value": 5,
+          "qualifiers": {"status": "prescribed", "setting": "clinic"},
+          "source_kind": "explicit",
+          "evidence": "Greeva Vasti for five sessions",
+          "critical": true
+        },
+        {
+          "section": "panchakarma",
+          "concept": "procedure",
+          "entity": "Virechana",
+          "attribute": "status",
+          "value": "not_done",
+          "qualifiers": {"setting": "clinic"},
+          "source_kind": "explicit",
+          "evidence": "Virechana was advised in clinic but was not done",
+          "critical": true
+        },
+        {
+          "section": "detox_procedures",
+          "concept": "home_detox",
+          "entity": "Gandusham",
+          "attribute": "frequency",
+          "value": "once daily",
+          "qualifiers": {"setting": "home", "status": "prescribed"},
+          "source_kind": "explicit",
+          "evidence": "Gandusham at home once daily",
+          "critical": true
+        },
+        {
+          "section": "exercises_yoga",
+          "concept": "exercise",
+          "entity": "Naukasana",
+          "attribute": "duration",
+          "value": "10 minutes daily",
+          "qualifiers": {"status": "prescribed"},
+          "source_kind": "explicit",
+          "evidence": "Naukasana daily for ten minutes",
+          "critical": false
+        },
+        {
+          "section": "panchakarma",
+          "concept": "procedure",
+          "entity": "Abhyanga",
+          "attribute": "prescribed",
+          "value": false,
+          "qualifiers": {"negated": true},
+          "source_kind": "explicit",
+          "evidence": "Do not prescribe Abhyanga",
+          "critical": true
+        }
+      ],
+      "expected_erp_assertions": [
+        {"path": "panchakarma", "operator": "contains", "value": "Greeva Vasti x5", "critical": true},
+        {"path": "panchakarma", "operator": "contains", "value": "Virechana not done", "critical": true},
+        {"path": "panchakarma", "operator": "not_contains", "value": "Abhyanga", "critical": true},
+        {"path": "detox_procedures", "operator": "contains", "value": "Gandusham", "critical": true},
+        {"path": "exercises_yoga", "operator": "contains", "value": "Naukasana", "critical": false}
+      ]
+    }
+  ]
+}
