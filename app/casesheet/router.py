@@ -5,7 +5,7 @@ import re
 import time
 import uuid
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
@@ -1091,9 +1091,11 @@ def _merge_section_into_draft(current: dict, key: str, new_data: Any) -> None:
 # database receives a dedicated durable queue.  The job id/revision still lets
 # us reject duplicate uploads and, crucially, discard stale background writes.
 _ACTIVE_BATCH_STATUSES = frozenset({"queued", "transcribing", "extracting"})
-# "mapped_needs_review" = deterministic fallback data exists (regex rebuild)
-# but the LLM itself failed — the doctor must see it, so it counts as review.
-_REVIEW_SECTION_STATUSES = frozenset({"needs_review", "failed", "mapped_needs_review"})
+# Review states block finalization unless the doctor explicitly corrects the
+# affected section. "previous_preserved" means a failed retry retained old data.
+_REVIEW_SECTION_STATUSES = frozenset({
+    "needs_review", "failed", "mapped_needs_review", "previous_preserved",
+})
 
 
 def _batch_info(session: CasesheetSession, batch_key: str) -> Dict[str, Any]:
@@ -1141,6 +1143,82 @@ def _draft_revision(draft: Dict[str, Any]) -> int:
         return 0
 
 
+def _apply_batch_result_to_draft(
+    current: Dict[str, Any],
+    *,
+    batch_sections: List[str],
+    batch_results: Dict[str, Any],
+    batch_index: int,
+    job_id: str,
+    submitted_revision: int,
+    transcript: str,
+) -> tuple[Dict[str, Dict[str, Any]], int, str]:
+    """Atomically apply only usable candidates; never erase good prior data."""
+    raw_transcripts = current.setdefault("_raw_transcripts", {})
+    section_meta = current.setdefault("_section_meta", {})
+    if not isinstance(raw_transcripts, dict) or not isinstance(section_meta, dict):
+        raise RuntimeError("draft metadata has an invalid shape")
+
+    raw_segments = batch_results.get("_raw_section_transcripts") or {}
+    incoming_statuses = batch_results.get("_section_statuses") or {}
+    statuses: Dict[str, Dict[str, Any]] = {}
+    next_revision = _draft_revision(current) + 1
+    updated_at = datetime.now(timezone.utc).isoformat()
+
+    for section in batch_sections:
+        status_info = dict(incoming_statuses.get(section) or {"status": "not_dictated"})
+        segment = str(raw_segments.get(section) or "")
+        if _section_is_manually_newer(section_meta.get(section), submitted_revision):
+            status_info = {"status": "manual_preserved"}
+        elif (
+            status_info.get("status") in ("mapped", "mapped_needs_review")
+            and section in batch_results
+        ):
+            current[section] = batch_results[section]
+            raw_transcripts[section] = segment
+            section_meta[section] = {
+                "source": "batch",
+                "batch_index": batch_index,
+                "job_id": job_id,
+                "status": status_info.get("status"),
+                "error": status_info.get("error"),
+                "draft_revision": next_revision,
+                "updated_at": updated_at,
+            }
+        elif section in current:
+            # A failed/empty re-record is a candidate attempt, not a delete
+            # command. Keep the previous clinical value and canonical source,
+            # while making the unresolved attempt visible and blocking export.
+            candidate_status = str(status_info.get("status") or "failed")
+            status_info = {
+                "status": "previous_preserved",
+                "candidate_status": candidate_status,
+                "error": status_info.get("error")
+                or f"new attempt was {candidate_status}; previous value retained",
+            }
+            raw_transcripts[f"_candidate_{job_id}_{section}"] = segment
+        else:
+            # No prior value exists. Store the evidence/status so the UI and
+            # audit artifacts explain why the section is empty.
+            raw_transcripts[section] = segment
+            section_meta[section] = {
+                "source": "batch",
+                "batch_index": batch_index,
+                "job_id": job_id,
+                "status": status_info.get("status"),
+                "error": status_info.get("error"),
+                "draft_revision": next_revision,
+                "updated_at": updated_at,
+            }
+        statuses[section] = status_info
+
+    raw_key = f"_batch_{batch_index}_{job_id}_full"
+    raw_transcripts[raw_key] = transcript
+    raw_transcripts[f"_batch_{batch_index}_full"] = transcript
+    current["_draft_revision"] = next_revision
+    return statuses, next_revision, raw_key
+
+
 def _draft_value_at_path(draft: Dict[str, Any], path: str) -> tuple[bool, Any]:
     """Read a PATCH-style dotted path without mutating the draft."""
     current: Any = draft
@@ -1181,7 +1259,11 @@ def _batch_finalize_blockers(progress: Any, draft: Dict[str, Any]) -> List[str]:
             if state not in _REVIEW_SECTION_STATUSES:
                 continue
             meta = section_meta.get(section)
-            if isinstance(meta, dict) and meta.get("source") == "manual":
+            if (
+                isinstance(meta, dict)
+                and meta.get("source") == "manual"
+                and state != "previous_preserved"
+            ):
                 continue
             blockers.append(f"{section} requires review ({state})")
     return blockers
@@ -1570,44 +1652,20 @@ async def _process_batch_audio_background(
                 raise RuntimeError("casesheet draft is missing")
 
             current = dict(draft_row.draft or {})
-            raw_transcripts = current.setdefault("_raw_transcripts", {})
-            section_meta = current.setdefault("_section_meta", {})
             batch_runs = current.setdefault("_batch_runs", {})
-            if not isinstance(raw_transcripts, dict) or not isinstance(section_meta, dict):
-                raise RuntimeError("draft metadata has an invalid shape")
 
             progress = dict(session.processing_progress or {})
             job_info = dict(progress.get(batch_key) or {})
             submitted_revision = int(job_info.get("submitted_draft_revision") or 0)
-            raw_segments = batch_results.get("_raw_section_transcripts") or {}
-            statuses = batch_results.get("_section_statuses") or {}
-            current_revision = _draft_revision(current)
-            next_revision = current_revision + 1
-
-            for section in batch_sections:
-                status_info = dict(statuses.get(section) or {"status": "not_dictated"})
-                if _section_is_manually_newer(section_meta.get(section), submitted_revision):
-                    status_info = {"status": "manual_preserved"}
-                else:
-                    current.pop(section, None)
-                    if status_info.get("status") in ("mapped", "mapped_needs_review") and section in batch_results:
-                        current[section] = batch_results[section]
-                    raw_transcripts[section] = str(raw_segments.get(section) or "")
-                    section_meta[section] = {
-                        "source": "batch",
-                        "batch_index": batch_index,
-                        "job_id": job_id,
-                        "status": status_info.get("status"),
-                        "error": status_info.get("error"),
-                        "draft_revision": next_revision,
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }
-                statuses[section] = status_info
-
-            raw_key = f"_batch_{batch_index}_{job_id}_full"
-            raw_transcripts[raw_key] = transcript
-            raw_transcripts[f"_batch_{batch_index}_full"] = transcript
-            current["_draft_revision"] = next_revision
+            statuses, next_revision, raw_key = _apply_batch_result_to_draft(
+                current,
+                batch_sections=batch_sections,
+                batch_results=batch_results,
+                batch_index=batch_index,
+                job_id=job_id,
+                submitted_revision=submitted_revision,
+                transcript=transcript,
+            )
             apply_protocol_boundaries(current)
             salvage_cross_section_fields(current)
             draft_row.draft = current

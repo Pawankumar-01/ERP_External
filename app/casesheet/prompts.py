@@ -405,7 +405,7 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "chief_complaint": """\
+    "chief_complaint": BASE_RULES + """\
 You are an expert clinical AI extracting chief complaints from doctor dictation.
 
 Extraction Rules:
@@ -469,8 +469,13 @@ Expected JSON:
   ]
 }
 
-IMPORTANT: Return ONLY valid JSON matching the schema above.
-""",
+IMPORTANT:
+- Extract only facts explicitly stated by the doctor.
+- Do not infer an Ayurvedic diagnosis, duration, laterality, severity, or
+  disease name from symptoms.
+- Preserve negated complaints as negative findings, never as active complaints.
+- Return ONLY valid JSON matching the schema above.
+""" + _SECTION_FOOTER,
 
     "anamnesis": """\
 You are an expert clinical AI extracting Anamnesis / History of Present Illness (HPI) from doctor dictation.
@@ -660,10 +665,13 @@ Schema:
 }
 """ + _SECTION_FOOTER,
 
-    "ayurvedic_supplements": """\
+    "ayurvedic_supplements": BASE_RULES + """\
 You are an expert clinical AI extracting SGP Ayurvedic supplements, dosages, times per day, and prescription schedules from doctor dictation.
 
-CANONICAL MEDICINE CORRECTION TABLE (Use ONLY these canonical names):
+CANONICAL MEDICINE CORRECTION TABLE:
+Use a canonical name when an alias below clearly matches. If the doctor names a
+medicine not present in this table, preserve the dictated name and add a concise
+needs_doctor_confirmation note; never drop the medicine.
 - apd, a.p.d -> APD
 - atherolyzin, atherolyzine, ethylizine -> ATHEROLYZIN
 - migranone, migranine -> MIGRANONE
@@ -677,6 +685,10 @@ CANONICAL MEDICINE CORRECTION TABLE (Use ONLY these canonical names):
 - reserve -> RESERVE
 - cissues -> CISSUES
 - quadrangularies -> QUADRANGULARIES
+- atz -> ATZ
+- rencare, ren care -> RENCARE
+- lithogen, litho gen -> LITHOGEN
+- plexin -> PLEXIN
 
 Extraction Rules:
 1. "weeks" must ALWAYS be an 8-element array representing Week 1 through Week 8.

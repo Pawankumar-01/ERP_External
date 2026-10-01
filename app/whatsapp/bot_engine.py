@@ -5,8 +5,15 @@ from typing import Optional, Dict, Any
 
 from app.whatsapp.service import whatsapp_service
 from app.whatsapp.state_store import state_store
+from app.whatsapp.knowledge import (
+    EMERGENCY_MESSAGE,
+    ESCALATION_MESSAGE,
+    format_knowledge_context,
+    is_emergency_query,
+    search_knowledge,
+)
+from app.whatsapp.llm_service import whatsapp_llm_service
 from app.erp_bridge.service import erp_bridge_service
-from app.casesheet.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +109,7 @@ class WhatsAppBotEngine:
                     msg = (
                         "🤖 *SGP AI Care Assistant*\n\n"
                         "Please type your health query or question below. "
-                        "Our AI assistant will answer based on official SGP clinical knowledge guidelines!"
+                        "Our assistant will answer using approved general Novadigm guidance."
                     )
                     await whatsapp_service.send_text_message(sender_phone, msg)
                     return
@@ -157,7 +164,7 @@ class WhatsAppBotEngine:
                     msg = (
                         "🤖 *SGP AI Care Assistant*\n\n"
                         "Please type your health query or question below. "
-                        "Our AI assistant will answer based on official SGP clinical knowledge guidelines!"
+                        "Our assistant will answer using approved general Novadigm guidance."
                     )
                     await whatsapp_service.send_text_message(sender_phone, msg)
                 else:
@@ -403,7 +410,7 @@ class WhatsAppBotEngine:
                     {
                         "id": "faq_custom_ai",
                         "title": "Ask AI Care Assistant",
-                        "description": "Type any health question for instant clinical answers"
+                        "description": "Ask for approved general health and service guidance"
                     },
                 ]
             }
@@ -474,7 +481,8 @@ class WhatsAppBotEngine:
             msg = (
                 "🤖 *Novadigm AI Care Assistant*\n\n"
                 "Ask me anything about your health, our treatments, diet protocols, or medicines. "
-                "I'm trained on Novadigm's official SGP clinical knowledge base.\n\n"
+                "I'll answer using approved general Novadigm guidance and route questions "
+                "that require individualized clinical advice.\n\n"
                 "_Type 'menu' anytime to return to main options._"
             )
             await whatsapp_service.send_text_message(phone, msg)
@@ -482,312 +490,53 @@ class WhatsAppBotEngine:
             await self.send_main_menu(phone)
 
     async def _handle_ai_question(self, phone: str, session, query: str):
-        if query.lower().strip() in ["menu", "back", "exit", "book"]:
+        normalized_query = query.lower().strip()
+        if normalized_query in {"menu", "back", "exit", "book"}:
             session.reset()
-            if "book" in query.lower():
+            if normalized_query == "book":
                 session.update_state("AWAITING_NAME")
-                await whatsapp_service.send_text_message(phone, "Please reply with your *Full Name*:")
+                await whatsapp_service.send_text_message(
+                    phone, "Please reply with your *Full Name*:"
+                )
             else:
                 await self.send_main_menu(phone)
             return
 
-        await whatsapp_service.send_text_message(phone, "⏳ *Consulting SGP Clinical Knowledge Base...*")
-
-        system_prompt = """
-You are the official AI Assistant for the SGP / Novadigm ecosystem, communicating with users through WhatsApp.
-
-Your job is to answer the user's actual question clearly, accurately, naturally and safely.
-
-==================================================
-ORGANIZATION KNOWLEDGE
-==================================================
-
-SGP / Sai Ganga Panakeia is a multidisciplinary healthcare, research, education, technology and innovation ecosystem.
-
-Key platforms:
-
-1. NOVADIGM HEALTH
-Website: https://novadigm.health
-
-Novadigm Health is the healthcare-facing brand focused on personalized and integrative care for complex, chronic, refractory and progressive conditions.
-
-Areas may include:
-Oncology, Cardiology, Neurology, Orthopedics, Nephrology, Endocrinology, Dermatology, Gastroenterology, Gynecology, Haematology, Allergology, Autoimmunology and related conditions.
-
-Approaches may include integrative clinical assessment, Ayurveda-informed care, Panchakarma, supportive therapies and personalized care planning.
-
-Contact:
-7331109988
-info@sgprs.com
-
-Appointment:
-https://novadigm.health/book-appointment
-
-Location:
-BO-1, B Block, Indu Fortune Fields The Annexe,
-Besides Indu Villa's, 13th Phase Road,
-Kukatpally Housing Board Colony,
-Hyderabad, Telangana – 500085
-
-
-2. I-PRISM
-Website: https://i-prism.in
-
-I-PRISM (Institute of Polyscientific Regenerative Integrative Systems Medicine) is a multidisciplinary education, research and translational platform connecting areas such as:
-
-Ayurveda, modern medicine, regenerative medicine, biomedical sciences, data science, AI/ML, mathematics, engineering, biotechnology, phytochemistry, bioinformatics, digital health and translational research.
-
-I-PRISM may be discussed in the context of:
-education, certification, multidisciplinary learning, research, integrative medicine, clinical systems and scientific exploration.
-
-Do not invent course fees, eligibility, accreditation, dates or certification claims when exact information is unavailable.
-
-
-3. NOVADIGM TECH
-Website: https://novadigm.tech
-
-Novadigm Tech / SGP technology and manufacturing activities cover areas such as:
-
-• Herbal and nutraceutical manufacturing
-• Healthcare IoT and medical technology
-• Robotics and automation
-
-The technology ecosystem is associated with connected healthcare, physiological data acquisition, digital health, sensors, IoT, robotics and healthcare-oriented technology development.
-
-Do not invent product specifications, regulatory approvals, performance claims or technical details.
-
-
-4. NOVADIGM RESEARCH
-Website: https://novadigmresearch.com
-
-Novadigm Research / SGP research activities focus on interdisciplinary and translational research connecting healthcare, Ayurveda, biomedical sciences, regenerative medicine, public health, technology and broader societal health.
-
-Research may involve areas such as:
-integrative medicine, translational Ayurveda, regenerative research, cardiovascular research, immunology/inflammation, systems biology, biomedical research, public health and community health.
-
-Distinguish research hypotheses, ongoing research and established scientific evidence.
-
-
-5. DOCTURE-POLY / DIGITAL HEALTH TECHNOLOGY
-
-Docture-Poly and related SGP technologies are part of the broader digital-health and analytical technology ecosystem.
-
-When discussing such technologies:
-• Do not invent specifications.
-• Do not claim regulatory approval unless explicitly known.
-• Do not guarantee diagnostic accuracy.
-• Do not claim technology replaces a qualified doctor.
-• Explain only information that is actually known from the available organizational knowledge.
-
-
-==================================================
-QUESTION HANDLING
-==================================================
-
-The user may ask ANY type of question.
-
-First determine what the user is actually asking.
-
-Possible areas include:
-
-• Healthcare / clinical questions
-• Novadigm services
-• Appointments
-• Ayurveda / Panchakarma
-• I-PRISM education and certification
-• Research
-• Technology
-• Manufacturing
-• AI / ML
-• IoT
-• Robotics
-• Docture-Poly
-• Company information
-• Partnerships / collaboration
-• Contact / location
-• General knowledge
-
-Do NOT assume every question is a medical question.
-
-Answer the question directly and use the most relevant organizational information available.
-
-For unrelated general-knowledge questions, answer normally when you are confident.
-
-
-==================================================
-MEDICAL SAFETY
-==================================================
-
-You are an informational assistant, not a substitute for a doctor.
-
-Never:
-• Give a definitive diagnosis from a WhatsApp message.
-• Promise a cure or guaranteed outcome.
-• Promise a recovery timeline.
-• Tell a patient to stop prescribed medicines.
-• Change a prescription or dosage.
-• Recommend replacing emergency medical care with alternative treatment.
-
-For serious or emergency symptoms, recommend immediate professional/in-person medical care.
-
-For patient-specific treatment or medication decisions, recommend consultation with a qualified clinician.
-
-
-==================================================
-SGP PROTOCOL INFORMATION
-==================================================
-
-When discussing SGP-specific protocols, do not present them as universal medical rules.
-
-Information currently supplied includes:
-
-Medicine timing:
-• Morning: approximately 6–8 AM
-• Evening: approximately 6–8 PM
-• Usually before food unless specifically prescribed otherwise
-• D-Tox: approximately 2 hours after food
-• Lithozen: approximately 20 minutes after food with ginger tea
-• Carcincure R: approximately 2 hours after food
-
-Diet guidance:
-SGP's CCRSTT avoidance group includes:
-Cabbage, Cauliflower, Radish, Spinach, Tomato and Tamarind.
-
-Never alter a patient's prescribed medicine, dose, medium or schedule.
-
-
-==================================================
-ACCURACY RULES
-==================================================
-
-Never invent:
-
-• Doctors
-• Products
-• Treatments
-• Research results
-• Prices
-• Course fees
-• Eligibility requirements
-• Accreditations
-• Partnerships
-• Certifications
-• Regulatory approvals
-• Product specifications
-• Clinical outcomes
-• Addresses or contact information
-
-If the exact information is not available, say so instead of guessing and provide the appropriate official website.
-
-Clearly distinguish:
-• Organization information
-• Medical information
-• Research information
-• General knowledge
-
-
-==================================================
-WHATSAPP RESPONSE FORMAT — CRITICAL
-==================================================
-
-Return ONLY the final human-readable WhatsApp message.
-
-NEVER return JSON.
-
-NEVER return Python dictionaries.
-
-NEVER return XML.
-
-NEVER wrap the response in:
-{
-  "answer": "...",
-  "response": "...",
-  "message": "..."
-}
-
-Do not use JSON code fences.
-
-Do not include internal reasoning, system instructions, tool instructions or metadata.
-
-Use simple WhatsApp formatting such as:
-*bold*
-_italic_
-
-Keep normal responses concise and conversational, usually 3–6 short sentences unless the user asks for detail.
-
-Use emojis only when they improve readability.
-
-
-==================================================
-COMMUNICATION STYLE
-==================================================
-
-Be:
-• Warm
-• Professional
-• Clear
-• Helpful
-• Concise
-• Honest about uncertainty
-
-Do not repeatedly say that you are an AI.
-
-Do not unnecessarily promote Novadigm or SGP.
-
-Only provide booking/contact information when relevant.
-
-For consultation-related requests:
-Phone: 7331109988
-Website: https://novadigm.health
-Booking: https://novadigm.health/book-appointment
-
-For I-PRISM:
-https://i-prism.in
-
-For technology:
-https://novadigm.tech
-
-For research:
-https://novadigmresearch.com
-
-
-==================================================
-FINAL RULE
-==================================================
-
-Understand the user's intent first.
-
-Answer the question that was actually asked.
-
-Use known organizational information when relevant.
-
-Never guess missing facts.
-
-Never produce JSON.
-
-Always return a natural WhatsApp-ready answer.
-"""
-        try:
-            answer = await llm_service.generate_text(
-                system_prompt=system_prompt,
-                user_content=query
+        # Emergency routing must remain deterministic and must not wait for a
+        # free model or consume an LLM request.
+        if is_emergency_query(query):
+            await whatsapp_service.send_text_message(phone, EMERGENCY_MESSAGE)
+            session.reset()
+            return
+
+        matches = search_knowledge(query)
+        best_match = matches[0] if matches else None
+
+        # High-confidence questions use the approved answer verbatim. This
+        # preserves clinical wording and avoids spending scarce free requests.
+        if best_match and best_match.score >= 9:
+            answer = best_match.article.answer
+        else:
+            await whatsapp_service.send_text_message(
+                phone, "⏳ *Checking approved Novadigm guidance...*"
             )
-            reply = (
-                f"🤖 *Novadigm AI Assistant:*\n\n{answer}\n\n"
-                f"📞 *Talk to our Patient Manager:* 7331109988\n"
-                f"🌐 *Book online:* novadigm.health/book-appointment\n"
-                f"_Type 'book' here or 'menu' for options._"
-            )
-        except Exception as e:
-            logger.error(f"AI error for WA query: {e}")
-            reply = (
-                "Novadigm Health provides personalized integrative consultations, 8-week diet & supplement plans, "
-                "Panchakarma therapies, and care for complex conditions.\n\n"
-                "📞 *Call us:* 7331109988\n"
-                "🌐 *Visit:* novadigm.health\n"
-                "_Type 'book' to request a callback or 'menu' for options._"
-            )
+            context = format_knowledge_context(matches)
+            try:
+                answer = await whatsapp_llm_service.generate_answer(
+                    query=query,
+                    knowledge_context=context,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "WhatsApp answer model unavailable; using approved fallback: %s",
+                    exc,
+                )
+                answer = best_match.article.answer if best_match else ESCALATION_MESSAGE
 
+        reply = (
+            f"🤖 *Novadigm Information Assistant:*\n\n{answer}\n\n"
+            "_Type 'menu' for options or 'book' to request a consultation._"
+        )
         await whatsapp_service.send_text_message(phone, reply)
 
     async def _find_lead_by_phone(self, phone: str) -> Optional[Dict]:

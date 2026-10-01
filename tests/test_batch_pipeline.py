@@ -10,6 +10,7 @@ from app.casesheet.llm_service import LLMService
 from fastapi import HTTPException
 
 from app.casesheet.router import (
+    _apply_batch_result_to_draft,
     _batch_finalize_blockers,
     _map_draft_to_encounter,
     process_full_consultation_audio,
@@ -29,6 +30,7 @@ moderate K mild V PR O mild to moderate B mild K RB mild to moderate B"""
 class StubBatchLLM(LLMService):
     def __init__(self):
         super().__init__()
+        self._batch2_grouped_extraction = False
         self.calls = []
 
     async def _preprocess_and_segment_batch_transcript(self, batch_index, transcript):
@@ -48,6 +50,10 @@ class StubBatchLLM(LLMService):
 
 class InvalidPulseFallbackLLM(LLMService):
     """Simulates the exact incident: a valid segment, invalid LLM JSON."""
+
+    def __init__(self):
+        super().__init__()
+        self._batch2_grouped_extraction = False
 
     async def _preprocess_and_segment_batch_transcript(self, batch_index, transcript):
         return {
@@ -109,8 +115,52 @@ class RepairingPulseLLM(LLMService):
         return self.responses.pop(0)
 
 
+class GroupedBatch2LLM(LLMService):
+    def __init__(self):
+        super().__init__()
+        self.labels = []
+
+    async def _preprocess_and_segment_batch_transcript(self, batch_index, transcript):
+        return {
+            "vitals_anthropometry": "BP 120 over 80.",
+            "general_examination": "",
+            "systemic_examination": "",
+            "investigation_reports": "",
+            "pulse_diagnosis": "CVS mild P.",
+            "ayurvedic_assessment_extended": "",
+        }
+
+    async def _safe_json_call(self, *, label, **_kwargs):
+        self.labels.append(label)
+        if label == "section_group:batch:2:exam":
+            return {
+                "vitals_anthropometry": {
+                    "bp": "120/80",
+                    "height_cm": None,
+                    "weight_kg": None,
+                }
+            }
+        if label == "section:pulse_diagnosis":
+            return {
+                "overall_vpk": {},
+                "systems": [{
+                    "system": "CVS",
+                    "vata": None,
+                    "pitta": "mild",
+                    "kapha": None,
+                    "raw_phrase": "CVS mild P.",
+                }],
+                "needs_doctor_confirmation": [],
+            }
+        raise AssertionError(f"unexpected call: {label}")
+
+
 class ParallelBatchLLM(LLMService):
     """Exercises the bounded concurrent section scheduler without a provider."""
+
+    def __init__(self):
+        super().__init__()
+        self._batch2_grouped_extraction = False
 
     async def _preprocess_and_segment_batch_transcript(self, batch_index, transcript):
         return {
@@ -227,6 +277,22 @@ class BatchPipelineTests(unittest.TestCase):
         self.assertEqual(result["_raw_section_transcripts"]["pulse_diagnosis"], "CVS mild P, LI mild K.")
         self.assertEqual(result["_section_statuses"]["general_examination"]["status"], "not_dictated")
 
+    def test_batch_two_groups_exam_but_keeps_pulse_isolated(self):
+        service = GroupedBatch2LLM()
+        result = asyncio.run(
+            service.extract_batch_transcript(
+                2, "BP 120 over 80. CVS mild P."
+            )
+        )
+        self.assertEqual(
+            service.labels,
+            ["section_group:batch:2:exam", "section:pulse_diagnosis"],
+        )
+        self.assertEqual(result["vitals_anthropometry"]["bp"], "120/80")
+        self.assertEqual(
+            result["pulse_diagnosis"]["systems"][0]["pitta"], "mild"
+        )
+
     def test_batch_sections_run_with_bounded_parallelism(self):
         service = ParallelBatchLLM()
         # Make the expected clinical batch limit explicit, independent of a
@@ -248,10 +314,18 @@ class BatchPipelineTests(unittest.TestCase):
         self.assertFalse(service._is_model_quarantined("Gemini", "gemini-3.6-flash"))
         self.assertFalse(service._is_model_quarantined("Groq", "qwen/qwen3.8-27b"))
 
-    def test_segment_must_be_a_contiguous_source_excerpt(self):
-        raw = "CVS mild P, RB moderate VK."
+    def test_segment_must_be_an_ordered_exact_source_excerpt(self):
+        raw = "CVS mild P. The doctor pauses here. RB moderate VK."
         self.assertTrue(LLMService._is_grounded_segment("CVS mild P", raw))
-        self.assertFalse(LLMService._is_grounded_segment("RB moderate VK CVS mild P", raw))
+        self.assertTrue(
+            LLMService._is_grounded_segment("CVS mild P. RB moderate VK.", raw)
+        )
+        self.assertFalse(
+            LLMService._is_grounded_segment("RB moderate VK. CVS mild P.", raw)
+        )
+        self.assertFalse(
+            LLMService._is_grounded_segment("CVS severe P. RB moderate VK.", raw)
+        )
 
     def test_legacy_recording_routes_are_retired(self):
         for endpoint in (upload_audio, process_full_consultation_audio):
@@ -264,19 +338,98 @@ class BatchPipelineTests(unittest.TestCase):
         self.assertIsNone(service._parse_json('prefix {"pitta": "mild"} trailing'))
         self.assertEqual(service._parse_json('```json\n{"pitta": "mild"}\n```'), {"pitta": "mild"})
 
-    def test_invalid_pulse_json_saves_source_rows_and_requires_review(self):
+    def test_invalid_pulse_json_is_failed_not_regex_mapped(self):
         result = asyncio.run(
             InvalidPulseFallbackLLM().extract_batch_transcript(2, "CVS mild P, LI mild K.")
         )
-        self.assertEqual(result["_section_statuses"]["pulse_diagnosis"]["status"], "mapped_needs_review")
-        rows = {row["system"]: row for row in result["pulse_diagnosis"]["systems"]}
-        self.assertEqual(rows["CVS"]["pitta"], "mild")
-        self.assertEqual(rows["LI"]["kapha"], "mild")
+        self.assertEqual(result["_section_statuses"]["pulse_diagnosis"]["status"], "failed")
+        self.assertNotIn("pulse_diagnosis", result)
         blockers = _batch_finalize_blockers(
             {"batch_2": {"status": "completed", "section_statuses": result["_section_statuses"]}},
             {},
         )
         self.assertTrue(any("pulse_diagnosis" in item for item in blockers))
+
+    def test_supplement_array_is_stored_in_editable_top_level_list(self):
+        class SupplementArrayLLM(LLMService):
+            async def _safe_json_call(self, **_kwargs):
+                return [{"name": "APD", "weeks": ["1"] * 8}]
+
+        result = asyncio.run(
+            SupplementArrayLLM().extract_section(
+                "ayurvedic_supplements", "APD one tablet daily."
+            )
+        )
+        self.assertIsInstance(result, list)
+        self.assertEqual(result[0]["name"], "APD")
+
+    def test_error_envelope_cannot_be_marked_as_a_mapping(self):
+        candidate = LLMService._coerce_and_validate_section_candidate(
+            "ayurvedic_supplements",
+            {"error": "provider overloaded"},
+            "APD one tablet daily.",
+        )
+        self.assertIn("schema_mismatch", candidate["_error"])
+
+    def test_wrong_batch_with_no_relevant_segments_is_rejected(self):
+        class EmptySegmenter(LLMService):
+            async def _preprocess_and_segment_batch_transcript(self, batch_index, transcript):
+                return {section: "" for section in (
+                    "vitals_anthropometry", "general_examination",
+                    "systemic_examination", "investigation_reports",
+                    "pulse_diagnosis", "ayurvedic_assessment_extended",
+                )}
+
+        result = asyncio.run(
+            EmptySegmenter().extract_batch_transcript(
+                2, "Patient has back pain for three months."
+            )
+        )
+        self.assertIn("wrong batch", result["_batch_error"])
+
+    def test_failed_rerecord_preserves_previous_section(self):
+        draft = {
+            "pulse_diagnosis": {
+                "systems": [{"system": "CVS", "pitta": "mild"}],
+            },
+            "_raw_transcripts": {"pulse_diagnosis": "CVS mild P."},
+            "_section_meta": {
+                "pulse_diagnosis": {
+                    "source": "batch",
+                    "draft_revision": 2,
+                }
+            },
+            "_draft_revision": 2,
+        }
+        statuses, revision, _ = _apply_batch_result_to_draft(
+            draft,
+            batch_sections=["pulse_diagnosis"],
+            batch_results={
+                "_raw_section_transcripts": {
+                    "pulse_diagnosis": "unusable retry transcript",
+                },
+                "_section_statuses": {
+                    "pulse_diagnosis": {
+                        "status": "failed",
+                        "error": "all providers failed",
+                    }
+                },
+            },
+            batch_index=2,
+            job_id="job-2",
+            submitted_revision=2,
+            transcript="unusable retry transcript",
+        )
+        self.assertEqual(revision, 3)
+        self.assertEqual(
+            draft["pulse_diagnosis"]["systems"][0]["pitta"], "mild"
+        )
+        self.assertEqual(
+            draft["_raw_transcripts"]["pulse_diagnosis"], "CVS mild P."
+        )
+        self.assertEqual(
+            statuses["pulse_diagnosis"]["status"], "previous_preserved"
+        )
 
     def test_erp_payload_preserves_batch_three_and_pulse_values(self):
         draft = {

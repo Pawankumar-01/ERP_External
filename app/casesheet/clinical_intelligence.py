@@ -688,7 +688,7 @@ def _prepare_pulse_transcript(raw: str) -> str:
         (r"\b(?:P\s*B|B)\b", "P"),
         (r"\b(?:kafa|kaffa|caffa)\b", "K"),
         (r"\b(?:vata|vatha)\b", "V"),
-        (r"\bpitta\b", "P"),
+        (r"\b(?:pitta|pitha)\b", "P"),
         (r"\bkapha\b", "K"),
     )
     for pattern, replacement in replacements:

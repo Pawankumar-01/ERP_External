@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    # WhatsApp uses its own provider path so patient-support traffic cannot
+    # consume the casesheet service's concurrency slots or circuit breakers.
+    # `openrouter/free` is suitable for prototyping; approved knowledge is
+    # always retained as a deterministic fallback when the free route is busy.
+    WHATSAPP_LLM_MODEL: str = "openrouter/free"
+    WHATSAPP_LLM_MAX_TOKENS: int = 500
+    WHATSAPP_LLM_TIMEOUT_SECONDS: float = 30.0
     LLM_MODEL: str = "google/gemma-4-31b-it:free"
 
     # ── Clinical Extraction Intelligence (CEI) knobs ────────────────────

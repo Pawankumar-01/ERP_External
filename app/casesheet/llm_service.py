@@ -28,6 +28,7 @@ from app.casesheet.prompts import (
 )
 from app.casesheet.protocols import enrich_section_data
 from app.casesheet.clinical_intelligence import (
+    SECTION_SCHEMA,
     postprocess_section,
     normalize_pulse_diagnosis,
     normalize_severity,
@@ -86,6 +87,9 @@ LLM_CIRCUIT_COOLDOWN = max(
 # disable it after mapping investigation with CASE_LOG_LLM_OUTPUTS=false.
 LOG_LLM_OUTPUTS = os.getenv("CASE_LOG_LLM_OUTPUTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 LLM_OUTPUT_LOG_LIMIT = max(1_000, int(os.getenv("CASE_LLM_OUTPUT_LOG_LIMIT", "40000")))
+BATCH2_GROUPED_EXTRACTION = os.getenv(
+    "CASE_BATCH2_GROUPED_EXTRACTION", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 # A row must be anchored to a real code/alias in its own quoted source phrase.
@@ -118,6 +122,8 @@ def _pulse_source_is_anchored(code: str, phrase: str) -> bool:
     pattern = _PULSE_SOURCE_CODE_PATTERNS.get(code)
     if not pattern or not phrase:
         return False
+    # ASR commonly emits spoken letter codes as C.V.S. / L.I. / R.B.
+    phrase = re.sub(r"[./_-]+", " ", phrase)
     # IS deliberately retains case sensitivity for the bare code; the other
     # known aliases are safe case-insensitively.
     if code == "IS":
@@ -138,12 +144,17 @@ class LLMService:
         # again.  This is deliberately model-scoped: a 3.5 outage must not
         # prevent a healthy 3.6 or Groq fallback from serving the same batch.
         self._circuit_open_until: Dict[tuple[str, str], float] = {}
+        # Batch 2 uses one examination call plus one isolated Pulse call,
+        # cutting provider pressure from seven total calls to three including
+        # segmentation. This can be disabled instantly through the environment.
+        self._batch2_grouped_extraction = BATCH2_GROUPED_EXTRACTION
 
     @staticmethod
     def _is_batch_mapping_call(trace_label: Optional[str]) -> bool:
         """Whether this request is on the time-sensitive recorded-batch path."""
         return bool(trace_label) and (
             trace_label.startswith("section:")
+            or trace_label.startswith("section_group:")
             or trace_label.startswith("middleware_segmenter_batch:")
         )
 
@@ -278,6 +289,71 @@ class LLMService:
             issues.append("Pulse response is marked uncertain by the model")
         return list(dict.fromkeys(issues))
 
+    @staticmethod
+    def _pulse_issues_require_repair(issues: list[str]) -> bool:
+        """Only spend a second LLM call when a clinical value is in conflict."""
+        repair_markers = (
+            "conflicting duplicate values",
+            "invalid system code",
+            "incomplete severity phrase",
+            "is not an object",
+            "has no system rows",
+            "response is not a JSON object",
+        )
+        return any(marker in issue for issue in issues for marker in repair_markers)
+
+    @staticmethod
+    def _coerce_and_validate_section_candidate(
+        section: str,
+        candidate: Any,
+        transcript: str,
+    ) -> Dict[str, Any]:
+        """Reject wrong-root and error-envelope JSON before normalization."""
+        if isinstance(candidate, dict) and candidate.get("_error"):
+            return candidate
+        if section == "ayurvedic_supplements" and isinstance(candidate, list):
+            candidate = {"ayurvedic_supplements": candidate}
+        if isinstance(candidate, dict) and set(candidate) == {"data"}:
+            inner = candidate.get("data")
+            if section == "ayurvedic_supplements" and isinstance(inner, list):
+                candidate = {"supplements": inner}
+            elif isinstance(inner, dict):
+                candidate = inner
+        if not isinstance(candidate, dict):
+            return {
+                "_raw": transcript,
+                "_llm_output": candidate,
+                "_error": f"schema_mismatch: {section} requires a JSON object",
+            }
+        public_keys = {str(key) for key in candidate if not str(key).startswith("_")}
+        error_envelope_keys = {"error", "message", "detail", "status", "code"}
+        if not public_keys or public_keys.issubset(error_envelope_keys):
+            return {
+                "_raw": transcript,
+                "_llm_output": candidate,
+                "_error": f"schema_mismatch: {section} returned no clinical fields",
+            }
+        expected = {
+            key for key in SECTION_SCHEMA.get(section, {})
+            if not str(key).startswith("_")
+        }
+        expected.add(section)
+        expected.update({
+            "needs_doctor_confirmation", "overall_vpk", "vpk_dominance",
+            "samprapti_summary", "therapeutic_goals", "patient_education",
+            "ayurvedic_diagnosis", "allopathic_diagnosis", "prognosis",
+        })
+        if expected and not public_keys.intersection(expected):
+            return {
+                "_raw": transcript,
+                "_llm_output": candidate,
+                "_error": (
+                    f"schema_mismatch: {section} returned unrelated fields "
+                    f"{sorted(public_keys)}"
+                ),
+            }
+        return candidate
+
     async def _repair_pulse_semantics(
         self,
         transcript: str,
@@ -321,7 +397,7 @@ Rules:
             max_tokens=min(GEMINI_PULSE_MAX_TOKENS, 2_000),
         )
 
-    async def extract_section(self, section: str, transcript: str) -> Dict[str, Any]:
+    async def extract_section(self, section: str, transcript: str) -> Any:
         if not transcript.strip():
             return {"_raw": "", "_error": "empty transcript"}
 
@@ -359,6 +435,9 @@ Rules:
             max_tokens=max_tokens,
         )
         self._log_llm_output(f"section:{section}", "parsed_candidate", raw_result)
+        raw_result = self._coerce_and_validate_section_candidate(
+            section, raw_result, transcript
+        )
         pulse_quality_issues: list[str] = []
         if (
             section == "pulse_diagnosis"
@@ -367,7 +446,7 @@ Rules:
             and not raw_result.get("_reprompt")
         ):
             pulse_quality_issues = self._pulse_quality_issues(raw_result, transcript)
-            if pulse_quality_issues:
+            if pulse_quality_issues and self._pulse_issues_require_repair(pulse_quality_issues):
                 logger.warning(
                     "Pulse candidate needs semantic repair: %s",
                     "; ".join(pulse_quality_issues),
@@ -394,12 +473,17 @@ Rules:
                         )
                 else:
                     pulse_quality_issues.append("Pulse semantic repair did not return valid JSON")
-        # Provenance: _safe_json_call failure codes must survive the
-        # deterministic fallback below. normalize/sanitize strip every "_*"
-        # key by design, so capture the pre-normalize error here and re-attach
-        # it after post-processing — otherwise a total provider failure would
-        # be recorded as a clean "mapped" (Batch-2 incident).
+        # Provider/parser failure provenance must survive normalization;
+        # otherwise a total failure can be recorded as a clean mapping.
         pre_error = raw_result.get("_error") if isinstance(raw_result, dict) else None
+        if pre_error:
+            # Provider failure is not a clinical mapping. Preserve evidence
+            # for retry/review and let the batch commit retain any last-known
+            # good value instead of synthesizing rows with regex.
+            failure: Dict[str, Any] = {"_raw": transcript, "_error": str(pre_error)}
+            if isinstance(raw_result, dict) and raw_result.get("_llm_output") is not None:
+                failure["_llm_output"] = raw_result.get("_llm_output")
+            return failure
         if (
             settings.CASE_SANITIZE
             and isinstance(raw_result, dict)
@@ -407,16 +491,14 @@ Rules:
             and not raw_result.get("_reprompt")
         ):
             raw_result = postprocess_section(section, raw_result)
+        if section == "ayurvedic_supplements" and isinstance(raw_result, dict):
+            # The draft/UI canonical shape for this section is a top-level
+            # list. The temporary wrapper exists only so schema sanitization
+            # can validate provider array-root output.
+            raw_result = raw_result.get("ayurvedic_supplements", raw_result)
         result = enrich_section_data(section, raw_result)
         if section == "pulse_diagnosis":
             result = normalize_pulse_diagnosis(result, transcript)
-        if pre_error and isinstance(result, dict):
-            # sanitize/normalize stripped the internal keys — restore the
-            # failure provenance so fallback data is never mistaken for a
-            # clean LLM extraction downstream.
-            result["_error"] = pre_error
-            if raw_result.get("_llm_output") and not result.get("_llm_output"):
-                result["_llm_output"] = raw_result.get("_llm_output")
         if settings.CASE_APPLY_NOMENCLATURE:
             result = apply_nomenclature_to_section(result)
         if section == "pulse_diagnosis":
@@ -466,6 +548,72 @@ Rules:
             )
             return res
         return {}
+
+    async def _extract_batch2_exam_group(
+        self,
+        snippets: Dict[str, str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Extract five Batch-2 examination sections in one provider call."""
+        exam_sections = AMBIENT_SUBBATCH_GROUPS.get(2, {}).get("exam", [])
+        evidence = {
+            section: snippets[section]
+            for section in exam_sections
+            if section in snippets
+        }
+        if not evidence:
+            return {}
+
+        prompt = AMBIENT_SUBBATCH_PROMPTS[2]["exam"]
+        messages = [
+            {"role": "system", "content": GLOBAL_MEDICAL_INSTRUCTION.strip()},
+            {
+                "role": "user",
+                "content": (
+                    f"{prompt}\n\n"
+                    "SECTION-SPECIFIC SOURCE EVIDENCE (each value is an exact "
+                    "excerpt; never move a fact to another key):\n"
+                    f"{json.dumps(evidence, ensure_ascii=False)}\n\n"
+                    "Return ONLY the required JSON object."
+                ),
+            },
+        ]
+        candidate = await self._safe_json_call(
+            messages=messages,
+            label="section_group:batch:2:exam",
+            fallback={},
+            max_tokens=GEMINI_BATCH_MAX_TOKENS,
+        )
+        if not isinstance(candidate, dict) or candidate.get("_error"):
+            error = (
+                candidate.get("_error")
+                if isinstance(candidate, dict)
+                else "schema_mismatch: grouped examination response is not an object"
+            )
+            return {
+                section: {"_raw": snippet, "_error": str(error)}
+                for section, snippet in evidence.items()
+            }
+
+        output: Dict[str, Dict[str, Any]] = {}
+        for section, snippet in evidence.items():
+            section_candidate = self._coerce_and_validate_section_candidate(
+                section, candidate.get(section), snippet
+            )
+            if section_candidate.get("_error"):
+                output[section] = section_candidate
+                continue
+            if settings.CASE_SANITIZE:
+                section_candidate = postprocess_section(section, section_candidate)
+            section_result = enrich_section_data(section, section_candidate)
+            if settings.CASE_APPLY_NOMENCLATURE:
+                section_result = apply_nomenclature_to_section(section_result)
+            output[section] = section_result
+            self._log_llm_output(
+                f"section_group:batch:2:exam:{section}",
+                "mapped_section",
+                section_result,
+            )
+        return output
 
     async def extract_batch_transcript(
         self,
@@ -537,11 +685,8 @@ Rules:
                     elapsed,
                     data.get("_error"),
                 )
-                # Only Pulse has a deterministic, source-grounded fallback.
-                # A generic section fallback is merely raw text and must never
-                # be represented as extracted clinical data.
-                if section == "pulse_diagnosis" and self._has_source_backed_pulse(data):
-                    return section, data, {"status": "mapped_needs_review", "error": str(data.get("_error"))}
+                # A provider failure is never an extracted clinical value.
+                # The atomic commit retains any last-known good section.
                 return section, {}, {"status": "failed", "error": str(data.get("_error"))}
             if not data or (isinstance(data, dict) and data.get("_reprompt")):
                 logger.info(
@@ -569,9 +714,21 @@ Rules:
             )
             return section, data, {"status": "mapped"}
 
-        tasks = [asyncio.create_task(_extract_one(section, snippet)) for section, snippet in snippets.items()]
-        for task in asyncio.as_completed(tasks):
-            section, data, status = await task
+        if not snippets:
+            results["_raw_section_transcripts"] = raw_section_transcripts
+            results["_section_statuses"] = section_statuses
+            results["_batch_error"] = (
+                f"wrong batch or no relevant Batch {batch_index} content was detected"
+            )
+            return results
+
+        notified: set[str] = set()
+
+        async def _record(
+            section: str,
+            data: Any,
+            status: Dict[str, str],
+        ) -> None:
             section_statuses[section] = status
             if status["status"] in ("mapped", "mapped_needs_review"):
                 results[section] = data
@@ -580,11 +737,42 @@ Rules:
                     section,
                     data if status["status"] in ("mapped", "mapped_needs_review") else {},
                 )
+            notified.add(section)
+
+        remaining_snippets = dict(snippets)
+        if batch_index == 2 and self._batch2_grouped_extraction:
+            exam_sections = AMBIENT_SUBBATCH_GROUPS.get(2, {}).get("exam", [])
+            exam_snippets = {
+                section: remaining_snippets.pop(section)
+                for section in exam_sections
+                if section in remaining_snippets
+            }
+            grouped = await self._extract_batch2_exam_group(exam_snippets)
+            for section, snippet in exam_snippets.items():
+                data = grouped.get(section) or {
+                    "_raw": snippet,
+                    "_error": "grouped extraction omitted dictated section",
+                }
+                if isinstance(data, dict) and data.get("_error"):
+                    status = {"status": "failed", "error": str(data.get("_error"))}
+                    await _record(section, {}, status)
+                elif not data:
+                    await _record(section, {}, {"status": "needs_review"})
+                else:
+                    await _record(section, data, {"status": "mapped"})
+
+        tasks = [
+            asyncio.create_task(_extract_one(section, snippet))
+            for section, snippet in remaining_snippets.items()
+        ]
+        for task in asyncio.as_completed(tasks):
+            section, data, status = await task
+            await _record(section, data, status)
 
         # Progress must include visible no-content/review states too; otherwise
         # a completed job looks permanently stuck when a doctor omitted a field.
         for section in batch_sections:
-            if section not in snippets and on_section_done:
+            if section not in notified and on_section_done:
                 await on_section_done(section, {})
 
         results["_raw_section_transcripts"] = raw_section_transcripts
@@ -596,21 +784,6 @@ Rules:
             len(snippets),
         )
         return results
-
-    @staticmethod
-    def _has_source_backed_pulse(data: Any) -> bool:
-        """True only when the deterministic raw Pulse parser recovered data."""
-        if not isinstance(data, dict):
-            return False
-        systems = data.get("systems")
-        if isinstance(systems, list):
-            for row in systems:
-                if not isinstance(row, dict) or not row.get("raw_phrase"):
-                    continue
-                if any(row.get(dosha) is not None for dosha in ("vata", "pitta", "kapha")):
-                    return True
-        overall = data.get("overall_vpk")
-        return isinstance(overall, dict) and bool(overall.get("dominance"))
 
     @staticmethod
     def _is_grounded_segment(snippet: str, raw_transcript: str) -> bool:
@@ -626,7 +799,29 @@ Rules:
 
         normalized_snippet = normalize_evidence(snippet)
         normalized_raw = normalize_evidence(raw_transcript)
-        return bool(normalized_snippet and normalized_snippet in normalized_raw)
+        if not normalized_snippet:
+            return False
+        if normalized_snippet in normalized_raw:
+            return True
+
+        # A segmenter may join two exact, non-contiguous source sentences for
+        # one section. Accept that only when every sentence-sized excerpt is
+        # found verbatim and in source order; reordered or rewritten evidence
+        # remains rejected.
+        parts = [
+            normalize_evidence(part)
+            for part in re.split(r"(?<=[.!?;])\s+", snippet)
+            if normalize_evidence(part)
+        ]
+        if len(parts) < 2:
+            return False
+        cursor = 0
+        for part in parts:
+            found = normalized_raw.find(part, cursor)
+            if found < 0:
+                return False
+            cursor = found + len(part)
+        return True
 
     async def extract_sections_from_full_transcript(
         self,
