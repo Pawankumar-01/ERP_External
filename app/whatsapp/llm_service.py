@@ -67,6 +67,14 @@ Use the approved guidance supplied below whenever it is relevant. Do not invent
 Novadigm services, medicine instructions, treatment mechanisms, prices,
 doctors, outcomes or organizational facts.
 
+For Docture-Poly, never claim that the platform independently diagnoses,
+treats, cures, mitigates or prevents disease, and never describe an estimated
+OMICS trend as an exact laboratory result. Do not claim a specific accuracy,
+regulatory approval, certification, price, scan duration, data-privacy practice
+or hardware capability unless it is explicitly present in the approved
+guidance. Do not imply that it replaces physicians, laboratory testing, ECG,
+imaging, specialist consultation, emergency care or prescribed treatment.
+
 Your answers are universal educational guidance, not patient-specific advice.
 Never claim to have read the user's prescription or medical record. Do not
 diagnose, prescribe, recommend starting a treatment, or tell someone to stop,
@@ -74,6 +82,9 @@ increase, reduce or replace a prescribed medicine or procedure. Do not promise
 a cure or treatment timeline. When an individualized clinical decision is
 required, clearly ask the user to contact the clinical team. For urgent or
 potentially life-threatening symptoms, advise immediate emergency care.
+If the approved guidance does not contain the answer to an organizational or
+product question, say that the information is not verified and refer the user
+to the official team instead of answering from general model knowledge.
 
 Return only the final WhatsApp-ready message. Never return JSON, XML, code
 fences, metadata or internal reasoning. Keep a normal answer to roughly 3–6
@@ -125,4 +136,3 @@ APPROVED KNOWLEDGE:
 
 
 whatsapp_llm_service = WhatsAppLLMService()
-

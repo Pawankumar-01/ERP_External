@@ -17,6 +17,32 @@ from app.erp_bridge.service import erp_bridge_service
 
 logger = logging.getLogger(__name__)
 
+_DOCTURE_POLY_QUERY_TERMS = (
+    "docture poly",
+    "docture-poly",
+    "doctor poly",
+    "doctor-poly",
+    "vpk42",
+    "vpk 42",
+    "docturepoly",
+)
+
+_DOCTURE_POLY_GENERIC_QUERY_TERMS = (
+    "your device",
+    "the device",
+    "device info",
+    "device enquiry",
+    "device inquiry",
+    "device demo",
+    "device price",
+    "device cost",
+    "device scan",
+    "device work",
+    "buy device",
+    "health device",
+    "this machine",
+)
+
 
 @dataclass
 class WhatsAppLeadData:
@@ -130,6 +156,10 @@ class WhatsAppBotEngine:
                     await self._handle_faq_selection(sender_phone, session, "faq_diet_meds")
                     return
 
+                if action_id == "faq_docture_poly":
+                    await self._handle_faq_selection(sender_phone, session, "faq_docture_poly")
+                    return
+
                 if action_id in ["time_morning", "time_afternoon", "time_evening", "time_anytime", "slot_morning_1", "slot_morning_2", "slot_evening_1"]:
                     await self._handle_preferred_time_selection(sender_phone, session, action_id, text_body)
                     return
@@ -147,7 +177,15 @@ class WhatsAppBotEngine:
                 await self._handle_ai_question(sender_phone, session, text_body)
             else:
                 # Default MAIN_MENU state text matching
-                if "book" in text_clean or "consult" in text_clean:
+                if (
+                    any(term in text_clean for term in _DOCTURE_POLY_QUERY_TERMS)
+                    or any(term in text_clean for term in _DOCTURE_POLY_GENERIC_QUERY_TERMS)
+                    or text_clean == "device"
+                ):
+                    session.update_state("ASKING_AI_QUESTION")
+                    session.data["knowledge_topic"] = "docture_poly"
+                    await self._handle_ai_question(sender_phone, session, text_body)
+                elif "book" in text_clean or "consult" in text_clean:
                     session.update_state("AWAITING_NAME")
                     await whatsapp_service.send_text_message(
                         sender_phone,
@@ -355,8 +393,12 @@ class WhatsAppBotEngine:
     async def _process_manager_callback_request(self, phone: str, session):
         patient_name = session.data.get("patient_name") or session.data.get("wa_profile_name") or "Valued Patient"
 
+        is_device_enquiry = session.data.get("knowledge_topic") == "docture_poly"
+        interested_in = "DEVICE" if is_device_enquiry else "CONSULTATION"
+        enquiry_label = "Docture-Poly device enquiry" if is_device_enquiry else "consultation enquiry"
+
         lead_notes = (
-            f"Requested direct callback from Patient Manager via WhatsApp Bot.\n"
+            f"Requested direct callback from Patient Manager via WhatsApp Bot for a {enquiry_label}.\n"
             f"Action Required: Patient Manager to call back patient on priority."
         )
 
@@ -365,7 +407,7 @@ class WhatsAppBotEngine:
                 WhatsAppLeadData(
                     name=patient_name,
                     phone=phone,
-                    interested_in="CONSULTATION",
+                    interested_in=interested_in,
                     notes=lead_notes
                 )
             )
@@ -376,7 +418,8 @@ class WhatsAppBotEngine:
         msg = (
             f"📞 *Patient Manager Callback Requested*\n\n"
             f"Thank you, *{patient_name}*!\n"
-            f"Our Patient Manager has been notified and will call you shortly on *{phone}* to assist you.\n\n"
+            f"Our Patient Manager has been notified about your *{enquiry_label}* and will call "
+            f"you shortly on *{phone}* to assist you.\n\n"
             f"_Type 'menu' anytime to return to main options._"
         )
         await whatsapp_service.send_text_message(phone, msg)
@@ -406,6 +449,11 @@ class WhatsAppBotEngine:
                         "id": "faq_diet_meds",
                         "title": "Diet & Medication Rules",
                         "description": "Ayurvedic dosage timing & CCRSTT diet rules"
+                    },
+                    {
+                        "id": "faq_docture_poly",
+                        "title": "Docture-Poly VPK42",
+                        "description": "How the device works, outputs, limits & demos"
                     },
                     {
                         "id": "faq_custom_ai",
@@ -476,6 +524,30 @@ class WhatsAppBotEngine:
             )
             await whatsapp_service.send_text_message(phone, msg)
 
+        elif action_id == "faq_docture_poly":
+            session.update_state("ASKING_AI_QUESTION")
+            session.data["knowledge_topic"] = "docture_poly"
+            msg = (
+                "🔵 *Docture-Poly VPK42*\n\n"
+                "Docture-Poly is a non-invasive physiological-signal platform "
+                "that uses pulse-wave/PPG and HRV-related analysis to create a "
+                "VPK42 homeostasis fingerprint for physician-reviewed preventive "
+                "and wellness insights. It does *not* independently diagnose or "
+                "treat disease and does not replace doctors or standard tests.\n\n"
+                "You can ask the AI assistant questions such as:\n"
+                "• How does the scan work?\n"
+                "• What do Variability, Processing and Kinetics mean?\n"
+                "• What does the report contain?\n"
+                "• Can it replace a blood test or diagnose disease?\n"
+                "• Is the scan non-invasive?\n"
+                "• How can I book a demo or ask about price?\n\n"
+                "🌐 *Official website:* docture-poly.com\n"
+                "📞 *Product enquiries:* 7331109988\n\n"
+                "_Reply with any Docture-Poly question, or type 'manager' for "
+                "a device-enquiry callback._"
+            )
+            await whatsapp_service.send_text_message(phone, msg)
+
         elif action_id in ["faq_ai", "faq_custom_ai"]:
             session.update_state("ASKING_AI_QUESTION")
             msg = (
@@ -502,6 +574,12 @@ class WhatsAppBotEngine:
                 await self.send_main_menu(phone)
             return
 
+        if normalized_query in {
+            "manager", "talk to manager", "call me", "callback", "call back"
+        }:
+            await self._process_manager_callback_request(phone, session)
+            return
+
         # Emergency routing must remain deterministic and must not wait for a
         # free model or consume an LLM request.
         if is_emergency_query(query):
@@ -509,12 +587,21 @@ class WhatsAppBotEngine:
             session.reset()
             return
 
-        matches = search_knowledge(query)
+        knowledge_category = (
+            "docture_poly"
+            if session.data.get("knowledge_topic") == "docture_poly"
+            else None
+        )
+        # Category filtering keeps short follow-ups such as "Is it accurate?"
+        # anchored to the selected device topic without adding generic device
+        # words that could distort relevance scoring.
+        matches = search_knowledge(query, category=knowledge_category)
         best_match = matches[0] if matches else None
 
         # High-confidence questions use the approved answer verbatim. This
         # preserves clinical wording and avoids spending scarce free requests.
-        if best_match and best_match.score >= 9:
+        confidence_threshold = 2 if knowledge_category == "docture_poly" else 9
+        if best_match and best_match.score >= confidence_threshold:
             answer = best_match.article.answer
         else:
             await whatsapp_service.send_text_message(

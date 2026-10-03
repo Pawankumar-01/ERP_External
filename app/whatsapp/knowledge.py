@@ -1,9 +1,10 @@
 """Approved, universal patient-support knowledge for the WhatsApp bot.
 
 The content in this module is derived from the clinician-provided Novadigm
-patient FAQ.  It is deliberately general: the bot does not inspect or explain
-an individual patient's prescription.  A future admin workflow can move these
-records into PostgreSQL without changing the retrieval interface.
+patient FAQ and official Novadigm product pages. It is deliberately general:
+the bot does not inspect or explain an individual patient's prescription. A
+future admin workflow can move these records into PostgreSQL without changing
+the retrieval interface.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ class KnowledgeArticle:
     keywords: Sequence[str]
     answer: str
     category: str
+    source_urls: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,252 @@ ARTICLES: Sequence[KnowledgeArticle] = (
         ("novadigm", "sgp", "services", "what do you treat", "specialities", "specialties"),
         "Novadigm Health provides personalized integrative-care consultations that may combine modern clinical assessment, Ayurveda-informed care, supportive therapies, diet and lifestyle planning. The appropriate approach depends on a clinician's assessment; the chatbot cannot diagnose a condition or promise an outcome.",
         "organization",
+    ),
+    KnowledgeArticle(
+        "docture_poly_overview",
+        "What is Docture-Poly VPK42?",
+        (
+            "docture poly", "docture-poly", "doctor poly", "doctor-poly",
+            "docturepoly", "vpk42 device", "vpk 42 device", "health device",
+            "wellness device", "what is the device",
+        ),
+        "Docture-Poly VPK42 is a non-invasive physiological-signal platform "
+        "derived from the PRISM Ayurveda research framework. It uses "
+        "sensor-based pulse-wave and PPG signals, HRV-related computation and "
+        "AI/ML analysis to create a VPK42 homeostasis fingerprint across 42 "
+        "organ-system domains. It is intended to support wellness monitoring, "
+        "preventive-health awareness and physician review; it is not an "
+        "independent diagnostic or treatment device.",
+        "docture_poly",
+        (
+            "https://docture-poly.com/",
+            "https://docture-poly.com/about-us/",
+        ),
+    ),
+    KnowledgeArticle(
+        "docture_poly_scan",
+        "How a Docture-Poly scan works",
+        (
+            "how does docture poly work", "how does doctor poly work",
+            "how device works", "how scan works", "device scan", "vpk42 scan",
+            "finger scan", "sensor scan", "ppg", "pulse wave", "max30102",
+            "does it need blood", "blood sample", "needle",
+        ),
+        "The official product information describes a non-invasive scan using "
+        "physiological signals, including PPG or pulse-wave morphology and "
+        "HRV-derived computation. The sensor data is processed into structured "
+        "VPK42 and preventive-wellness insights for professional review. It is "
+        "not a blood sample or a substitute for a laboratory test.",
+        "docture_poly",
+        (
+            "https://docture-poly.com/",
+            "https://docture-poly.com/about-us/",
+        ),
+    ),
+    KnowledgeArticle(
+        "docture_poly_vpk42",
+        "Meaning of VPK42",
+        (
+            "what is vpk42", "vpk42", "vpk 42", "v p k 42",
+            "variability processing kinetics", "42 organ systems",
+            "42 domains", "homeostasis fingerprint",
+        ),
+        "In this platform, VPK means Variability, Processing and Kinetics. "
+        "Variability relates to changing electrophysiological and autonomic "
+        "patterns; Processing relates to functions such as digestion, "
+        "metabolism and energy conversion; and Kinetics relates to structure, "
+        "strength, stability, fluid behaviour and mechanical reserve. The "
+        "number 42 refers to the organ-system domains used in the fingerprint; "
+        "these outputs are physician-reviewable estimates, not diagnoses.",
+        "docture_poly",
+        ("https://docture-poly.com/",),
+    ),
+    KnowledgeArticle(
+        "docture_poly_outputs",
+        "What a Docture-Poly scan may provide",
+        (
+            "what does the scan show", "scan report", "device report",
+            "vpk42 fingerprint", "regeneration readiness",
+            "regeneration readiness index", "nova diet", "nexa nova",
+            "yoga regimen", "what are the results", "device output",
+        ),
+        "The official product page lists a VPK42 organ-system fingerprint, a "
+        "Regeneration Readiness Index, non-invasive OMICS trend indicators, "
+        "NOVA or NEXA-NOVA nutrition guidance, and YOGA-based movement or "
+        "breathing guidance. These are decision-support and wellness outputs "
+        "that need appropriate professional review; they are not confirmed "
+        "medical diagnoses or exact laboratory results.",
+        "docture_poly",
+        ("https://docture-poly.com/",),
+    ),
+    KnowledgeArticle(
+        "docture_poly_readiness",
+        "Regeneration Readiness Index",
+        (
+            "what is regeneration readiness", "readiness index",
+            "regeneration index", "ready for repair", "recovery readiness",
+        ),
+        "The Regeneration Readiness Index is described as an estimated signal "
+        "of whether an organ-system domain appears prepared for repair, "
+        "recovery and adaptation. It should be interpreted as a platform "
+        "indicator for physician review, not proof that an organ will "
+        "regenerate or that a disease has improved.",
+        "docture_poly",
+        ("https://docture-poly.com/",),
+    ),
+    KnowledgeArticle(
+        "docture_poly_omics",
+        "Docture-Poly OMICS trend indicators",
+        (
+            "omics", "omics module", "blood value", "lab value",
+            "biochemical value", "hba1c", "glucose estimate",
+            "metabolic marker", "chemistry signature",
+        ),
+        "The OMICS module provides organ-mapped indicative chemistry signals "
+        "and non-invasive metabolic trend indicators. They are algorithmic "
+        "estimates, not exact biochemical or laboratory measurements. Any "
+        "clinically important result, including an HbA1c-related trend, must "
+        "be confirmed with standard laboratory testing when appropriate.",
+        "docture_poly",
+        (
+            "https://docture-poly.com/",
+            "https://docture-poly.com/research/",
+        ),
+    ),
+    KnowledgeArticle(
+        "docture_poly_recommendations",
+        "Diet, yoga and supplement guidance from Docture-Poly",
+        (
+            "device diet", "scan diet", "nova diet", "nexa nova diet",
+            "device yoga", "yoga recommendation", "exercise recommendation",
+            "supplement recommendation", "does device prescribe",
+        ),
+        "Docture-Poly may support personalized nutrition, movement, yoga, "
+        "breathing and supplement considerations based on its VPK42 outputs. "
+        "These suggestions require the stated safety filters and physician "
+        "review. The device does not independently prescribe treatment, and "
+        "its output must not be used to start, stop or change prescribed "
+        "medicines without the treating clinician.",
+        "docture_poly",
+        ("https://docture-poly.com/",),
+    ),
+    KnowledgeArticle(
+        "docture_poly_limits",
+        "What Docture-Poly cannot do",
+        (
+            "does docture poly diagnose", "can docture poly diagnose",
+            "does doctor poly diagnose", "can vpk42 diagnose",
+            "can device diagnose", "does device diagnose", "device detect disease",
+            "device cure", "vpk42 cure", "device prevent disease",
+            "device replace doctor", "device replace blood test",
+            "device replace lab", "device replace ecg", "device replace scan",
+            "emergency device",
+        ),
+        "Docture-Poly does not independently diagnose, treat, cure, mitigate "
+        "or prevent disease. It does not replace a doctor, laboratory testing, "
+        "ECG, medical imaging, specialist consultation, emergency care or "
+        "prescribed treatment. Concerning symptoms and abnormal outputs still "
+        "need assessment through the appropriate standard medical pathway.",
+        "docture_poly",
+        (
+            "https://docture-poly.com/",
+            "https://docture-poly.com/about-us/",
+        ),
+    ),
+    KnowledgeArticle(
+        "docture_poly_accuracy",
+        "Accuracy and validation of Docture-Poly",
+        (
+            "device accuracy", "docture poly accuracy", "doctor poly accuracy",
+            "vpk42 accuracy", "how accurate is the device",
+            "is the device accurate", "is docture poly clinically validated",
+            "is vpk42 clinically validated", "device validation",
+            "device evidence", "device research proof", "device false result",
+        ),
+        "The platform is based on PRISM Ayurveda translational research and "
+        "physiological-signal analysis. Its official research page also states "
+        "that proprietary organ-wise, OMICS and regeneration-readiness "
+        "performance claims require prospective comparator datasets and "
+        "appropriate validation. The chatbot therefore cannot promise an "
+        "accuracy percentage or treat a result as a confirmed diagnosis.",
+        "docture_poly",
+        ("https://docture-poly.com/research/",),
+    ),
+    KnowledgeArticle(
+        "docture_poly_comfort",
+        "Is the Docture-Poly scan invasive or painful?",
+        (
+            "is the scan painful", "does the scan hurt", "is the scan invasive",
+            "is device invasive", "non invasive device", "non-invasive device",
+            "device safety", "is the device safe", "is docture poly safe",
+            "docture poly device safe", "is vpk42 safe", "device side effect",
+            "vpk42 side effect",
+        ),
+        "The official product information describes Docture-Poly as "
+        "non-invasive and sensor-based. It does not describe the VPK42 scan as "
+        "requiring a needle or blood collection. Suitability, preparation and "
+        "any precautions for a particular device model or health condition "
+        "should still be confirmed with the trained team before use.",
+        "docture_poly",
+        (
+            "https://docture-poly.com/",
+            "https://docture-poly.com/about-us/",
+        ),
+    ),
+    KnowledgeArticle(
+        "docture_poly_monitoring",
+        "Scan versus continuous monitoring",
+        (
+            "continuous monitoring", "24 hour monitoring", "24/7 monitoring",
+            "around the clock", "wearable", "ring", "one scan",
+            "blood pressure monitor", "oxygen monitor", "heart rate monitor",
+        ),
+        "The public website refers both to a non-invasive VPK42 scan and to "
+        "broader monitoring products. Do not assume every Docture-Poly model "
+        "has continuous, blood-pressure, oxygen or wearable monitoring. Please "
+        "ask the product team which exact model is being offered and what that "
+        "model measures before purchase or use.",
+        "docture_poly",
+        ("https://docture-poly.com/",),
+    ),
+    KnowledgeArticle(
+        "docture_poly_availability",
+        "Docture-Poly demo, price and availability",
+        (
+            "device price", "how much device", "cost of device", "buy device",
+            "purchase device", "book demo", "device demo", "try device",
+            "where available", "where can i buy", "scan price", "scan cost",
+            "scan duration", "how long does scan take",
+        ),
+        "The official website offers options to explore products, book a demo "
+        "and enquire about purchase, but the approved chatbot knowledge does "
+        "not contain a verified current price, scan duration or location-wise "
+        "availability. Please contact the product or patient-care team on "
+        "7331109988, email info@sgprs.com, or visit docture-poly.com for the "
+        "current details.",
+        "docture_poly",
+        ("https://docture-poly.com/",),
+    ),
+    KnowledgeArticle(
+        "docture_poly_regulatory_privacy",
+        "Docture-Poly approval and data privacy",
+        (
+            "fda approved", "ce approved", "regulatory approval",
+            "government approved", "medical device approval", "certified",
+            "device privacy", "device data", "where is data stored",
+            "who can see data", "privacy policy",
+        ),
+        "The reviewed public product pages do not provide enough verified "
+        "information for this chatbot to confirm a current regulatory approval, "
+        "certification or the complete handling of scan data. Please request "
+        "the applicable approval documents, product label and current privacy "
+        "policy from the official product team before relying on such a claim "
+        "or sharing personal health data.",
+        "docture_poly",
+        (
+            "https://docture-poly.com/",
+            "https://docture-poly.com/research/",
+        ),
     ),
     KnowledgeArticle(
         "clinic_contact",
@@ -365,22 +613,39 @@ def is_emergency_query(query: str) -> bool:
     return False
 
 
-def search_knowledge(query: str, limit: int = 4) -> List[KnowledgeMatch]:
+def search_knowledge(
+    query: str,
+    limit: int = 4,
+    category: str | None = None,
+) -> List[KnowledgeMatch]:
     normalized = _normalize(query)
     query_tokens = _tokens(query)
     matches: list[KnowledgeMatch] = []
 
     for article in ARTICLES:
+        if category and article.category != category:
+            continue
+
         score = 0
         title_tokens = _tokens(article.title)
         score += 2 * len(query_tokens & title_tokens)
 
+        keyword_tokens: set[str] = set()
+        best_phrase_score = 0
         for keyword in article.keywords:
             keyword_norm = _normalize(keyword)
+            keyword_tokens.update(_tokens(keyword))
             if keyword_norm and keyword_norm in normalized:
-                score += 5 + min(3, len(keyword_norm.split()))
-            else:
-                score += len(query_tokens & _tokens(keyword))
+                best_phrase_score = max(
+                    best_phrase_score,
+                    5 + min(3, len(keyword_norm.split())),
+                )
+
+        # Count each overlapping word once. Without this, repeating a common
+        # word such as "device" across several aliases can overwhelm a much
+        # more relevant article.
+        score += best_phrase_score
+        score += 2 * len(query_tokens & keyword_tokens)
 
         if score > 0:
             matches.append(KnowledgeMatch(article=article, score=score))
@@ -392,9 +657,11 @@ def search_knowledge(query: str, limit: int = 4) -> List[KnowledgeMatch]:
 def format_knowledge_context(matches: Iterable[KnowledgeMatch]) -> str:
     blocks = []
     for match in matches:
+        source_line = ""
+        if match.article.source_urls:
+            source_line = "\nOfficial sources: " + ", ".join(match.article.source_urls)
         blocks.append(
             f"[{match.article.article_id}] {match.article.title}\n"
-            f"Approved guidance: {match.article.answer}"
+            f"Approved guidance: {match.article.answer}{source_line}"
         )
     return "\n\n".join(blocks)
-
