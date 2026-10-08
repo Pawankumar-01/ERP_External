@@ -13,6 +13,13 @@ from app.whatsapp.knowledge import (
     search_knowledge,
 )
 from app.whatsapp.llm_service import whatsapp_llm_service
+from app.whatsapp.docture_poly import (
+    DEVICE_ARTICLES,
+    device_answer_is_generic_overview,
+    device_fallback_answer,
+    device_fallback_article_ids,
+    device_knowledge_context,
+)
 from app.erp_bridge.service import erp_bridge_service
 
 logger = logging.getLogger(__name__)
@@ -587,20 +594,22 @@ class WhatsAppBotEngine:
             session.reset()
             return
 
-        knowledge_category = (
-            "docture_poly"
-            if session.data.get("knowledge_topic") == "docture_poly"
-            else None
-        )
-        # Category filtering keeps short follow-ups such as "Is it accurate?"
-        # anchored to the selected device topic without adding generic device
-        # words that could distort relevance scoring.
-        matches = search_knowledge(query, category=knowledge_category)
+        if (
+            session.data.get("knowledge_topic") == "docture_poly"
+            or any(term in normalized_query for term in _DOCTURE_POLY_QUERY_TERMS)
+            or any(term in normalized_query for term in _DOCTURE_POLY_GENERIC_QUERY_TERMS)
+            or normalized_query == "device"
+        ):
+            session.data["knowledge_topic"] = "docture_poly"
+            await self._handle_docture_poly_question(phone, session, query)
+            return
+
+        matches = search_knowledge(query)
         best_match = matches[0] if matches else None
 
         # High-confidence questions use the approved answer verbatim. This
         # preserves clinical wording and avoids spending scarce free requests.
-        confidence_threshold = 2 if knowledge_category == "docture_poly" else 9
+        confidence_threshold = 9
         if best_match and best_match.score >= confidence_threshold:
             answer = best_match.article.answer
         else:
@@ -623,6 +632,48 @@ class WhatsAppBotEngine:
         reply = (
             f"🤖 *Novadigm Information Assistant:*\n\n{answer}\n\n"
             "_Type 'menu' for options or 'book' to request a consultation._"
+        )
+        await whatsapp_service.send_text_message(phone, reply)
+
+    async def _handle_docture_poly_question(self, phone: str, session, query: str):
+        # Use one model call with all device facts. Product-name keyword scores
+        # must never bypass interpretation of a free-text device enquiry.
+        history = session.data.get("docture_poly_history", [])
+        route = "model"
+        article_ids = [article.article_id for article in DEVICE_ARTICLES]
+        try:
+            answer = await whatsapp_llm_service.generate_answer(
+                query=query,
+                knowledge_context=device_knowledge_context(),
+                topic="docture_poly",
+                conversation_history=history,
+            )
+            if device_answer_is_generic_overview(query, answer):
+                raise RuntimeError("Docture-Poly response did not address the requested topic")
+        except Exception as exc:
+            route = "knowledge_fallback"
+            article_ids = device_fallback_article_ids(query)
+            logger.warning(
+                "Docture-Poly answer attempt failed; using knowledge fallback: %s", exc
+            )
+            answer = device_fallback_answer(query)
+
+        logger.info(
+            "Docture-Poly answer route=%s articles=%s history_messages=%d",
+            route,
+            article_ids,
+            len(history),
+        )
+        session.data["docture_poly_history"] = (
+            history + [
+                {"role": "user", "content": query[:1200]},
+                {"role": "assistant", "content": answer[:1200]},
+            ]
+        )[-4:]
+        session.update_state("ASKING_AI_QUESTION")
+        reply = (
+            f"🤖 *Novadigm Information Assistant:*\n\n{answer}\n\n"
+            "_Type 'manager' for device enquiries or 'menu' for options._"
         )
         await whatsapp_service.send_text_message(phone, reply)
 
